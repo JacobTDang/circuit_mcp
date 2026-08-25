@@ -36,11 +36,19 @@ Two keys carry the outcome, and they mean different things:
 """
 from __future__ import annotations
 
+import atexit
 import os
 import pickle
+import selectors
+import signal
+import struct
 import subprocess
 import sys
-from typing import Any
+import tempfile
+import threading
+import time
+import traceback
+from typing import Any, NoReturn
 
 import sympy as sp
 from mcp.server.mcpserver import MCPServer
@@ -347,7 +355,7 @@ def _dispatch(name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
 # the wall-clock bound
 # ---------------------------------------------------------------------------
 #
-# A subprocess, not ``signal.SIGALRM``, and not a thread pool.
+# A process, not ``signal.SIGALRM``, and not a thread pool.
 #
 # * A ``ThreadPoolExecutor`` timeout is not a bound at all. Python cannot kill a
 #   thread, so the future returns while the runaway keeps a core busy for the
@@ -362,6 +370,40 @@ def _dispatch(name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
 #   memory it was accumulating, which is the only version of this that is
 #   actually true.
 #
+# What that used to cost was one interpreter start-up *per call*: ~550ms of
+# Python and lcapy import against tool bodies that measure 0.1-11ms. Nearly all
+# of every call was start-up, on an interactive path.
+#
+# So the worker is started once and kept. It does not, however, run tool code
+# itself -- it forks a child per call and the child does the work:
+#
+#         server ──pipe──> worker ──fork──> child (runs one call, exits)
+#
+# The fork is what makes reuse *safe*, and safety is the whole reason this
+# shape was chosen over simply looping in the worker:
+#
+# * lcapy keeps one process-global ``SymbolRegistry`` -- ``state.symbols``,
+#   which ``new_context()`` deliberately shares with every context -- so every
+#   circuit built in a process publishes its component names to every circuit
+#   built afterwards. In a worker that looped, a netlist naming its source
+#   ``V1`` would make a later, unrelated ``check_setup`` whose unknown is the
+#   node voltage ``V1`` come back "Unknown(s) ['V1'] share a name with a
+#   circuit symbol". Measured, not theorised: a correct setup that passed
+#   before the intervening call was refused after it.
+# * SymPy caches expression construction on argument *equality*, and a symbol's
+#   equality includes its assumptions, so a cached ``Mul`` can only be handed
+#   back for a request whose symbols are equal -- assumptions and all -- to the
+#   ones it was built from. That cache is therefore not a source of wrong
+#   answers on its own. It is not the part that needed fixing; the registry is.
+#
+# Clearing caches between calls would mean enumerating every piece of global
+# state in SymPy and lcapy correctly, and staying right about it as both
+# libraries change. A fork does not need the enumeration: the child gets a
+# copy-on-write snapshot and everything it touches dies with it. A call
+# therefore begins in exactly the state a freshly started interpreter would be
+# in -- which is the property the old spawn-per-call design had, kept, at
+# ~2.7ms instead of ~550ms.
+#
 # ``subprocess`` rather than ``multiprocessing``: a ``spawn`` child re-executes
 # the parent's ``__main__`` before it unpickles anything, so the worker's
 # behaviour would depend on how the server happened to be launched. Verified
@@ -370,9 +412,11 @@ def _dispatch(name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
 # removes the question. The child is told where this package lives explicitly,
 # for the same reason.
 #
-# The cost is one interpreter start-up per call. ``mcp``, ``lcapy`` and
-# ``sympy`` import in well under a second between them, against tool bodies that
-# routinely take longer than that, so it is paid gladly.
+# Forking is safe *here* specifically because the worker is single-threaded and
+# imports nothing that starts threads or touches CoreFoundation -- checked:
+# one thread after importing lcapy, and matplotlib is never loaded. Forking
+# from the server process itself would not be safe, because mcp runs tool
+# bodies on an anyio thread pool.
 
 _WORKER_FLAG = "--worker"
 
@@ -383,6 +427,16 @@ _WORKER_MODULE = __spec__.name if __spec__ is not None else __name__
 # Enough stderr to recognise a crash, not so much that a traceback becomes the
 # tool's answer.
 _STDERR_TAIL = 800
+
+# Every message is a length then that many bytes. Pipes deliver in arbitrary
+# chunks, so a frame is the only way to know a message is complete rather than
+# merely paused. An empty frame is a ping, answered by an empty frame: it
+# confirms the worker is up and has finished importing without inventing a tool
+# call to ask it.
+_HEADER = struct.Struct("!Q")
+
+# How long to wait for a worker asked politely to leave before insisting.
+_SHUTDOWN_GRACE = 2.0
 
 
 def _worker_command() -> list[str]:
@@ -396,12 +450,95 @@ def _worker_environment() -> dict[str, str]:
     lives. Deriving that from the running ``sys.path`` rather than trusting an
     installed distribution means the worker also works from a source checkout,
     and from under pytest's ``pythonpath`` setting.
+
+    Still load-bearing, and not the historical workaround it looks like: this
+    project lives under an iCloud-synced ``~/Desktop``, iCloud sets
+    ``UF_HIDDEN`` on dot-prefixed entries, and since 3.12 ``site.addpackage()``
+    silently skips a hidden ``.pth``. The editable install breaks again every
+    time iCloud re-flags the venv, with no diagnostic. Verified broken while
+    this was written.
     """
     environment = dict(os.environ)
     environment["PYTHONPATH"] = os.pathsep.join(
         entry for entry in sys.path if entry
     )
     return environment
+
+
+class _WorkerTimeout(Exception):
+    """The worker did not answer inside the budget."""
+
+
+class _WorkerGone(Exception):
+    """The worker vanished -- it cannot have been the tool body that did it."""
+
+
+# ---------------------------------------------------------------------------
+# framed pipe I/O
+# ---------------------------------------------------------------------------
+
+def _write_all(fd: int, data: bytes) -> None:
+    """``os.write`` until it is all gone; a pipe accepts partial writes."""
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view):]
+
+
+def _read_exactly(fd: int, count: int) -> bytes | None:
+    """Exactly ``count`` bytes, or ``None`` at a clean end of stream."""
+    chunks: list[bytes] = []
+    remaining = count
+    while remaining:
+        chunk = os.read(fd, remaining)
+        if not chunk:
+            return None
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _read_exactly_before(fd: int, count: int, deadline: float) -> bytes:
+    """``_read_exactly`` under a deadline, without blocking past it.
+
+    Selecting on the descriptor rather than reading straight away is what keeps
+    a timeout a timeout: a blocking read on a worker that is busy forever would
+    never come back to be cancelled.
+    """
+    chunks: list[bytes] = []
+    remaining = count
+    with selectors.DefaultSelector() as selector:
+        selector.register(fd, selectors.EVENT_READ)
+        while remaining:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise _WorkerTimeout
+            if not selector.select(left):
+                raise _WorkerTimeout
+            chunk = os.read(fd, remaining)
+            if not chunk:
+                # The writer closed. Killed mid-call, or gone entirely; either
+                # way there is no answer coming and nothing to wait for.
+                raise _WorkerGone
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _write_all_before(fd: int, data: bytes, deadline: float) -> None:
+    """``_write_all`` under the same deadline, for a worker that stopped reading."""
+    view = memoryview(data)
+    with selectors.DefaultSelector() as selector:
+        selector.register(fd, selectors.EVENT_WRITE)
+        while view:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise _WorkerTimeout
+            if not selector.select(left):
+                raise _WorkerTimeout
+            try:
+                view = view[os.write(fd, view):]
+            except BrokenPipeError as exc:
+                raise _WorkerGone from exc
 
 
 def _tail(stream: bytes) -> str:
@@ -411,62 +548,290 @@ def _tail(stream: bytes) -> str:
     return f"Worker stderr: {text}" if text else "The worker said nothing."
 
 
+def _exit_detail(status: int) -> str:
+    """Why a forked child produced no answer, in the terms the OS reported it."""
+    if os.WIFSIGNALED(status):
+        number = os.WTERMSIG(status)
+        return f"killed by signal {number} ({signal.Signals(number).name})"
+    if os.WIFEXITED(status):
+        return f"exited with code {os.WEXITSTATUS(status)}"
+    return f"ended with wait status {status}"
+
+
+# ---------------------------------------------------------------------------
+# the worker, from the server's side
+# ---------------------------------------------------------------------------
+
+class _Worker:
+    """One long-lived process that forks a child per call.
+
+    Serialised by a lock: mcp dispatches synchronous tools on a thread pool, so
+    two calls really can arrive at once, and one worker behind one pair of pipes
+    has no way to tell whose frame is whose. The work itself is milliseconds,
+    so queueing costs far less than the start-up it avoids.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._process: subprocess.Popen | None = None
+        self._stderr = None
+
+    # -- lifecycle ---------------------------------------------------------
+
+    @property
+    def pid(self) -> int | None:
+        """The running worker's pid, which is also its process group id."""
+        process = self._process
+        return None if process is None else process.pid
+
+    def prewarm(self) -> None:
+        """Start the worker and wait for it to answer, before any call needs it.
+
+        Raises rather than reporting a failure dict: nothing has been asked yet,
+        so there is no verdict this could be confused with.
+        """
+        with self._lock:
+            deadline = time.monotonic() + TIMEOUT_SECONDS
+            process = self._ensure()
+            _write_all_before(process.stdin.fileno(), _HEADER.pack(0), deadline)
+            out = process.stdout.fileno()
+            (size,) = _HEADER.unpack(
+                _read_exactly_before(out, _HEADER.size, deadline)
+            )
+            if size:  # a ping is answered by a ping, not by a payload
+                _read_exactly_before(out, size, deadline)
+                raise _WorkerGone(f"worker answered a ping with {size} bytes")
+
+    def _start(self) -> subprocess.Popen:
+        # A regular file rather than a pipe: nothing drains the worker's stderr
+        # between calls, and a pipe that fills up would wedge the worker on its
+        # next warning. lcapy warns routinely ("Removing voltage source ...").
+        self._stderr = tempfile.TemporaryFile()
+        process = subprocess.Popen(
+            _worker_command(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=self._stderr,
+            env=_worker_environment(),
+            bufsize=0,
+            # Its own session, so one killpg reaches the worker *and* whatever
+            # it forked. Without this the group is the server's own, and
+            # killing it would take the server down with it.
+            start_new_session=True,
+        )
+        self._process = process
+        return process
+
+    def _ensure(self) -> subprocess.Popen:
+        process = self._process
+        if process is None or process.poll() is not None:
+            self._discard()
+            process = self._start()
+        return process
+
+    def _discard(self) -> None:
+        """Kill the worker's whole group and reap it. Safe to call twice."""
+        process, self._process = self._process, None
+        stderr, self._stderr = self._stderr, None
+        if process is not None:
+            if process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            for stream in (process.stdin, process.stdout):
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+            process.wait()  # reap, so nothing is left as a zombie
+        if stderr is not None:
+            stderr.close()
+
+    def shutdown(self) -> None:
+        """Ask the worker to leave, then insist. Registered with ``atexit``."""
+        with self._lock:
+            process = self._process
+            if process is None:
+                return
+            if process.poll() is None:
+                try:
+                    process.stdin.close()  # end of stream: the loop returns
+                except OSError:
+                    pass
+                try:
+                    process.wait(timeout=_SHUTDOWN_GRACE)
+                except subprocess.TimeoutExpired:
+                    pass
+            self._discard()
+
+    def _read_stderr(self) -> bytes:
+        if self._stderr is None:
+            return b""
+        try:
+            self._stderr.seek(0)
+            return self._stderr.read()
+        except OSError:
+            return b""
+
+    # -- one call ----------------------------------------------------------
+
+    def _exchange(
+        self, process: subprocess.Popen, request: bytes, deadline: float
+    ) -> dict[str, Any]:
+        _write_all_before(
+            process.stdin.fileno(), _HEADER.pack(len(request)) + request, deadline
+        )
+        out = process.stdout.fileno()
+        (size,) = _HEADER.unpack(_read_exactly_before(out, _HEADER.size, deadline))
+        return pickle.loads(_read_exactly_before(out, size, deadline))
+
+    def call(self, name: str, kwargs: dict[str, Any], limit: float) -> dict[str, Any]:
+        request = pickle.dumps((name, kwargs), protocol=pickle.HIGHEST_PROTOCOL)
+
+        with self._lock:
+            # Two attempts, and only for a worker that was already gone. A tool
+            # body runs in a forked child and cannot bring the worker down, so
+            # "the worker vanished" is never a statement about this input --
+            # which is what makes retrying it honest rather than a loop around
+            # a crash.
+            for attempt in (0, 1):
+                deadline = time.monotonic() + limit
+                try:
+                    process = self._ensure()
+                except OSError as exc:
+                    return _failure(
+                        "internal_error", f"Could not start the {name} worker: {exc}"
+                    )
+
+                try:
+                    return self._exchange(process, request, deadline)
+                except _WorkerTimeout:
+                    self._discard()  # kills the runaway child with its group
+                    return _failure(
+                        "timeout",
+                        f"{name} exceeded the {limit}s wall-clock limit and the "
+                        f"worker was killed. An expression can parse instantly "
+                        f"and still take unbounded time to evaluate -- 9^(9^9) "
+                        f"is the standing example. Simplify the input, or reduce "
+                        f"the size of the literals in it.",
+                    )
+                except _WorkerGone:
+                    stderr = self._read_stderr()
+                    self._discard()
+                    if attempt == 0:
+                        continue  # it had already died; a fresh one may serve
+                    return _failure(
+                        "internal_error",
+                        f"The {name} worker died without answering. "
+                        f"{_tail(stderr)}",
+                    )
+                except Exception as exc:  # a corrupted frame is not a verdict
+                    stderr = self._read_stderr()
+                    self._discard()
+                    return _failure(
+                        "internal_error",
+                        f"The {name} worker returned something unreadable "
+                        f"({type(exc).__name__}: {exc}). {_tail(stderr)}",
+                    )
+
+        # Unreachable: the loop either returns or continues exactly once.
+        return _failure("internal_error", f"The {name} worker could not be reached.")
+
+
+_WORKER = _Worker()
+atexit.register(_WORKER.shutdown)
+
+
 def _guarded(name: str, **kwargs: Any) -> dict[str, Any]:
     """Run one tool implementation in a worker that can actually be killed."""
-    limit = TIMEOUT_SECONDS
-    request = pickle.dumps((name, kwargs), protocol=pickle.HIGHEST_PROTOCOL)
+    return _WORKER.call(name, kwargs, TIMEOUT_SECONDS)
 
+
+# ---------------------------------------------------------------------------
+# the worker, from its own side
+# ---------------------------------------------------------------------------
+
+def _run_child(request: bytes, read_fd: int, write_fd: int) -> NoReturn:
+    """Do one call and exit. Never returns, and never raises into the loop."""
     try:
-        finished = subprocess.run(
-            _worker_command(),
-            input=request,
-            capture_output=True,
-            timeout=limit,
-            env=_worker_environment(),
+        os.close(read_fd)
+        # The child inherits the worker's end of the request pipe. Nothing here
+        # reads it, but lcapy's SymbolRegistry.lookup() can drop into pdb, and
+        # a debugger reading fd 0 would eat the next call's frame. Point it at
+        # /dev/null so anything reaching for stdin gets EOF instead.
+        with open(os.devnull, "rb") as devnull:
+            os.dup2(devnull.fileno(), 0)
+        name, kwargs = pickle.loads(request)
+        _write_all(
+            write_fd,
+            pickle.dumps(_dispatch(name, kwargs), protocol=pickle.HIGHEST_PROTOCOL),
         )
-    except subprocess.TimeoutExpired:
-        # subprocess.run kills the child before this propagates, so the
-        # computation stops here rather than running on unattended.
-        return _failure(
-            "timeout",
-            f"{name} exceeded the {limit}s wall-clock limit and the worker was "
-            f"killed. An expression can parse instantly and still take unbounded "
-            f"time to evaluate -- 9^(9^9) is the standing example. Simplify the "
-            f"input, or reduce the size of the literals in it.",
-        )
-    except OSError as exc:
-        return _failure(
-            "internal_error", f"Could not start the {name} worker: {exc}"
-        )
+        os.close(write_fd)
+    except BaseException:  # noqa: BLE001 -- the parent reads the exit status
+        traceback.print_exc(file=sys.stderr)
+        os._exit(1)
+    # ``os._exit``: a forked child must not run atexit handlers or flush
+    # buffers it inherited a copy of.
+    os._exit(0)
 
-    if finished.returncode != 0:
-        return _failure(
-            "internal_error",
-            f"The {name} worker exited with code {finished.returncode}. "
-            f"{_tail(finished.stderr)}",
-        )
 
+def _serve_one_call(request: bytes) -> bytes:
+    """Fork, let the child do the work, and come back with whatever it wrote."""
+    read_fd, write_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        _run_child(request, read_fd, write_fd)  # never returns
+
+    os.close(write_fd)
+    chunks: list[bytes] = []
     try:
-        return pickle.loads(finished.stdout)
-    except Exception as exc:  # a corrupted result must not read as a verdict
-        return _failure(
+        while True:
+            chunk = os.read(read_fd, 1 << 16)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    finally:
+        os.close(read_fd)
+    _, status = os.waitpid(pid, 0)
+
+    payload = b"".join(chunks)
+    if payload:
+        return payload
+    # No answer: the child was killed, or died before it could write one. The
+    # worker itself is fine, so this is reported and the loop carries on.
+    return pickle.dumps(
+        _failure(
             "internal_error",
-            f"The {name} worker returned something unreadable "
-            f"({type(exc).__name__}: {exc}). {_tail(finished.stderr)}",
-        )
-
-
-def _serve_one_call() -> None:
-    """Worker entry point: one pickled call in, one finished dict out.
-
-    ``_dispatch`` translates every exception, so this writes a result or the
-    process died -- there is no third outcome for the parent to interpret.
-    """
-    name, kwargs = pickle.load(sys.stdin.buffer)
-    sys.stdout.buffer.write(
-        pickle.dumps(_dispatch(name, kwargs), protocol=pickle.HIGHEST_PROTOCOL)
+            f"The worker's child produced no result -- it {_exit_detail(status)}.",
+        ),
+        protocol=pickle.HIGHEST_PROTOCOL,
     )
-    sys.stdout.buffer.flush()
+
+
+def _serve_forever() -> None:
+    """Worker entry point: framed calls in, framed results out, until EOF."""
+    # Anything that prints to stdout -- an lcapy warning, a stray debug print in
+    # a dependency -- would land in the middle of a frame and be read as part of
+    # a result. Keep a private copy of the real stdout for the protocol and
+    # point fd 1 at stderr, which children inherit already redirected.
+    protocol_out = os.dup(sys.stdout.fileno())
+    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+    protocol_in = sys.stdin.fileno()
+
+    while True:
+        header = _read_exactly(protocol_in, _HEADER.size)
+        if header is None:
+            return  # the server closed the pipe; leave quietly
+        (size,) = _HEADER.unpack(header)
+        if size == 0:  # a ping: already imported, so answering is the proof
+            _write_all(protocol_out, _HEADER.pack(0))
+            continue
+        request = _read_exactly(protocol_in, size)
+        if request is None:
+            return
+        payload = _serve_one_call(request)
+        _write_all(protocol_out, _HEADER.pack(len(payload)) + payload)
 
 
 # ---------------------------------------------------------------------------
@@ -599,10 +964,23 @@ def check_setup(
 
 
 def main() -> None:
-    """Serve over stdio, or run a single call as a worker subprocess."""
+    """Serve over stdio, or serve tool calls as the worker subprocess."""
     if _WORKER_FLAG in sys.argv[1:]:
-        _serve_one_call()
+        _serve_forever()
         return
+    # Pay the worker's start-up now rather than inside the first tool call, so
+    # the first question of a session answers as fast as the rest. A failure
+    # here is said out loud on stderr and then left alone: every tool call
+    # reports its own error anyway, and refusing to serve would turn a
+    # recoverable hiccup into a dead server.
+    try:
+        _WORKER.prewarm()
+    except Exception as exc:  # noqa: BLE001 -- announced, not swallowed
+        print(
+            f"circuit_mcp: could not pre-start the worker "
+            f"({type(exc).__name__}: {exc}); the first tool call will retry.",
+            file=sys.stderr,
+        )
     server.run(transport="stdio")
 
 

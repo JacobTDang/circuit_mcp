@@ -18,7 +18,10 @@ fail *quietly* and both produce a confident wrong verdict on correct work:
 import asyncio
 import json
 import os
+import signal
+import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -443,13 +446,161 @@ def test_the_parsed_equations_are_echoed_back():
 
 
 # --------------------------------------------------------------------------
-# the wall-clock bound
+# the wall-clock bound, and the worker that enforces it
 # --------------------------------------------------------------------------
+#
+# The bound is enforced in a *process*, because a process is the only thing
+# Python can actually end -- see the comment block in server.py. What these
+# tests hold onto is that making that process persistent, which is what makes
+# a call cost milliseconds instead of half a second, did not quietly cost
+# correctness: every call must still see the same state a freshly started
+# interpreter would.
+
+# An entirely ordinary netlist whose *source* is named V1. lcapy registers
+# component names in one process-global SymbolRegistry, so building this
+# circuit publishes 'V1' to every circuit built afterwards in that process.
+# That is the concrete leak a persistent worker would otherwise have: a later
+# check_setup whose unknown is the node voltage V1 gets refused as circular.
+NAMES_V1 = """
+V1 1 0 {V1}
+Ra 1 2 {Ra}
+Rb 2 0 {Rb}
+"""
+
+ODDLY_NAMED = """
+Vs 1 0 {V}
+Rzz 1 2 {Rzz}
+Rqq 2 0 {Rqq}
+"""
+
+CORRECT_SETUP = (DIVIDER, ["V1 = V", "(V1 - V2)/R1 = V2/R2"], ["V1", "V2"])
+
 
 def test_the_timeout_is_a_module_level_constant():
     assert isinstance(server_module.TIMEOUT_SECONDS, (int, float))
     assert server_module.TIMEOUT_SECONDS > 0
 
+
+def test_the_work_runs_in_a_process_because_a_thread_cannot_be_killed():
+    """The mechanism, asserted rather than assumed.
+
+    mcp dispatches a synchronous tool on a worker thread, so SIGALRM cannot be
+    armed from a tool body at all, and a thread-pool future returns while the
+    runaway keeps running. Only a process can be ended.
+    """
+    command = server_module._worker_command()
+    assert command[0] == sys.executable
+    assert command[1:] == ["-m", "circuit_mcp.server", "--worker"]
+    # The worker is a fresh interpreter, so it has to be told where to import
+    # from -- an installed distribution is not assumed. Still load-bearing:
+    # iCloud re-hides this venv's .pth files, which breaks the editable
+    # install without warning.
+    source_root = os.path.dirname(os.path.dirname(server_module.__file__))
+    path = server_module._worker_environment()["PYTHONPATH"].split(os.pathsep)
+    assert source_root in path
+
+
+# --------------------------------------------------------------------------
+# the latency bug itself
+# --------------------------------------------------------------------------
+
+def test_the_worker_is_started_once_and_reused():
+    """Interpreter start-up is paid per *server*, not per call."""
+    check_equivalence("Rf/Ri", "Rf/Ri")  # warm
+    first = server_module._WORKER.pid
+    assert first is not None
+    for _ in range(5):
+        assert check_equivalence("Rf/Ri", "Rf/Ri")["equivalent"] is True
+    assert server_module._WORKER.pid == first
+
+
+def test_a_warm_call_does_not_pay_interpreter_startup():
+    """The production latency bug, as a regression test.
+
+    A fresh interpreter plus the lcapy import costs ~550ms, against tool
+    bodies that take single-digit milliseconds. Twenty spawns would be ~11s;
+    anything close to that means start-up crept back into the per-call path.
+    """
+    check_equivalence("Rf/Ri", "Rf/Ri")  # warm
+    start = time.monotonic()
+    for _ in range(20):
+        check_equivalence("Rf/Ri", "Rf/Ri")
+    elapsed = time.monotonic() - start
+    assert elapsed < 3.0, f"20 calls took {elapsed:.1f}s -- start-up is back"
+
+
+# --------------------------------------------------------------------------
+# state must not leak from one call into the next
+# --------------------------------------------------------------------------
+
+def test_an_earlier_call_cannot_change_a_later_verdict():
+    """The leak that makes a naive persistent worker unsafe.
+
+    lcapy's ``Circuit.symbols`` is one process-global SymbolRegistry shared by
+    every context, so building NAMES_V1 publishes 'V1' to every circuit built
+    after it. mna's setup check refuses an unknown that shares a name with a
+    circuit symbol, so the second call below comes back 'error: Unknown(s)
+    ['V1'] share a name with a circuit symbol' -- a confident refusal of
+    correct work, caused entirely by an unrelated earlier call.
+    """
+    before = check_setup(*CORRECT_SETUP)
+    assert before["ok"] is True, before["message"]
+
+    circuit_equations(NAMES_V1)
+
+    after = check_setup(*CORRECT_SETUP)
+    assert after == before, "an unrelated earlier call changed this verdict"
+
+
+def test_a_prior_derivation_does_not_change_how_a_later_one_parses():
+    """Symbol assumptions are the other half of the leak.
+
+    Every expression here is parsed against a ground truth's own symbols, and
+    the objects that ground truth is built from come out of lcapy's shared
+    registry. Work in between must not reach them.
+    """
+    truth = derive(INVERTING, 1, 0, 3, 0, "finite")["transfer_function"]["text"]
+    before = check_derivation([truth], truth)
+    assert before["ok"] is True, before["message"]
+
+    derive(RC_LOWPASS, 1, 0, 2, 0, "finite")
+    circuit_equations(NAMES_V1)
+    circuit_equations(ODDLY_NAMED)
+    check_equivalence("A/(1 + A)", "1/(1/A + 1)")
+
+    assert check_derivation([truth], truth) == before
+
+
+def test_a_battery_of_calls_is_unaffected_by_anything_run_before_it():
+    """The general property, rather than one instance of it.
+
+    Same inputs, same outputs, regardless of history. Compared as whole
+    result dicts so a drift in any field -- verdict, counterexample, rendered
+    symbols -- fails this.
+    """
+    def battery():
+        return [
+            derive(INVERTING, 1, 0, 3, 0, "gbw"),
+            derive(RC_LOWPASS, 1, 0, 2, 0, "finite"),
+            check_equivalence("Rf/(Ri + Rf)", "1/(1 + Ri/Rf)"),
+            check_derivation([TRUTH, "-Rf/(Ri + (Rf + Ri)/A)"], TRUTH),
+            circuit_equations(DIVIDER),
+            check_setup(*CORRECT_SETUP),
+        ]
+
+    first = battery()
+    circuit_equations(NAMES_V1)
+    circuit_equations(ODDLY_NAMED)
+    derive(RC_LOWPASS, 1, 0, 2, 0, "finite")
+    check_equivalence("s/(1 + s)", "1/(1/s + 1)")
+    check_derivation(["-Rf/Ri"], TRUTH)
+
+    assert battery() == first
+
+
+# --------------------------------------------------------------------------
+# the bound still bounds
+# --------------------------------------------------------------------------
 
 def test_a_pathological_expression_times_out_instead_of_hanging(monkeypatch):
     """``9^(9^9)`` passes every safety screen and then never finishes.
@@ -471,21 +622,22 @@ def test_a_pathological_expression_times_out_instead_of_hanging(monkeypatch):
     assert elapsed < 30, f"took {elapsed:.1f}s -- the bound did not hold"
 
 
-def test_the_work_runs_in_a_process_because_a_thread_cannot_be_killed():
-    """The mechanism, asserted rather than assumed.
+def test_a_timeout_leaves_nothing_of_the_worker_running(monkeypatch):
+    """Killed, not merely abandoned to keep a core busy.
 
-    mcp dispatches a synchronous tool on a worker thread, so SIGALRM cannot be
-    armed from a tool body at all, and a thread-pool future returns while the
-    runaway keeps running. Only a process can be ended.
+    The worker runs in its own session, so one killpg reaches the worker and
+    the runaway it forked. Asserting the *group* is gone is what distinguishes
+    a real kill from letting go of a pipe.
     """
-    command = server_module._worker_command()
-    assert command[0] == sys.executable
-    assert command[1:] == ["-m", "circuit_mcp.server", "--worker"]
-    # The worker is a fresh interpreter, so it has to be told where to import
-    # from -- an installed distribution is not assumed.
-    source_root = os.path.dirname(os.path.dirname(server_module.__file__))
-    path = server_module._worker_environment()["PYTHONPATH"].split(os.pathsep)
-    assert source_root in path
+    monkeypatch.setattr(server_module, "TIMEOUT_SECONDS", 2.0)
+    check_equivalence("Rf/Ri", "Rf/Ri")  # warm, so there is a group to kill
+    group = server_module._WORKER.pid
+    assert group is not None
+
+    assert check_equivalence("9^(9^9)", "1")["error"] == "timeout"
+
+    with pytest.raises(ProcessLookupError):
+        os.killpg(group, 0)
 
 
 def test_a_timeout_does_not_wedge_the_next_call(monkeypatch):
@@ -496,3 +648,144 @@ def test_a_timeout_does_not_wedge_the_next_call(monkeypatch):
     monkeypatch.setattr(server_module, "TIMEOUT_SECONDS", 20.0)
     after = check_equivalence("Rf/Ri", "Rf/Ri")
     assert after["equivalent"] is True
+
+
+def test_state_is_still_clean_after_a_timeout_forced_a_restart(monkeypatch):
+    """A restart is a state change too, so the invariant is re-checked here."""
+    before = check_setup(*CORRECT_SETUP)
+    assert before["ok"] is True, before["message"]
+
+    monkeypatch.setattr(server_module, "TIMEOUT_SECONDS", 2.0)
+    assert check_equivalence("9^(9^9)", "1")["error"] == "timeout"
+    monkeypatch.setattr(server_module, "TIMEOUT_SECONDS", 20.0)
+
+    assert check_setup(*CORRECT_SETUP) == before
+
+
+# --------------------------------------------------------------------------
+# worker lifecycle
+# --------------------------------------------------------------------------
+
+def test_a_worker_that_died_on_its_own_is_replaced():
+    """Nothing runs tool code in the worker itself, so its death is external.
+
+    That is what makes replacing it and retrying honest rather than a retry
+    loop around a crashing input.
+    """
+    check_equivalence("Rf/Ri", "Rf/Ri")  # warm
+    first = server_module._WORKER.pid
+    os.kill(first, signal.SIGKILL)
+
+    after = check_equivalence("Rf/Ri", "Rf/Ri")
+    assert after["equivalent"] is True
+    assert server_module._WORKER.pid not in (None, first)
+
+
+def test_the_worker_survives_a_call_that_dies_mid_flight():
+    """A tool body runs in a forked child, so it cannot take the worker down.
+
+    Killing that child is also the 'worker dies mid-read' case: the parent is
+    blocked reading a pipe whose writer just vanished. It has to come back
+    with a named error rather than block forever.
+    """
+    check_equivalence("Rf/Ri", "Rf/Ri")  # warm
+    worker = server_module._WORKER.pid
+
+    def kill_the_child():
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            found = subprocess.run(
+                ["pgrep", "-P", str(worker)], capture_output=True, text=True
+            )
+            children = [int(pid) for pid in found.stdout.split()]
+            if children:
+                for pid in children:
+                    os.kill(pid, signal.SIGKILL)
+                return
+            time.sleep(0.02)
+
+    assassin = threading.Thread(target=kill_the_child)
+    assassin.start()
+    start = time.monotonic()
+    result = check_equivalence("9^(9^9)", "1")
+    elapsed = time.monotonic() - start
+    assassin.join()
+
+    assert result["ok"] is False
+    assert result["error"] == "internal_error"
+    assert elapsed < 25, f"took {elapsed:.1f}s -- it blocked on a dead writer"
+    # The worker itself is untouched, and still serving.
+    assert server_module._WORKER.pid == worker
+    assert check_equivalence("Rf/Ri", "Rf/Ri")["equivalent"] is True
+
+
+def test_concurrent_calls_each_get_their_own_answer():
+    """mcp runs synchronous tools on a thread pool, so calls really do overlap.
+
+    One worker behind one pair of pipes means a frame from call A could be
+    handed to call B. Each thread asks a question only it would recognise.
+    """
+    outcomes: dict[int, dict] = {}
+
+    def ask(index: int) -> None:
+        outcomes[index] = check_equivalence(f"R{index}*Ri", f"Ri*R{index}")
+
+    threads = [threading.Thread(target=ask, args=(i,)) for i in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(outcomes) == 8
+    for index, result in outcomes.items():
+        assert result["ok"] is True
+        assert result["equivalent"] is True
+        assert f"R{index}" in result["expr_a"]["text"]
+
+
+def test_prewarming_moves_startup_off_the_first_call():
+    """``main`` pays the worker's start-up before serving, not inside a call.
+
+    Without it the first question of a session -- the one a person is waiting
+    on -- is the one that pays half a second of interpreter and lcapy import.
+    """
+    server_module._WORKER.shutdown()
+    assert server_module._WORKER.pid is None
+
+    start = time.monotonic()
+    server_module._WORKER.prewarm()
+    startup = time.monotonic() - start
+    assert server_module._WORKER.pid is not None
+
+    start = time.monotonic()
+    assert check_equivalence("Rf/Ri", "Rf/Ri")["equivalent"] is True
+    first_call = time.monotonic() - start
+
+    assert first_call < startup, (
+        f"first call took {first_call*1000:.0f}ms against {startup*1000:.0f}ms "
+        f"of start-up -- it is still paying for the import"
+    )
+
+
+def test_a_worker_that_cannot_start_is_reported_rather_than_retried_forever():
+    """The replacement is attempted once, then the failure is named.
+
+    A worker that dies instantly is the shape of a broken import path -- which
+    this venv produces on its own whenever iCloud re-hides its .pth files.
+    """
+    server_module._WORKER.shutdown()
+    original = server_module._worker_command
+    server_module._worker_command = lambda: [sys.executable, "-c", "raise SystemExit(3)"]
+    try:
+        start = time.monotonic()
+        result = check_equivalence("Rf/Ri", "Rf/Ri")
+        elapsed = time.monotonic() - start
+    finally:
+        server_module._worker_command = original
+        server_module._WORKER.shutdown()
+
+    assert result["ok"] is False
+    assert result["error"] == "internal_error"
+    assert elapsed < 10, f"took {elapsed:.1f}s -- it kept retrying"
+    # And a real worker still starts afterwards.
+    assert check_equivalence("Rf/Ri", "Rf/Ri")["equivalent"] is True
