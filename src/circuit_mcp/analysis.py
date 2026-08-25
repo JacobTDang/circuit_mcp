@@ -10,14 +10,16 @@ differentiation or integration for the s-dependence to interact with.
 from __future__ import annotations
 
 import sympy as sp
-from lcapy import Circuit
+from lcapy import Circuit, s as _lcapy_s
 
 from .symbols import bind, safe_subs
 
-# The Laplace variable, deliberately free of assumptions. Declaring s positive
-# makes solve() return [] for poles -- which are negative -- so a wrong domain
-# reads as "no poles" rather than raising. See AssumptionError below.
-S = sp.Symbol("s")
+# lcapy's own Laplace variable, not a hand-made one. It carries complex/finite,
+# which do not restrict sign and so do not break pole solving -- verified. Using
+# a bare Symbol("s") instead would be a *different object* from the s inside
+# every lcapy result, making identical expressions compare unequal on any
+# circuit containing a capacitor. See SymbolConflictError in symbols.py.
+S = _lcapy_s.sympy
 
 # Sign-restricting assumptions that would break pole solving.
 _SIGN_ASSUMPTIONS = ("positive", "negative", "nonnegative", "nonpositive")
