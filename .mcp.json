@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "circuit": {
+      "command": "./.venv/bin/python",
+      "args": ["-m", "circuit_mcp.server"]
+    }
+  }
+}
