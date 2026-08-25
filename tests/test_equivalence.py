@@ -45,3 +45,29 @@ def test_sign_error_in_numerator_is_caught():
 def test_result_reports_which_oracle_decided():
     """Needed to tell a proof from a probabilistic verdict."""
     assert equivalent(a + b, a + b).oracle in {"symbolic", "numeric"}
+
+
+# --- Trap 3: refuse to compare mismatched symbols ---------------------------
+
+def test_equivalent_raises_rather_than_returning_a_wrong_verdict():
+    """Mismatched assumptions previously reported correct work as wrong."""
+    from circuit_mcp.symbols import SymbolConflictError
+    import pytest
+    lcapy_side = -sp.Symbol("A", positive=True) * sp.Symbol("Rf", positive=True)
+    parsed_side = -sp.Symbol("A") * sp.Symbol("Rf")
+    with pytest.raises(SymbolConflictError):
+        equivalent(lcapy_side, parsed_side)
+
+
+def test_reconciled_expressions_compare_equivalent():
+    from circuit_mcp.symbols import reconcile
+    lcapy_side = -sp.Symbol("A", positive=True) * sp.Symbol("Rf", positive=True)
+    parsed_side = -sp.Symbol("A") * sp.Symbol("Rf")
+    assert equivalent(reconcile(parsed_side, lcapy_side), lcapy_side).equivalent
+
+
+def test_laplace_variable_assumption_mismatch_is_caught():
+    from circuit_mcp.symbols import SymbolConflictError
+    import pytest
+    with pytest.raises(SymbolConflictError):
+        equivalent(1 / (1 + sp.Symbol("s")), 1 / (1 + sp.Symbol("s", positive=True)))

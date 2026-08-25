@@ -3,7 +3,7 @@ name = "circuit_mcp"
 version = "0.1.0"
 description = "Checks circuit derivations against a symbolic ground truth"
 requires-python = ">=3.12"
-dependencies = ["lcapy>=1.26", "sympy>=1.14"]
+dependencies = ["lcapy>=1.26", "sympy>=1.14", "mcp>=1.2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

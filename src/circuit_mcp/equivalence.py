@@ -12,6 +12,8 @@ from dataclasses import dataclass
 
 import sympy as sp
 
+from .symbols import assert_no_conflicts
+
 # Fixed, varied rationals so results are reproducible across runs. Values are
 # deliberately unrelated to avoid accidental cancellation, and positive so they
 # never violate a symbol's assumptions.
@@ -40,6 +42,10 @@ def _trial_values(symbols: list[sp.Symbol], trial: int) -> dict:
 def equivalent(a: sp.Expr, b: sp.Expr) -> EquivalenceResult:
     """Decide whether two expressions are algebraically equal."""
     a, b = sp.sympify(a), sp.sympify(b)
+
+    # A name bound to differing assumptions on each side would make identical
+    # expressions compare unequal. Refuse rather than return a wrong verdict.
+    assert_no_conflicts(a, b)
 
     # Oracle 1: symbolic. cancel/together handle rational functions far better
     # than simplify alone, which is the shape this tool mostly sees.
