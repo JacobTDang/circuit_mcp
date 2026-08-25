@@ -12,11 +12,12 @@ The model never does the math. `lcapy` and `ngspice` are the oracle.
 
 ## Status
 
-Design only. Nothing implemented yet.
+Design plus a feasibility spike. No server implemented yet.
 
-One question is open and gates the design: whether `lcapy` accepts a symbolic
-`s`-dependent VCVS gain, which is required to model finite op-amp
-gain-bandwidth (`A(s) = A₀ / (1 + s/ωₚ)`).
+The question that gated the design is resolved: lcapy rejects `s`-dependent
+component values outright, but deriving with a constant gain and substituting
+`A -> A(s)` afterwards is verified correct against a hand-derived ground truth
+on both a symbolic and a numeric oracle. Finite gain-bandwidth is reachable.
 
 Design notes: [`docs/2026-08-24-design.md`](docs/2026-08-24-design.md)
 
