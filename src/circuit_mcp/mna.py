@@ -51,12 +51,35 @@ class SetupInputError(ValueError):
 
 
 @dataclass(frozen=True)
+class EquationRole:
+    """What one equation is, as far as that is provable rather than guessed.
+
+    * ``law`` -- it couples two or more unknowns, or it is one element's
+      constitutive relation. Either way it cannot be a final answer.
+    * ``solved`` -- on its own it fixes one node voltage at its final value,
+      and KCL at that node cannot take the same form in this circuit.
+    * ``ambiguous`` -- on its own it fixes one unknown at its final value, and
+      a genuine circuit law has that same form here, so the two cannot be told
+      apart. This is a statement about the circuit, not about the student.
+    * ``trivial`` -- it holds identically and constrains nothing.
+    """
+
+    index: int
+    role: str  # "law" | "solved" | "ambiguous" | "trivial"
+    unknown: str | None = None      # the unknown it fixes, for solved/ambiguous
+    value: sp.Expr | None = None    # the value it hands over
+    element: str | None = None      # the element whose relation it matches
+    detail: str = ""
+
+
+@dataclass(frozen=True)
 class SetupResult:
     ok: bool
     kind: str  # "ok" | "not_satisfied" | "underdetermined" | "error"
     message: str
     failing_equation: int | None = None   # 0-based index into the caller's list
     counterexample: dict | None = None
+    equation_roles: tuple[EquationRole, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -336,6 +359,265 @@ def _is_zero(expr: sp.Expr):
     return False, verdict.counterexample, inconclusive
 
 
+# ---------------------------------------------------------------------------
+# Setup law vs. restated answer
+#
+# The satisfaction-and-rank check passes anything true of the circuit, so a
+# student who writes the final answer instead of a circuit law passes. It is
+# tempting to catch that by locality -- a circuit law involves only one node's
+# neighbourhood, the answer reaches across the whole circuit -- and that was
+# built and measured before being rejected. Every operating point of it is
+# either useless or harmful, because on the small circuits this course starts
+# with, the law and the answer are *the same equation*:
+#
+#     KCL at node 2 of a divider, with the source substituted
+#         (V - V2)/R1 - V2/R2 = 0
+#     the solved answer for V2
+#         V2 - R2*V/(R1 + R2) = 0
+#     ratio                        -(R1 + R2)/(R1*R2)     <- free of V2
+#
+# A nonzero constant factor apart is not a difference; scaling an equation
+# through is explicitly legitimate work here. So no rule can flag the second
+# without also flagging the first, which is the standard textbook setup.
+#
+# What is left is provable rather than heuristic, so that is what gets
+# reported. Given the system is linear in the unknowns (already established
+# before this runs), a row of the Jacobian with exactly one nonzero entry means
+# the equation is affine in one unknown with a nonzero coefficient -- so it has
+# a unique root, and since the equation holds at the true solution that root is
+# the true value. Such an equation *is* ``x = <answer>``, whatever it was
+# written to look like. Whether writing it counts as a setup step then depends
+# on the circuit, and that part is decided topologically:
+#
+# * it mentions no circuit quantity outside a single element -> a constitutive
+#   relation (`V1 = Vs`, an op-amp virtual ground), always a law;
+# * otherwise, if every node adjacent to the node in question is at a known
+#   potential, KCL there is affine in that node alone and so has the same form
+#   -> ambiguous, and said to be ambiguous;
+# * otherwise KCL there necessarily involves a neighbour that is not known, so
+#   it cannot have this form -> the equation supplies a solved value.
+#
+# None of this rejects anything. It is reported.
+# ---------------------------------------------------------------------------
+
+def _value_symbols(element) -> set[str]:
+    names: set[str] = set()
+    for arg in element.args:
+        if arg is None:
+            continue
+        names |= {str(symbol) for symbol in sp.sympify(str(arg)).free_symbols}
+    return names
+
+
+def _element_quantities(circuit: Circuit) -> dict[str, set[str]]:
+    """Element name -> the canonical names of every quantity that element owns."""
+    series = _known_currents(circuit)
+    owned: dict[str, set[str]] = {}
+    for name, element in circuit.elements.items():
+        names = {f"V{node}" for node in element.nodes}
+        names.add(f"I_{name}")
+        names |= _value_symbols(element)
+        names |= series.get(name, set())
+        owned[name] = names
+    return owned
+
+
+def _known_nodes(circuit: Circuit) -> set[str]:
+    """Nodes whose potential the independent sources fix without a solve.
+
+    Ground, plus anything an independent voltage source ties to a node already
+    known -- so two sources in series pin the far node too, and the relation
+    written across them stays a relation rather than a solved value.
+    """
+    sources = [
+        circuit.elements[name]
+        for name in circuit.independent_sources
+        if circuit.elements[name].is_voltage_source
+    ]
+    known = {"0"}
+    grew = True
+    while grew:
+        grew = False
+        for element in sources:
+            first, second = str(element.nodes[0]), str(element.nodes[1])
+            for near, far in ((first, second), (second, first)):
+                if near in known and far not in known:
+                    known.add(far)
+                    grew = True
+    return known
+
+
+def _known_currents(circuit: Circuit) -> dict[str, set[str]]:
+    """Element -> value symbols of an independent current source in series.
+
+    The dual of :func:`_known_nodes`. A current source fixes the current in
+    every element on its series chain, so those elements' constitutive
+    relations are legitimately written with the source value in place of the
+    branch current. Series is read off the topology: elements sharing a node
+    that nothing else touches carry the same current.
+    """
+    at_node: dict[str, list[str]] = {}
+    for name, element in circuit.elements.items():
+        for node in {str(n) for n in element.nodes}:
+            at_node.setdefault(node, []).append(name)
+
+    known: dict[str, set[str]] = {}
+    for name in circuit.independent_sources:
+        source = circuit.elements[name]
+        if not source.is_current_source:
+            continue
+        values = _value_symbols(source)
+        chain = {name}
+        frontier = [name]
+        while frontier:
+            current = frontier.pop()
+            for node in {str(n) for n in circuit.elements[current].nodes}:
+                touching = at_node[node]
+                if len(touching) != 2:
+                    continue
+                for neighbour in touching:
+                    if neighbour not in chain:
+                        chain.add(neighbour)
+                        frontier.append(neighbour)
+        for member in chain:
+            known.setdefault(member, set()).update(values)
+    return known
+
+
+def _neighbours(circuit: Circuit) -> dict[str, set[str]]:
+    """Node -> the nodes reachable through one element.
+
+    Every terminal of an element counts, so an op-amp's controlling inputs are
+    neighbours of its output. That is deliberate: they appear in its relation.
+    """
+    adjacent: dict[str, set[str]] = {str(node): set() for node in circuit.node_list}
+    for element in circuit.elements.values():
+        terminals = {str(node) for node in element.nodes}
+        for node in terminals:
+            adjacent.setdefault(node, set()).update(terminals - {node})
+    return adjacent
+
+
+def _vanishes(expr: sp.Expr) -> bool:
+    return sp.cancel(sp.together(expr)) == 0
+
+
+def _owning_element(
+    mentioned: set[str], owned: dict[str, set[str]]
+) -> str | None:
+    """The element that alone accounts for every circuit quantity mentioned.
+
+    Ties go to the element owning the fewest quantities, i.e. the tightest fit:
+    ``V2 = 0`` names a quantity that both the resistor and the source touching
+    node 2 own, and it is the source that holds node 2 there.
+    """
+    everything = set().union(*owned.values()) if owned else set()
+    circuit_names = mentioned & everything
+    candidates = [
+        name for name, names in owned.items() if circuit_names <= names
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda name: (len(owned[name]), name))
+
+
+def _classify(
+    circuit: Circuit,
+    residuals: list[sp.Expr],
+    jacobian: sp.Matrix,
+    unknowns: list[str],
+    true_values: dict[str, sp.Expr],
+    canonical_name,
+) -> tuple[EquationRole, ...]:
+    owned = _element_quantities(circuit)
+    known = _known_nodes(circuit)
+    adjacent = _neighbours(circuit)
+    node_of = {f"V{node}": str(node) for node in circuit.node_list}
+
+    roles: list[EquationRole] = []
+    for index, residual in enumerate(residuals):
+        involved = [
+            position
+            for position in range(jacobian.cols)
+            if not _vanishes(jacobian[index, position])
+        ]
+
+        if not involved:
+            roles.append(EquationRole(
+                index, "trivial",
+                detail="holds identically, so it constrains nothing",
+            ))
+            continue
+
+        if len(involved) > 1:
+            named = ", ".join(unknowns[position] for position in involved)
+            roles.append(EquationRole(
+                index, "law",
+                detail=f"a relation between {named}, so it cannot be a final "
+                       f"answer for any one of them",
+            ))
+            continue
+
+        name = unknowns[involved[0]]
+        value = true_values[name]
+        mentioned = {canonical_name(str(s)) for s in residual.free_symbols}
+
+        element = _owning_element(mentioned, owned)
+        if element is not None:
+            roles.append(EquationRole(
+                index, "law", unknown=name, value=value, element=element,
+                detail=f"names nothing outside element {element}, so it is that "
+                       f"element's own relation",
+            ))
+            continue
+
+        node = node_of.get(canonical_name(name))
+        if node is None:
+            # A branch current. KVL round a loop carrying it has this same
+            # form whenever the loop is the only one, which is most of the
+            # circuits here -- so this is never called a solved value.
+            roles.append(EquationRole(
+                index, "ambiguous", unknown=name, value=value,
+                detail=f"KVL round a loop carrying {name} can take that same "
+                       f"form, so a loop law and the final answer cannot be "
+                       f"told apart here",
+            ))
+            continue
+
+        unknown_neighbours = sorted(adjacent.get(node, set()) - known)
+        if not unknown_neighbours:
+            roles.append(EquationRole(
+                index, "ambiguous", unknown=name, value=value,
+                detail=f"every node adjacent to node {node} is at a known "
+                       f"potential, so KCL at node {node} has that same form "
+                       f"and this check cannot tell a node law from the final "
+                       f"answer here",
+            ))
+        else:
+            plural = "s" if len(unknown_neighbours) > 1 else ""
+            neighbours = ", ".join(unknown_neighbours)
+            roles.append(EquationRole(
+                index, "solved", unknown=name, value=value,
+                detail=f"KCL at node {node} cannot take that form, because "
+                       f"node {node} touches node{plural} {neighbours}, whose "
+                       f"voltage no source fixes -- so this equation supplies "
+                       f"a solved value rather than a setup law",
+            ))
+    return tuple(roles)
+
+
+def _roles_note(roles: tuple[EquationRole, ...]) -> str:
+    """Prose for the roles worth mentioning; empty when every one is a law."""
+    lines = []
+    for role in roles:
+        if role.role in ("solved", "ambiguous"):
+            lines.append(
+                f"Equation {role.index} is equivalent, on its own, to "
+                f"{role.unknown} = {role.value}: {role.detail}."
+            )
+    return " ".join(lines)
+
+
 def check_setup(netlist: str, equations: list[sp.Eq], unknowns: list[str]) -> SetupResult:
     """Does this system of equations describe this circuit?
 
@@ -421,6 +703,18 @@ def check_setup(netlist: str, equations: list[sp.Eq], unknowns: list[str]) -> Se
             failing_equation=row,
         )
 
+    # 3. Whatever the verdict, say what each equation *is* -- as far as that
+    #    is provable. This never changes the verdict; see the note above.
+    table = _aliases(solution)
+
+    def canonical_name(name: str) -> str:
+        return table.get(name) or name
+
+    roles = _classify(
+        circuit, residuals, jacobian, unknowns, true_values, canonical_name
+    )
+    note = _roles_note(roles)
+
     rank = jacobian.rank(simplify=True)
     if rank < len(unknowns):
         absent = [
@@ -439,7 +733,9 @@ def check_setup(netlist: str, equations: list[sp.Eq], unknowns: list[str]) -> Se
             f"Every equation holds, but {len(equations)} of them give rank "
             f"{rank} against {len(unknowns)} unknowns, so the system does not "
             f"determine a unique solution -- you are {len(unknowns) - rank} "
-            f"equation(s) short.{detail}",
+            f"equation(s) short.{detail}"
+            + (f" {note}" if note else ""),
+            equation_roles=roles,
         )
 
     return SetupResult(
@@ -447,5 +743,7 @@ def check_setup(netlist: str, equations: list[sp.Eq], unknowns: list[str]) -> Se
         "ok",
         f"All {len(equations)} equation(s) hold for the circuit's actual "
         f"solution, and the system has full rank {rank} for "
-        f"{len(unknowns)} unknown(s).",
+        f"{len(unknowns)} unknown(s)."
+        + (f" {note}" if note else ""),
+        equation_roles=roles,
     )
