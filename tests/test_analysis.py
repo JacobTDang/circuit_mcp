@@ -75,6 +75,18 @@ def test_poles_rejects_an_expression_whose_s_is_assumed_positive():
         poles(1 / (bad_s + 1))
 
 
+def test_ideal_limit_refuses_when_the_gain_symbol_is_absent():
+    """sp.limit against an absent symbol returns the input unchanged, silently.
+
+    Same family as trap 1: the transformation does nothing and raises nothing,
+    so an RC lowpass would come back labelled "ideal" while being untouched.
+    """
+    from circuit_mcp.symbols import SubstitutionError
+    H = transfer("Vs 1 0 s {V}\nR1 1 2 {R}\nC1 2 0 {C}\n", 1, 0, 2, 0)
+    with pytest.raises(SubstitutionError, match="A"):
+        ideal_limit(H, "A")
+
+
 def test_substituting_a_missing_gain_symbol_is_loud():
     from circuit_mcp.symbols import SubstitutionError
     H = transfer(INVERTING, 1, 0, 3, 0)

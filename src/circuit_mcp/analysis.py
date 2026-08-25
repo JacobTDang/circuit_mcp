@@ -12,7 +12,7 @@ from __future__ import annotations
 import sympy as sp
 from lcapy import Circuit, s as _lcapy_s
 
-from .symbols import bind, safe_subs
+from .symbols import SubstitutionError, bind, safe_subs
 
 # lcapy's own Laplace variable, not a hand-made one. It carries complex/finite,
 # which do not restrict sign and so do not break pole solving -- verified. Using
@@ -40,8 +40,20 @@ def _gain_symbol(expr: sp.Expr, name: str) -> sp.Symbol:
 
 
 def ideal_limit(expr: sp.Expr, gain: str = "A") -> sp.Expr:
-    """Collapse to the ideal op-amp result by taking the open-loop gain to infinity."""
-    return sp.limit(expr, _gain_symbol(expr, gain), sp.oo)
+    """Collapse to the ideal op-amp result by taking the open-loop gain to infinity.
+
+    Raises if the gain symbol is absent: ``sp.limit`` against a symbol that does
+    not occur returns the expression unchanged and raises nothing, so a circuit
+    with no gain would come back labelled "ideal" while being untouched.
+    """
+    available = bind(expr)
+    if gain not in available:
+        raise SubstitutionError(
+            f"No symbol named {gain!r} in the expression, so taking it to "
+            f"infinity would return the input unchanged. Present: "
+            f"{sorted(available)}."
+        )
+    return sp.limit(expr, available[gain], sp.oo)
 
 
 def with_finite_gbw(expr: sp.Expr, gain: str = "A", a0: str = "A0", wp: str = "wp") -> sp.Expr:
