@@ -1,0 +1,21 @@
+[project]
+name = "circuit_mcp"
+version = "0.1.0"
+description = "Checks circuit derivations against a symbolic ground truth"
+requires-python = ">=3.12"
+dependencies = ["lcapy>=1.26", "sympy>=1.14"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/circuit_mcp"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore::SyntaxWarning", "ignore::UserWarning"]
