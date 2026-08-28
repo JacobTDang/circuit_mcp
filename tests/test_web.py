@@ -43,19 +43,12 @@ def test_dashboard_starts_as_a_manual_blank_spatial_workspace(tmp_path, monkeypa
         assert "resize:horizontal" in canvas_css.text
 
 
-def test_animation_assets_include_rich_symbols_and_accessible_playback(tmp_path, monkeypatch):
+def test_legacy_animation_assets_are_not_loaded_by_the_workspace(tmp_path, monkeypatch):
     with client(tmp_path, monkeypatch) as browser:
-        script = browser.get("/assets/animation.js")
-        styles = browser.get("/assets/canvas.css")
-        assert script.status_code == 200
-        for feature in (
-            "e.type==='bjt'", "e.type==='probe'", "e.type==='meter'", "e.type==='pole_zero'",
-            "data-prev", "data-next", "data-large", "e.key==='Escape'", "e.type==='line'",
-        ):
-            assert feature in script.text
-        assert ".animation-player.expanded" in styles.text
-        assert ".sketch-draw" in styles.text
-        assert "prefers-reduced-motion" in styles.text
+        page = browser.get("/")
+        assert "/assets/animation.js" not in page.text
+        assert "loadAnimations" not in page.text
+        assert browser.get("/assets/animation.js").status_code == 404
 
 
 def test_animation_scene_lifecycle_is_persistent_and_bounded(tmp_path, monkeypatch):

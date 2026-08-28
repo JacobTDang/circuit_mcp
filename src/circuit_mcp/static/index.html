@@ -33,5 +33,5 @@
   <section id="tools" class="view">
     <div class="tool-layout"><div class="tool-list" id="toolList"></div><article class="panel runner"><h3 id="toolName">Select a tool</h3><p id="toolHint" class="muted">Parameters are JSON and use the same contract as MCP.</p><textarea id="toolArgs" spellcheck="false">{}</textarea><button id="runTool" class="primary">Run analysis</button><pre id="toolOutput">Results appear here.</pre></article></div>
   </section>
-</main><div id="toast"></div><script src="/assets/animation.js?v=4"></script><script src="/assets/app.js?v=canvas-10"></script><script>document.addEventListener('click',event=>{const close=event.target.closest('[data-close]'),card=close?.closest('.workspace-item[data-kind="animation"]');if(card){const item=canvasItems.find(x=>x.id===card.dataset.id),animation=state.animations.find(x=>x.id===item?.animationId),dismissed=dismissedAnimations();if(animation){dismissed[animation.id]=animation.revision;localStorage.setItem(DISMISSED_ANIMATIONS,JSON.stringify(dismissed))}}},true);loadAnimations().catch(()=>{});setInterval(()=>loadAnimations().catch(()=>{}),2000)</script>
+</main><div id="toast"></div><script src="/assets/app.js?v=canvas-11"></script>
 </body></html>

@@ -122,17 +122,13 @@ H.264 frame is decoded without opening or capturing a Mac window. USB-C uses
 Apple's CoreMediaIO/AVFoundation screen-device path.
 Every returned frame includes a SHA-256 hash.
 
-## Hand-drawn visual explanations
+## Visual explanations
 
-Agents can call `animation_create` or `animation_from_template` to place a
-safe, hand-drawn SVG explanation directly on the command-center board. Scenes
-combine circuit symbols, equations, plots, phasors, highlights, flow arrows,
-captions, and timeline changes. They are validated JSON—not executable HTML or
-JavaScript—and persist in SQLite with optional problem links. The browser
-automatically spawns new scenes and provides play/pause, replay, scrubbing,
-speed, drag, resize, fit, and dismiss controls. See
-[`animation_engine/README.md`](src/circuit_mcp/animation_engine/README.md) and
-its [`COVERAGE.md`](src/circuit_mcp/animation_engine/COVERAGE.md).
+The former browser SVG renderer has been retired. Showman is pinned under
+`vendor/showman` and will provide deterministic, smooth circuit animations,
+camera motion, previews, and local video rendering. Existing scene records are
+retained for migration but are no longer spawned by the board. See the
+[Showman integration scope](docs/SHOWMAN_INTEGRATION.md).
 
 MCP clients decide when to call tools, so “continuous awareness” means the agent
 takes a fresh frame when asked or periodically during an active tutoring loop;
