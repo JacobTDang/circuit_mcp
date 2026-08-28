@@ -1,6 +1,6 @@
-# EE 2300 visual coverage matrix
+# Circuit visual coverage matrix
 
-This matrix follows Iowa State's catalog scope and will be refined with the
+This legacy matrix follows the original circuit-course scope and is retained for
 student's uploaded syllabus and lecture notes.
 
 | Area | Required visual explanations |

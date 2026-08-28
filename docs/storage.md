@@ -13,7 +13,7 @@ paths.
 
 ## Data model
 
-- `courses`: the local EE 2300 course record.
+- `courses`: the local circuit-learning workspace record.
 - `documents` and `document_text`: file metadata, provenance, hashes, and
   bounded extracted text.
 - `document_search`: FTS5 index over names, extracted text, and confirmed

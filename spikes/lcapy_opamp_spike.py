@@ -1,7 +1,7 @@
 """Spike: does lcapy keep an s-dependent opamp gain symbolic?
 
 Gates the design. Ideal opamps (A -> oo) are assumed fine; the open question is
-finite gain-bandwidth, A(s) = A0 / (1 + s/wp), which EE 2300 needs in weeks 3-5.
+finite gain-bandwidth, A(s) = A0 / (1 + s/wp), needed in circuit analysis.
 """
 import warnings
 warnings.filterwarnings("ignore", category=SyntaxWarning)

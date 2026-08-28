@@ -24,8 +24,8 @@ class StorageError(ValueError):
 
 
 SCHEMA_VERSION = 1
-COURSE_ID = "ee2300"
-COURSE_CODE = "EE 2300"
+COURSE_ID = "circuits"
+COURSE_CODE = "CIRCUITS"
 CATEGORIES = {"homework", "lecture", "reference", "solution"}
 STATUSES = {"draft", "confirmed", "solved", "needs_review"}
 ATTEMPT_STATUSES = {"working", "correct", "incorrect", "partial", "gap"}
@@ -160,8 +160,13 @@ class CommandCenterDB:
             )
             connection.execute(
                 "INSERT OR IGNORE INTO courses(id, code, title, institution, term, created_at) VALUES(?,?,?,?,?,?)",
-                (COURSE_ID, COURSE_CODE, "Electronic Circuits and Systems", "Iowa State University", None, time.time()),
+                (COURSE_ID, COURSE_CODE, "Circuit Learning Workspace", "Local", None, time.time()),
             )
+            legacy = connection.execute("SELECT id FROM courses WHERE id<>?", (COURSE_ID,)).fetchall()
+            for row in legacy:
+                for table in ("documents", "problems", "animation_scenes"):
+                    connection.execute(f"UPDATE {table} SET course_id=? WHERE course_id=?", (COURSE_ID, row["id"]))
+                connection.execute("DELETE FROM courses WHERE id=?", (row["id"],))
         migrated = self._migrate_legacy(index_path, history_path)
         return {"ok": True, "path": str(self.path), "schema_version": SCHEMA_VERSION, **migrated}
 

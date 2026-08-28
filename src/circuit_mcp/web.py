@@ -23,6 +23,7 @@ from .storage import CommandCenterDB, StorageError
 from .capture import CaptureError, capture_workspace as _capture_workspace
 from .workspace import configure_display as _configure_display
 from .ipad_capture import IPAD_CAPTURE, IPadCaptureError
+from .showman import SHOWMAN
 from .animation_engine import SceneValidationError, validate_scene
 from .server import (
     alias_frequency,
@@ -71,6 +72,7 @@ async def _lifespan(_: FastAPI):
         yield
     finally:
         IPAD_CAPTURE.stop_airplay()
+        SHOWMAN.stop()
 
 
 app = FastAPI(title="Circuit Command Center", docs_url=None, redoc_url=None,
@@ -197,6 +199,12 @@ def status() -> dict[str, Any]:
         "workspace_configuration": workspace_configuration(),
         "ocr": OCR_WORKER.availability(), "instruments": instrument_status(),
     }
+
+
+@app.get("/api/showman/status")
+def showman_status(start: bool = False) -> dict[str, Any]:
+    """Report the local renderer state; optionally start the pinned worker."""
+    return SHOWMAN.start() if start else SHOWMAN.status()
 
 
 @app.get("/api/library")

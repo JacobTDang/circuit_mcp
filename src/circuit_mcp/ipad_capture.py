@@ -95,7 +95,7 @@ class IPadCaptureService:
             preview_size = os.environ.get("CIRCUIT_MCP_AIRPLAY_SIZE", "800x600@30")
             if not re.fullmatch(r"[1-9]\d{2,3}x[1-9]\d{2,3}@[1-9]\d?", preview_size):
                 raise IPadCaptureError("CIRCUIT_MCP_AIRPLAY_SIZE must look like 800x600@30")
-            command = [str(UXPLAY), "-n", "EE2300 Capture", "-nh", "-pin", self._pin,
+            command = [str(UXPLAY), "-n", "Circuit Capture", "-nh", "-pin", self._pin,
                        "-m", "02:ee:23:00:00:01", "-key", str(self._identity_key),
                        "-reg", str(self._registration), "-nohold",
                        "-s", preview_size,
@@ -221,7 +221,7 @@ class IPadCaptureService:
             "airplay": {"available": UXPLAY.is_file(), "running": running,
                         "connected": connected, "stream_ready": stream_ready,
                         "headless": True,
-                        "receiver": "EE2300 Capture",
+                        "receiver": "Circuit Capture",
                         "pin": pin, "pid": pid, "started_at": started, "logs": logs},
             "usb": {"available": USB_CAPTURE.is_file(), "connected": bool(usb),
                     "devices": usb, "error": usb_error},

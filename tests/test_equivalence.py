@@ -29,7 +29,7 @@ def test_unequal_expressions_carry_a_counterexample():
 
 
 def test_rational_functions_in_s():
-    """First-order lowpass written two ways -- the shape EE 2300 produces."""
+    """First-order lowpass written in two equivalent forms."""
     h1 = 1 / (1 + s * R * C)
     h2 = 1 / (R * C) / (s + 1 / (R * C))
     assert equivalent(h1, h2).equivalent

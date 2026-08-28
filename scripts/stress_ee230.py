@@ -1,4 +1,4 @@
-"""Seeded, independently checked EE 2300 stress matrix.
+"""Seeded, independently checked circuit-analysis stress matrix.
 
 This complements unit fixtures with new numeric values on every seed. It calls
 the same guarded functions exposed over MCP and exits nonzero on any mismatch.
@@ -190,7 +190,7 @@ def run(seed: int, rounds: int) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=int, default=2300)
+    parser.add_argument("--seed", type=int, default=407)
     parser.add_argument("--rounds", type=int, default=50)
     args = parser.parse_args()
     result = run(args.seed, args.rounds)

@@ -36,7 +36,7 @@ def test_schema_pragmas_course_and_integrity(tmp_path):
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 0
-        assert connection.execute("SELECT code FROM courses").fetchone()[0] == "EE 2300"
+        assert connection.execute("SELECT code FROM courses").fetchone()[0] == "CIRCUITS"
         assert connection.execute("SELECT version FROM schema_migrations").fetchone()[0] == 1
     assert db.integrity() == {"ok": True, "integrity_check": "ok", "foreign_key_violations": []}
 

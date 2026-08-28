@@ -113,7 +113,7 @@ def validate_scene(scene: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(scene)
     normalized.update(schema_version=SCENE_SCHEMA_VERSION, title=title.strip(),
                       width=int(width), height=int(height), duration_ms=int(duration),
-                      seed=int(scene.get("seed", 2300)), loop=bool(scene.get("loop", False)),
+                      seed=int(scene.get("seed", 407)), loop=bool(scene.get("loop", False)),
                       elements=elements, steps=steps)
     return normalized
 

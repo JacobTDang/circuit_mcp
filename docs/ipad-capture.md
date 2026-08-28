@@ -6,7 +6,7 @@ Sidecar is not an input source: it sends a Mac desktop to the iPad.
 ## Backends
 
 AirPlay is primary. A separately built GPLv3 UxPlay process advertises
-`EE2300 Capture` through Bonjour, requires an ephemeral four-digit PIN, decodes
+`Circuit Capture` through Bonjour, requires an ephemeral four-digit PIN, decodes
 H.264 with GStreamer and renders into its headless `fakesink`. It creates no Mac preview window, so
 closing or switching Mac applications cannot end the AirPlay session. The
 draggable iPad card polls a transient decoded PNG so the live screen stays

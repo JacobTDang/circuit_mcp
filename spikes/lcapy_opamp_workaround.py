@@ -46,7 +46,7 @@ subs = {A0: sp.Rational(100000), wp: sp.Rational(63), Ri: sp.Rational(1000),
 d = sp.N(sp.expand(H_sub.subs(subs) - H_truth.subs(subs)))
 print(f"numeric delta:  {d}    MATCH: {abs(complex(d)) < 1e-30}")
 
-# The physics EE 2300 actually asks for
+# The physical circuit behavior the solver needs
 print(f"\nDC gain (s->0):    {sp.simplify(H_sub.subs(s, 0))}")
 pole = sp.solve(sp.denom(H_sub), s)
 print(f"closed-loop pole:  {sp.simplify(pole[0])}")

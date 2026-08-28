@@ -1403,7 +1403,7 @@ def attempt_history(problem_id: str, limit: int = 100) -> dict[str, Any]:
 
 @server.tool()
 def course_progress() -> dict[str, Any]:
-    """Summarize EE 2300 problem and attempt states by topic."""
+    """Summarize circuit-learning problem and attempt states by topic."""
     return _guarded("course_progress")
 
 
@@ -1498,13 +1498,13 @@ def animation_delete(animation_id: str) -> dict[str, Any]:
 
 @server.tool()
 def animation_from_template(template: str, title: str | None = None, problem_id: str | None = None) -> dict[str, Any]:
-    """Spawn one official EE 2300 visual template; use animation_list_templates for names."""
+    """Spawn one legacy visual template; use animation_list_templates for names."""
     return _guarded("animation_from_template", template=template, title=title, problem_id=problem_id)
 
 
 @server.tool()
 def animation_list_templates() -> dict[str, Any]:
-    """List visual templates spanning the official EE 2300 catalog areas."""
+    """List legacy circuit visual templates pending Showman migration."""
     return {"ok": True, "templates": template_names()}
 
 
@@ -1608,7 +1608,7 @@ def ipad_capture_status() -> dict[str, Any]:
 
 @server.tool()
 def ipad_receiver_start() -> dict[str, Any]:
-    """Start the local PIN-protected EE2300 AirPlay receiver."""
+    """Start the local PIN-protected Circuit Capture AirPlay receiver."""
     try:
         return IPAD_CAPTURE.start_airplay()
     except IPadCaptureError as exc:

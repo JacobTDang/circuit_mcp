@@ -1,4 +1,4 @@
-"""Deterministic EE 2300 system, converter, and spectral measurements."""
+"""Deterministic circuit-system, converter, and spectral measurements."""
 from __future__ import annotations
 
 import math

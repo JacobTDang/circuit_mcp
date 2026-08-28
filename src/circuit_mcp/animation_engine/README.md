@@ -23,7 +23,7 @@ A scene can coordinate four layers:
 animation_engine/
 ├── schema.py          bounded scene validation and normalization
 ├── primitives.py      supported visual vocabulary (next)
-├── templates/         EE 2300 scene builders (next)
+├── templates/         legacy scene builders pending migration
 ├── README.md          architecture and implementation plan
 └── COVERAGE.md        course coverage acceptance matrix
 

@@ -1,7 +1,7 @@
 # circuit_mcp
 
 An MCP server that checks circuit derivations against a symbolic ground truth
-for Iowa State EE 2300 (Electronic Circuits and Systems).
+for local circuit analysis, study, and visual learning.
 
 It does not solve homework on the student's behalf. Given a netlist and an
 ordered derivation, it identifies where the work diverges: setup equations are
@@ -109,7 +109,7 @@ keeps Metal initialization out of every process that later calls `fork()`.
 
 1. Run `scripts/setup_ipad_capture.sh` once.
 2. Start the receiver in the command center or call `ipad_receiver_start`.
-3. On the iPad, open Control Center → **Screen Mirroring** → **EE2300 Capture**,
+3. On the iPad, open Control Center → **Screen Mirroring** → **Circuit Capture**,
    then enter the four-digit PIN shown by the tool or UI.
 4. Ask the agent to “check my solution.” It calls `capture_ipad_screen`; when
    AirPlay is unavailable, a trusted USB-C iPad is tried automatically.

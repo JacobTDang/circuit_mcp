@@ -1,4 +1,4 @@
-"""Hand-composed visual starters spanning the official EE 2300 catalog."""
+"""Legacy visual starters retained for scene-data migration."""
 from __future__ import annotations
 
 from .schema import validate_scene
@@ -112,9 +112,9 @@ def build_template(name: str, title: str | None = None) -> dict:
     cut1, cut2 = max(1, len(ids) // 3), max(2, len(ids) * 2 // 3)
     first, second, final = ids[:cut1], ids[cut1:cut2], ids[cut2:]
     scene = {
-        "title": title or heading, "width": 960, "height": 600, "duration_ms": 9000, "seed": 2300,
+        "title": title or heading, "width": 960, "height": 600, "duration_ms": 9000, "seed": 407,
         "elements": [
-            _motion(_el("eyebrow", "text", 60, 52, text="EE 2300  /  VISUAL EXPLANATION", size=14, color="muted"), 80, draw=False),
+            _motion(_el("eyebrow", "text", 60, 52, text="CIRCUIT LAB  /  VISUAL EXPLANATION", size=14, color="muted"), 80, draw=False),
             _motion(_el("heading", "text", 60, 100, text=heading, size=34, color="ink"), 180, draw=False),
             _motion(_el("rule", "line", 60, 125, w=840, color="muted"), 320), *circuit,
             {**_el("equation_card", "highlight", 95, 475, w=770, h=78, color="blue", opacity=0),

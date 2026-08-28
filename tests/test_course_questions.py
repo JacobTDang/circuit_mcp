@@ -1,4 +1,4 @@
-"""Representative EE 230 questions through the real MCP transport.
+"""Representative circuit questions through the real MCP transport.
 
 Expected formulas are stated independently in the cases below. Each derived
 answer crosses stdio/JSON-RPC and is then compared through a separate MCP call,

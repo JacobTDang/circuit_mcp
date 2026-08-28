@@ -11,7 +11,7 @@ def test_scene_outer_contract_is_normalized():
     })
     assert scene["schema_version"] == 1
     assert scene["width"] == 960
-    assert scene["seed"] == 2300
+    assert scene["seed"] == 407
 
 
 @pytest.mark.parametrize("bad", [

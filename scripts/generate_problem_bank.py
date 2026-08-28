@@ -1,4 +1,4 @@
-"""Generate original EE 2300 visual acceptance problems under .local/."""
+"""Generate original circuit visual acceptance problems under .local/."""
 from __future__ import annotations
 
 import json
@@ -61,7 +61,7 @@ def main():
         for x in range(0, 1200, 28): draw.line((x, 0, x, 760), fill="#d9e9ed", width=1)
         for y in range(0, 760, 28): draw.line((0, y, 1200, y), fill="#d9e9ed", width=1)
         draw.rounded_rectangle((35, 30, 1165, 720), radius=22, outline="#244b68", width=4, fill="#fffaf0")
-        draw.text((70, 63), f"EE 2300  /  visual check {index:02d}", font=small, fill="#7a8c96")
+        draw.text((70, 63), f"CIRCUIT LAB  /  visual check {index:02d}", font=small, fill="#7a8c96")
         draw.text((70, 105), topic, font=title, fill="#183446")
         wrapped(draw, (72, 180), question, body, "#244b68")
         draw.rounded_rectangle((95, 360, 1105, 645), radius=15, outline="#8fb8cc", width=3, fill="#f7f0df")

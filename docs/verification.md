@@ -1,6 +1,6 @@
 # Verification matrix
 
-This is an acceptance record, not a claim that arbitrary EE 2300 work is
+This is an acceptance record, not a claim that arbitrary circuit work is
 infallibly understood. Run all checks with:
 
 ```console
@@ -39,7 +39,7 @@ op-amps; operating point; DC sweep; AC response; transient response; and a
 nonlinear diode. `tests/test_spice.py` independently checks the numeric values
 and the ngspice security boundary.
 
-| EE 2300 family | Verification level |
+| Circuit problem family | Verification level |
 |---|---|
 | KCL/KVL, node voltages, branch currents | Exact symbolic solution and setup/rank checks |
 | Algebraic derivations | Symbolic proof plus numeric counterexample oracle |
@@ -67,7 +67,7 @@ and control directives, malformed analyses, point limits, and unknown vectors.
 
 ## Visual and agent acceptance run (2026-08-27)
 
-Twenty-four original, illustrated EE 2300 worksheets were generated and uploaded
+Twenty-four original, illustrated circuit worksheets were generated and uploaded
 through the live localhost:2300 multipart library endpoint. Fresh Codex agents
 read each PNG, stopped for transcription confirmation, and then called the
 registered MCP tools. The final result was 24/24 correct. The visual audit

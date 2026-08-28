@@ -14,7 +14,7 @@ The existing `animation_scenes` rows remain recoverable until migration is compl
 
 ## Product flow
 
-1. An agent submits an EE 2300 brief or an explicit Showman Scene Spec.
+1. An agent submits a circuit-learning brief or an explicit Showman Scene Spec.
 2. The harness validates course/problem ownership and forwards authoring or assembly to Showman.
 3. A job row records status, progress, spec hash, source problem, output references, and errors.
 4. The board manually spawns a visual card containing a poster preview or local MP4 player.
