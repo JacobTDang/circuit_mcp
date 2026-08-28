@@ -15,10 +15,12 @@ PRIMITIVE_TYPES = frozenset({
 })
 ELEMENT_FIELDS = frozenset({"id", "type", "x", "y", "w", "h", "r", "text",
                             "label", "size", "color", "opacity", "width", "angle",
-                            "path", "points"})
+                            "path", "points", "tracks"})
 STEP_FIELDS = frozenset({"at_ms", "caption", "changes"})
 CHANGE_FIELDS = frozenset({"id", "opacity", "color", "x", "y", "rotation", "scale"})
 COLORS = {"ink", "muted", "blue", "red", "amber", "green"}
+TRACK_PROPERTIES = {"opacity", "x", "y", "rotation", "scale", "progress", "dash_offset"}
+EASINGS = {"linear", "easeInOutSine", "easeOutCubic", "easeOutExpo", "easeOutBack", "easeOutSpring"}
 
 
 class SceneValidationError(ValueError):
@@ -36,7 +38,7 @@ def validate_scene(scene: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(scene, dict):
         raise SceneValidationError("scene must be an object")
     allowed = {"schema_version", "title", "width", "height", "seed",
-               "duration_ms", "loop", "problem_id", "elements", "steps"}
+               "duration_ms", "loop", "problem_id", "elements", "steps", "camera"}
     unknown = set(scene) - allowed
     if unknown:
         raise SceneValidationError(f"unknown scene fields: {sorted(unknown)}")
@@ -78,6 +80,16 @@ def validate_scene(scene: dict[str, Any]) -> dict[str, Any]:
             for point in points:
                 if not isinstance(point, list) or len(point) != 2: raise SceneValidationError("plot points must be [x,y]")
                 _finite(point[0], "point x"); _finite(point[1], "point y")
+        _validate_tracks(element.get("tracks", []), duration, f"element {identifier}")
+    camera = scene.get("camera")
+    if camera is not None:
+        if not isinstance(camera, dict) or set(camera) - {"x", "y", "zoom", "tracks"}:
+            raise SceneValidationError("camera must contain only x, y, zoom, and tracks")
+        for key in ("x", "y", "zoom"):
+            if key in camera: _finite(camera[key], f"camera.{key}")
+        if "zoom" in camera and camera["zoom"] <= 0:
+            raise SceneValidationError("camera.zoom must be positive")
+        _validate_tracks(camera.get("tracks", []), duration, "camera", {"x", "y", "zoom"})
     changes_count = 0
     last_at = -1.0
     for step in steps:
@@ -104,3 +116,32 @@ def validate_scene(scene: dict[str, Any]) -> dict[str, Any]:
                       seed=int(scene.get("seed", 2300)), loop=bool(scene.get("loop", False)),
                       elements=elements, steps=steps)
     return normalized
+
+
+def _validate_tracks(tracks: Any, duration: float, owner: str, properties: set[str] | None = None) -> None:
+    """Validate deterministic numeric animation tracks without accepting executable values."""
+    if not isinstance(tracks, list) or len(tracks) > 24:
+        raise SceneValidationError(f"{owner}.tracks must be a bounded list")
+    allowed_properties = properties or TRACK_PROPERTIES
+    seen: set[str] = set()
+    for track in tracks:
+        if not isinstance(track, dict) or set(track) - {"property", "keyframes"}:
+            raise SceneValidationError(f"{owner} track has unknown fields")
+        prop = track.get("property")
+        if prop not in allowed_properties or prop in seen:
+            raise SceneValidationError(f"{owner} track property is unsupported or duplicated")
+        seen.add(prop)
+        frames = track.get("keyframes")
+        if not isinstance(frames, list) or not 2 <= len(frames) <= 64:
+            raise SceneValidationError(f"{owner} track needs 2 to 64 keyframes")
+        last_time = -1.0
+        for frame in frames:
+            if not isinstance(frame, dict) or set(frame) - {"t_ms", "value", "easing"}:
+                raise SceneValidationError(f"{owner} keyframe has unknown fields")
+            at = _finite(frame.get("t_ms"), f"{owner} keyframe.t_ms")
+            _finite(frame.get("value"), f"{owner} keyframe.value")
+            if at < last_time or at > duration:
+                raise SceneValidationError(f"{owner} keyframes must be ordered within the duration")
+            if frame.get("easing", "linear") not in EASINGS:
+                raise SceneValidationError(f"{owner} keyframe easing is unsupported")
+            last_time = at

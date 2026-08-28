@@ -34,7 +34,7 @@ def test_templates_cover_every_official_course_area_and_validate():
         assert scene["elements"] and len(scene["steps"]) >= 4
         assert any(element["type"] in {"resistor", "capacitor", "diode", "opamp", "voltage_source", "block"}
                    for element in scene["elements"])
-        assert any(change.get("opacity") == 1 for step in scene["steps"] for change in step.get("changes", []))
+        assert any(track["property"] == "opacity" for element in scene["elements"] for track in element.get("tracks", []))
 
 
 def test_course_templates_use_distinct_physical_visuals():

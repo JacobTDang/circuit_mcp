@@ -1,0 +1,3 @@
+[submodule "vendor/showman"]
+	path = vendor/showman
+	url = https://github.com/JacobTDang/Showman.git
