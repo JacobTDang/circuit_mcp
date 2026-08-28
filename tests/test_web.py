@@ -50,7 +50,7 @@ def test_animation_assets_include_rich_symbols_and_accessible_playback(tmp_path,
         assert script.status_code == 200
         for feature in (
             "e.type==='bjt'", "e.type==='probe'", "e.type==='meter'", "e.type==='pole_zero'",
-            "data-prev", "data-next", "data-large", "e.key==='Escape'",
+            "data-prev", "data-next", "data-large", "e.key==='Escape'", "e.type==='line'",
         ):
             assert feature in script.text
         assert ".animation-player.expanded" in styles.text

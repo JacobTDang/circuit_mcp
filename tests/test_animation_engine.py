@@ -32,3 +32,15 @@ def test_templates_cover_every_official_course_area_and_validate():
     for name in template_names():
         scene = build_template(name)
         assert scene["elements"] and len(scene["steps"]) >= 4
+        assert any(element["type"] in {"resistor", "capacitor", "diode", "opamp", "voltage_source", "block"}
+                   for element in scene["elements"])
+        assert any(change.get("opacity") == 1 for step in scene["steps"] for change in step.get("changes", []))
+
+
+def test_course_templates_use_distinct_physical_visuals():
+    opamp_types = {element["type"] for element in build_template("opamp")["elements"]}
+    converter_types = {element["type"] for element in build_template("adc")["elements"]}
+    transient_types = {element["type"] for element in build_template("time_domain")["elements"]}
+    assert "opamp" in opamp_types and "resistor" in opamp_types
+    assert "block" in converter_types and "waveform" in converter_types
+    assert {"voltage_source", "resistor", "capacitor", "line"} <= transient_types
