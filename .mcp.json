@@ -2,7 +2,10 @@
   "mcpServers": {
     "circuit": {
       "command": "./.venv/bin/python",
-      "args": ["-m", "circuit_mcp.server"]
+      "args": ["run_server.py"],
+      "env": {
+        "CIRCUIT_MCP_ENABLE_INSTRUMENTS": "1"
+      }
     }
   }
 }

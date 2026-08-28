@@ -37,6 +37,8 @@ Two keys carry the outcome, and they mean different things:
 from __future__ import annotations
 
 import atexit
+import base64
+import json
 import os
 import pickle
 import selectors
@@ -52,6 +54,7 @@ from typing import Any, NoReturn
 
 import sympy as sp
 from mcp.server.mcpserver import MCPServer
+from mcp.types import CallToolResult, ImageContent, TextContent
 
 from .analysis import (
     AssumptionError,
@@ -60,13 +63,40 @@ from .analysis import (
     transfer,
     with_finite_gbw,
 )
+from .animation_engine import build_template, template_names, validate_scene
+from .capture import CaptureError, capture_status as _capture_status
+from .capture import capture_workspace as _capture_workspace
+from .course_metrics import (
+    MetricsError,
+    alias_frequency as _alias_frequency,
+    bjt_emitter_follower as _bjt_emitter_follower,
+    converter_metrics as _converter_metrics,
+    dac_output as _dac_output,
+    opamp_limits as _opamp_limits,
+    quantize as _quantize,
+    rectifier_metrics as _rectifier_metrics,
+    relaxation_oscillator as _relaxation_oscillator,
+    spectrum_metrics as _spectrum_metrics,
+    transimpedance as _transimpedance,
+    transfer_metrics as _transfer_metrics,
+)
 from .equivalence import equivalent
+from .instruments import InstrumentError
+from .instruments import instrument_query as _instrument_query
+from .instruments import instrument_status as _instrument_status
+from .ipad_capture import IPAD_CAPTURE, IPadCaptureError
+from .lab import LabDataError, import_waveform_csv as _import_waveform_csv
 from .mna import CircuitError, SetupInputError
 from .mna import check_setup as _mna_check_setup
 from .mna import circuit_equations as _mna_circuit_equations
+from .ocr_client import OCR_WORKER
 from .parsing import ParseError, parse_equation, parse_expression
 from .steps import check_steps
+from .spice import SpiceError, simulate_spice as _simulate_spice
 from .symbols import SubstitutionError, SymbolConflictError, bind
+from .storage import CommandCenterDB, StorageError, default_data_dir
+from .workspace import configure_workspace as _configure_workspace
+from .workspace import read_workspace as _read_workspace
 
 server = MCPServer("circuit_mcp")
 
@@ -112,6 +142,21 @@ def _rendered(expr: Any) -> dict[str, str]:
 
 def _rendered_values(values: dict[str, Any]) -> dict[str, dict[str, str]]:
     return {name: _rendered(value) for name, value in values.items()}
+
+
+def _rendered_roles(roles) -> list[dict[str, Any]]:
+    """Equation classifications with every SymPy value made JSON-safe."""
+    return [
+        {
+            "index": role.index,
+            "role": role.role,
+            "unknown": role.unknown,
+            "value": None if role.value is None else _rendered(role.value),
+            "element": role.element,
+            "detail": role.detail,
+        }
+        for role in roles
+    ]
 
 
 def _rendered_matrix(matrix: dict | None) -> dict | None:
@@ -236,7 +281,9 @@ def _check_equivalence(expr_a: str, expr_b: str) -> dict[str, Any]:
     }
 
 
-def _check_derivation(steps: list[str], truth: str) -> dict[str, Any]:
+def _check_derivation(
+    steps: list[str], truth: str, parameters: dict[str, float] | None = None
+) -> dict[str, Any]:
     truth_expr = _expression(truth, "the ground truth")
 
     # The truth's symbols seed the table; each step adds whatever it introduces,
@@ -248,7 +295,19 @@ def _check_derivation(steps: list[str], truth: str) -> dict[str, Any]:
         known.update(bind(expr))
         parsed.append(expr)
 
-    result = check_steps(parsed, truth_expr)
+    substitutions: dict[sp.Symbol, float] = {}
+    for name, value in (parameters or {}).items():
+        if name not in known:
+            raise SubstitutionError(f"parameter {name!r} is not present in the derivation")
+        if not isinstance(value, (int, float)) or not sp.Float(value).is_finite:
+            raise SubstitutionError(f"parameter {name!r} must be a finite number")
+        # JSON numbers arrive as binary floats. Treat their shortest decimal
+        # spelling as the student's intended exact value; otherwise 0.000001
+        # becomes a nearby Float and exact algebra reports phantom errors.
+        substitutions[known[name]] = sp.Rational(str(value))
+    checked_steps = [step.subs(substitutions) for step in parsed]
+    checked_truth = truth_expr.subs(substitutions)
+    result = check_steps(checked_steps, checked_truth)
     return {
         "ok": result.ok,
         "kind": result.kind,
@@ -257,6 +316,9 @@ def _check_derivation(steps: list[str], truth: str) -> dict[str, Any]:
         "counterexample": _stringified(result.counterexample),
         "steps": [_rendered(step) for step in parsed],
         "truth": _rendered(truth_expr),
+        "parameters": dict(parameters or {}),
+        "evaluated_steps": [_rendered(step) for step in checked_steps],
+        "evaluated_truth": _rendered(checked_truth),
     }
 
 
@@ -300,7 +362,129 @@ def _check_setup(
         "counterexample": _stringified(result.counterexample),
         "equations": [_rendered(equation) for equation in parsed],
         "unknowns": list(unknowns),
+        "equation_roles": _rendered_roles(result.equation_roles),
     }
+
+
+def _spice(netlist: str, analysis: str, outputs: list[str]) -> dict[str, Any]:
+    return _simulate_spice(netlist, analysis, outputs)
+
+
+def _characterize(
+    expr: str, parameters: dict[str, float], feedback: str = "none"
+) -> dict[str, Any]:
+    parsed = _expression(expr, "transfer function")
+    if feedback not in {"none", "negative_unity"}:
+        raise MetricsError("feedback must be 'none' or 'negative_unity'")
+    result = _transfer_metrics(parsed, parameters)
+    result["analysis_scope"] = "supplied_transfer"
+    result["feedback"] = feedback
+    if feedback == "negative_unity":
+        result["closed_loop"] = _transfer_metrics(parsed / (1 + parsed), parameters)
+    return result
+
+
+def _storage() -> CommandCenterDB:
+    data = default_data_dir()
+    database = CommandCenterDB(data / "circuit_mcp.sqlite3")
+    database.prepare(data / "library.json", data / "history.jsonl")
+    return database
+
+
+def _safe_document(document: dict[str, Any]) -> dict[str, Any]:
+    result = dict(document)
+    result.pop("relative_path", None)
+    return result
+
+
+def _library_search(query: str, category: str, limit: int) -> dict[str, Any]:
+    return {"ok": True, "items": [_safe_document(item) for item in _storage().list_documents(query, category, limit)]}
+
+
+def _document_get(document_id: str) -> dict[str, Any]:
+    return {"ok": True, "document": _safe_document(_storage().get_document(document_id))}
+
+
+def _problem_get(problem_id: str) -> dict[str, Any]:
+    return {"ok": True, "problem": _storage().get_problem(problem_id)}
+
+
+def _study_context(query: str, limit: int) -> dict[str, Any]:
+    result = _storage().study_context(query, limit)
+    result["documents"] = [_safe_document(item) for item in result["documents"]]
+    return result
+
+
+def _attempt_history(problem_id: str, limit: int) -> dict[str, Any]:
+    return {"ok": True, "items": _storage().attempt_history(problem_id, limit)}
+
+
+def _course_progress() -> dict[str, Any]:
+    return _storage().course_progress()
+
+
+def _problem_create(title: str, topic: str, prompt: str, document_id: str | None,
+                    circuit_interpretation: str, status: str, source_page: int | None) -> dict[str, Any]:
+    database = _storage()
+    problem = database.create_problem(title, topic, prompt, document_id, circuit_interpretation, status, source_page)
+    database.record_event("problem_create", problem["title"], True, "problem", problem["id"], {"actor": "mcp"})
+    return {"ok": True, "problem": problem}
+
+
+def _problem_update_interpretation(problem_id: str, circuit_interpretation: str,
+                                   status: str) -> dict[str, Any]:
+    database = _storage(); problem = database.update_problem(problem_id, circuit_interpretation, status)
+    database.record_event("problem_update", problem["title"], True, "problem", problem_id, {"actor": "mcp"})
+    return {"ok": True, "problem": problem}
+
+
+def _transcription_confirm(transcription_id: str, corrected_content: str | None) -> dict[str, Any]:
+    database = _storage(); transcription = database.confirm_transcription(transcription_id, corrected_content)
+    database.record_event("transcription_confirm", "transcription", True, "transcription", transcription["id"], {"actor": "mcp"})
+    return {"ok": True, "transcription": transcription}
+
+
+def _attempt_create(problem_id: str, actor: str, answer: str, status: str) -> dict[str, Any]:
+    database = _storage(); attempt = database.create_attempt(problem_id, actor, answer, status)
+    database.record_event("attempt_create", actor, True, "attempt", attempt["id"], {"actor": "mcp"})
+    return {"ok": True, "attempt": attempt}
+
+
+def _attempt_complete(attempt_id: str, answer: str, status: str,
+                      first_divergence: str | None) -> dict[str, Any]:
+    database = _storage(); attempt = database.complete_attempt(attempt_id, answer, status, first_divergence)
+    database.record_event("attempt_complete", status, True, "attempt", attempt_id, {"actor": "mcp"})
+    return {"ok": True, "attempt": attempt}
+
+
+def _problem_tag(problem_id: str, tag: str) -> dict[str, Any]:
+    database = _storage(); problem = database.tag_problem(problem_id, tag)
+    database.record_event("problem_tag", tag, True, "problem", problem_id, {"actor": "mcp"})
+    return {"ok": True, "problem": problem}
+
+
+def _animation_create(scene: dict[str, Any], problem_id: str | None) -> dict[str, Any]:
+    database = _storage(); item = database.create_animation(validate_scene(scene), problem_id)
+    database.record_event("animation_create", item["title"], True, "animation", item["id"], {"actor": "mcp"})
+    return {"ok": True, "animation": item, "board_action": "spawn"}
+
+
+def _animation_list(updated_after: float, limit: int) -> dict[str, Any]:
+    return {"ok": True, "items": _storage().list_animations(updated_after, limit)}
+
+
+def _animation_update(animation_id: str, scene: dict[str, Any]) -> dict[str, Any]:
+    item = _storage().update_animation(animation_id, validate_scene(scene))
+    return {"ok": True, "animation": item, "board_action": "refresh"}
+
+
+def _animation_delete(animation_id: str) -> dict[str, Any]:
+    _storage().delete_animation(animation_id); return {"ok": True, "animation_id": animation_id, "board_action": "remove"}
+
+
+def _animation_from_template(template: str, title: str | None, problem_id: str | None) -> dict[str, Any]:
+    item = _storage().create_animation(build_template(template, title), problem_id)
+    return {"ok": True, "animation": item, "board_action": "spawn"}
 
 
 _IMPLEMENTATIONS = {
@@ -309,7 +493,55 @@ _IMPLEMENTATIONS = {
     "check_derivation": _check_derivation,
     "circuit_equations": _circuit_equations,
     "check_setup": _check_setup,
+    "simulate_spice": _spice,
+    "characterize_transfer": _characterize,
+    "converter_metrics": _converter_metrics,
+    "quantize": _quantize,
+    "opamp_limits": _opamp_limits,
+    "rectifier_metrics": _rectifier_metrics,
+    "bjt_emitter_follower": _bjt_emitter_follower,
+    "relaxation_oscillator": _relaxation_oscillator,
+    "dac_output": _dac_output,
+    "alias_frequency": _alias_frequency,
+    "transimpedance": _transimpedance,
+    "library_search": _library_search,
+    "document_get": _document_get,
+    "problem_get": _problem_get,
+    "study_context": _study_context,
+    "attempt_history": _attempt_history,
+    "course_progress": _course_progress,
+    "problem_create": _problem_create,
+    "problem_update_interpretation": _problem_update_interpretation,
+    "transcription_confirm": _transcription_confirm,
+    "attempt_create": _attempt_create,
+    "attempt_complete": _attempt_complete,
+    "problem_tag": _problem_tag,
+    "animation_create": _animation_create,
+    "animation_list": _animation_list,
+    "animation_update": _animation_update,
+    "animation_delete": _animation_delete,
+    "animation_from_template": _animation_from_template,
+    "import_waveform_csv": _import_waveform_csv,
+    "instrument_status": _instrument_status,
+    "instrument_query": _instrument_query,
+    "spectrum_metrics": _spectrum_metrics,
+    "workspace_status": _capture_status,
+    "capture_workspace": _capture_workspace,
 }
+
+
+def _crash_child_for_test() -> NoReturn:
+    """Terminate a call child without a response, for lifecycle tests only.
+
+    This implementation is deliberately absent from the MCP tool registry. It
+    gives the worker harness a deterministic way to exercise a child that dies
+    between receiving a request and writing its framed response; discovering
+    and killing a short-lived process by PID made that test timing-dependent.
+    """
+    os._exit(7)
+
+
+_IMPLEMENTATIONS["_crash_child_for_test"] = _crash_child_for_test
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +557,12 @@ _ERROR_KINDS: tuple[tuple[type[BaseException], str], ...] = (
     (AssumptionError, "assumption_error"),
     (CircuitError, "circuit_error"),
     (SetupInputError, "setup_input_error"),
+    (CaptureError, "capture_error"),
+    (SpiceError, "spice_error"),
+    (MetricsError, "metrics_error"),
+    (LabDataError, "lab_data_error"),
+    (InstrumentError, "instrument_error"),
+    (StorageError, "storage_error"),
 )
 
 
@@ -414,9 +652,11 @@ def _dispatch(name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
 #
 # Forking is safe *here* specifically because the worker is single-threaded and
 # imports nothing that starts threads or touches CoreFoundation -- checked:
-# one thread after importing lcapy, and matplotlib is never loaded. Forking
-# from the server process itself would not be safe, because mcp runs tool
-# bodies on an anyio thread pool.
+# one thread after importing the complete server, including python-control and
+# matplotlib. Forking from the server process itself would not be safe, because
+# mcp runs tool bodies on an anyio thread pool. The worker remains
+# single-threaded after all imports; this must be rechecked when dependencies
+# change rather than inferred from their names.
 
 _WORKER_FLAG = "--worker"
 
@@ -896,7 +1136,9 @@ def check_equivalence(expr_a: str, expr_b: str) -> dict[str, Any]:
 
 
 @server.tool()
-def check_derivation(steps: list[str], truth: str) -> dict[str, Any]:
+def check_derivation(
+    steps: list[str], truth: str, parameters: dict[str, float] | None = None
+) -> dict[str, Any]:
     """Find where an ordered derivation diverges from the truth.
 
     ``steps`` is the working in order, one expression per step; ``truth`` is the
@@ -912,11 +1154,18 @@ def check_derivation(steps: list[str], truth: str) -> dict[str, Any]:
     * ``final`` -- a single expression that does not match, with no working to
       bisect. Send the intermediate steps and the transition can be located.
 
+    ``parameters`` optionally supplies finite numeric values used throughout
+    the derivation. Both the original and evaluated steps are echoed, so a
+    symbolic-to-numeric substitution is checked without hiding what changed.
+
     The parsed steps are echoed back. Check them against what was actually
     written before trusting a verdict -- a misread subscript produces a
     confident "your step 3 is wrong" about a step 3 that was fine.
     """
-    return _guarded("check_derivation", steps=list(steps), truth=truth)
+    return _guarded(
+        "check_derivation", steps=list(steps), truth=truth,
+        parameters=parameters or {},
+    )
 
 
 @server.tool()
@@ -951,6 +1200,12 @@ def check_setup(
     is its 0-based index) and ``underdetermined`` when every equation holds but
     they do not pin the unknowns down.
 
+    ``equation_roles`` classifies each satisfied equation as ``law``, ``solved``,
+    ``ambiguous``, or ``trivial``. This is advisory and never changes the
+    verdict: on small circuits a circuit law and a solved answer can be the same
+    equation up to scaling, so the server reports that ambiguity rather than
+    guessing what the student intended.
+
     Two conventions are lcapy's and are assumed here: node voltages reference
     node ``0``, and a branch current flows *into* the first node named for that
     element in the netlist. The opposite current direction reads as a sign error.
@@ -961,6 +1216,552 @@ def check_setup(
         equations=list(equations),
         unknowns=list(unknowns),
     )
+
+
+@server.tool()
+def simulate_spice(
+    netlist: str, analysis: str, outputs: list[str] | None = None
+) -> dict[str, Any]:
+    """Run a bounded local ngspice operating-point, sweep, AC, or transient analysis.
+
+    ``netlist`` contains components and may contain models/parameters, but not
+    control blocks, file includes, shell commands, an analysis directive, or
+    ``.end``; this tool appends the chosen analysis itself. ``analysis`` is one
+    of ``op``, ``dc SOURCE START STOP STEP``, ``ac dec|oct|lin N START STOP``,
+    or ``tran TSTEP TSTOP [TSTART [TMAX]]``. ``outputs`` optionally selects
+    vectors such as ``v(out)`` or ``i(v1)``. Results are numeric simulation,
+    useful for nonlinear and time-domain checking; they are not symbolic proof.
+    """
+    return _guarded(
+        "simulate_spice", netlist=netlist, analysis=analysis, outputs=outputs or []
+    )
+
+
+@server.tool()
+def characterize_transfer(
+    expression: str,
+    parameters: dict[str, float] | None = None,
+    feedback: str = "none",
+) -> dict[str, Any]:
+    """Characterize a numeric loop or system transfer function.
+
+    Returns poles, zeros, stability, DC gain, bandwidth, gain/phase crossover
+    data, an explicit stability classification, and step-response metrics when
+    meaningful. Supply every symbol except ``s`` in ``parameters``. For loop
+    margins, pass the loop transfer and set ``feedback='negative_unity'`` to
+    also receive a separately labelled ``closed_loop`` characterization.
+    """
+    return _guarded(
+        "characterize_transfer", expr=expression, parameters=parameters or {},
+        feedback=feedback,
+    )
+
+
+@server.tool()
+def converter_metrics(
+    kind: str,
+    bits: int,
+    values: list[float],
+    v_min: float = 0.0,
+    v_max: float = 1.0,
+) -> dict[str, Any]:
+    """Compute endpoint INL/DNL and missing-code/monotonicity results.
+
+    For a DAC, ``values`` contains all ``2**bits`` measured output levels in
+    code order. For an ADC, it contains the ``2**bits - 1`` transition voltages.
+    Results are in LSB.
+    """
+    return _guarded(
+        "converter_metrics", kind=kind, bits=bits, values=list(values),
+        v_min=v_min, v_max=v_max,
+    )
+
+
+@server.tool()
+def spectrum_metrics(
+    samples: list[float],
+    sample_rate: float,
+    fundamental_hz: float,
+    harmonics: int = 5,
+) -> dict[str, Any]:
+    """Compute coherent-FFT harmonics, THD, SINAD, and ENOB.
+
+    The record must contain an integer number of fundamental cycles; refusing
+    incoherent data avoids silently grading spectral leakage as distortion.
+    Amplitudes are single-sided peak amplitudes for real-valued samples.
+    """
+    return _guarded(
+        "spectrum_metrics", samples=list(samples), sample_rate=sample_rate,
+        fundamental_hz=fundamental_hz, harmonics=harmonics,
+    )
+
+
+@server.tool()
+def quantize(
+    values: list[float], bits: int, v_min: float = 0.0, v_max: float = 1.0
+) -> dict[str, Any]:
+    """Apply an ideal unipolar ADC quantizer and return codes and errors.
+
+    Codes use half-open bins over ``[v_min, v_max)`` and saturate outside that
+    interval. Reconstruction uses bin centers, so an in-range ideal error is
+    bounded by half an LSB.
+    """
+    return _guarded(
+        "quantize", values=list(values), bits=bits, v_min=v_min, v_max=v_max
+    )
+
+
+@server.tool()
+def opamp_limits(
+    gain: float,
+    noise_gain: float,
+    gbw_hz: float,
+    slew_rate_v_s: float,
+    output_peak_v: float,
+    signal_hz: float,
+) -> dict[str, Any]:
+    """Check first-order bandwidth and slew-rate limits for an op-amp stage."""
+    return _guarded(
+        "opamp_limits", gain=gain, noise_gain=noise_gain, gbw_hz=gbw_hz,
+        slew_rate_v_s=slew_rate_v_s, output_peak_v=output_peak_v,
+        signal_hz=signal_hz,
+    )
+
+
+@server.tool()
+def rectifier_metrics(input_peak_v: float, diode_drop_v: float = 0.0) -> dict[str, Any]:
+    """Analyze a constant-drop half-wave rectifier, including its DC average."""
+    return _guarded("rectifier_metrics", input_peak_v=input_peak_v, diode_drop_v=diode_drop_v)
+
+
+@server.tool()
+def bjt_emitter_follower(
+    collector_current_a: float, beta: float, thermal_voltage_v: float, load_ohm: float
+) -> dict[str, Any]:
+    """Compute hybrid-pi gm, r_pi, and emitter-follower gain with r_o neglected."""
+    return _guarded(
+        "bjt_emitter_follower", collector_current_a=collector_current_a,
+        beta=beta, thermal_voltage_v=thermal_voltage_v, load_ohm=load_ohm,
+    )
+
+
+@server.tool()
+def relaxation_oscillator(rail_v: float, threshold_v: float, rc_s: float) -> dict[str, Any]:
+    """Compute symmetric Schmitt-trigger RC oscillator period and frequency."""
+    return _guarded("relaxation_oscillator", rail_v=rail_v, threshold_v=threshold_v, rc_s=rc_s)
+
+
+@server.tool()
+def dac_output(
+    codes: list[int], bits: int, v_min: float = 0.0, v_max: float = 1.0
+) -> dict[str, Any]:
+    """Map ideal straight-binary DAC codes to output voltages."""
+    return _guarded("dac_output", codes=list(codes), bits=bits, v_min=v_min, v_max=v_max)
+
+
+@server.tool()
+def alias_frequency(input_hz: float, sample_rate_hz: float) -> dict[str, Any]:
+    """Fold a real sinusoid into the first Nyquist zone."""
+    return _guarded("alias_frequency", input_hz=input_hz, sample_rate_hz=sample_rate_hz)
+
+
+@server.tool()
+def transimpedance(input_current_a: float, feedback_ohm: float) -> dict[str, Any]:
+    """Analyze an ideal inverting current-to-voltage op-amp stage."""
+    return _guarded("transimpedance", input_current_a=input_current_a, feedback_ohm=feedback_ohm)
+
+
+@server.tool()
+def library_search(query: str = "", category: str = "", limit: int = 20) -> dict[str, Any]:
+    """Search local document names and extracted text; returns metadata, never file paths."""
+    return _guarded("library_search", query=query, category=category, limit=limit)
+
+
+@server.tool()
+def document_get(document_id: str) -> dict[str, Any]:
+    """Read one local document's metadata and bounded extracted text by opaque ID."""
+    return _guarded("document_get", document_id=document_id)
+
+
+@server.tool()
+def problem_get(problem_id: str) -> dict[str, Any]:
+    """Read one confirmed or draft problem and its tags by opaque ID."""
+    return _guarded("problem_get", problem_id=problem_id)
+
+
+@server.tool()
+def study_context(query: str, limit: int = 10) -> dict[str, Any]:
+    """Find local notes and problems relevant to a bounded course query."""
+    return _guarded("study_context", query=query, limit=limit)
+
+
+@server.tool()
+def attempt_history(problem_id: str, limit: int = 100) -> dict[str, Any]:
+    """Read prior attempts and summarized MCP evidence for one problem."""
+    return _guarded("attempt_history", problem_id=problem_id, limit=limit)
+
+
+@server.tool()
+def course_progress() -> dict[str, Any]:
+    """Summarize EE 2300 problem and attempt states by topic."""
+    return _guarded("course_progress")
+
+
+@server.tool()
+def problem_create(
+    title: str, topic: str, prompt: str, document_id: str | None = None,
+    circuit_interpretation: str = "", status: str = "draft",
+    source_page: int | None = None,
+) -> dict[str, Any]:
+    """Create a bounded local problem record; this does not judge its mathematics."""
+    return _guarded(
+        "problem_create", title=title, topic=topic, prompt=prompt,
+        document_id=document_id, circuit_interpretation=circuit_interpretation,
+        status=status, source_page=source_page,
+    )
+
+
+@server.tool()
+def problem_update_interpretation(
+    problem_id: str, circuit_interpretation: str, status: str = "confirmed"
+) -> dict[str, Any]:
+    """Store a user-confirmed circuit interpretation and workflow status."""
+    return _guarded(
+        "problem_update_interpretation", problem_id=problem_id,
+        circuit_interpretation=circuit_interpretation, status=status,
+    )
+
+
+@server.tool()
+def transcription_confirm(
+    transcription_id: str, corrected_content: str | None = None
+) -> dict[str, Any]:
+    """Confirm a transcription or preserve a corrected revision that supersedes it."""
+    return _guarded(
+        "transcription_confirm", transcription_id=transcription_id,
+        corrected_content=corrected_content,
+    )
+
+
+@server.tool()
+def attempt_create(
+    problem_id: str, actor: str, answer: str = "", status: str = "working"
+) -> dict[str, Any]:
+    """Start a local student or agent attempt for an existing problem."""
+    return _guarded(
+        "attempt_create", problem_id=problem_id, actor=actor,
+        answer=answer, status=status,
+    )
+
+
+@server.tool()
+def attempt_complete(
+    attempt_id: str, answer: str, status: str,
+    first_divergence: str | None = None,
+) -> dict[str, Any]:
+    """Complete an attempt as correct, incorrect, partial, or gap."""
+    return _guarded(
+        "attempt_complete", attempt_id=attempt_id, answer=answer,
+        status=status, first_divergence=first_divergence,
+    )
+
+
+@server.tool()
+def problem_tag(problem_id: str, tag: str) -> dict[str, Any]:
+    """Attach one normalized course tag to a problem."""
+    return _guarded("problem_tag", problem_id=problem_id, tag=tag)
+
+
+@server.tool()
+def animation_create(scene: dict[str, Any], problem_id: str | None = None) -> dict[str, Any]:
+    """Create a validated hand-drawn visual scene and request that the board spawn it."""
+    return _guarded("animation_create", scene=scene, problem_id=problem_id)
+
+
+@server.tool()
+def animation_list(updated_after: float = 0, limit: int = 100) -> dict[str, Any]:
+    """List persisted visual scenes for board synchronization."""
+    return _guarded("animation_list", updated_after=updated_after, limit=limit)
+
+
+@server.tool()
+def animation_update(animation_id: str, scene: dict[str, Any]) -> dict[str, Any]:
+    """Replace a visual scene with a validated revision and refresh its board card."""
+    return _guarded("animation_update", animation_id=animation_id, scene=scene)
+
+
+@server.tool()
+def animation_delete(animation_id: str) -> dict[str, Any]:
+    """Soft-delete a visual scene and remove it from synchronized boards."""
+    return _guarded("animation_delete", animation_id=animation_id)
+
+
+@server.tool()
+def animation_from_template(template: str, title: str | None = None, problem_id: str | None = None) -> dict[str, Any]:
+    """Spawn one official EE 2300 visual template; use animation_list_templates for names."""
+    return _guarded("animation_from_template", template=template, title=title, problem_id=problem_id)
+
+
+@server.tool()
+def animation_list_templates() -> dict[str, Any]:
+    """List visual templates spanning the official EE 2300 catalog areas."""
+    return {"ok": True, "templates": template_names()}
+
+
+@server.tool()
+def import_waveform_csv(
+    csv_text: str, time_column: str, value_columns: list[str]
+) -> dict[str, Any]:
+    """Parse a bounded oscilloscope/DMM CSV payload without filesystem access."""
+    return _guarded(
+        "import_waveform_csv", csv_text=csv_text, time_column=time_column,
+        value_columns=list(value_columns),
+    )
+
+
+@server.tool()
+def instrument_status() -> dict[str, Any]:
+    """List VISA instruments only when explicitly enabled in the MCP environment."""
+    return _guarded("instrument_status")
+
+
+@server.tool()
+def instrument_query(
+    resource: str, query: str, timeout_ms: int = 5000
+) -> dict[str, Any]:
+    """Issue one allow-listed read-only SCPI query to an explicitly enabled instrument."""
+    return _guarded(
+        "instrument_query", resource=resource, query=query, timeout_ms=timeout_ms
+    )
+
+
+@server.tool()
+def workspace_status() -> dict[str, Any]:
+    """Can this Mac capture a mirrored iPad workspace?
+
+    This is a read-only capability check and does not take a screenshot or
+    trigger the macOS privacy prompt. ``permission`` remains
+    ``unknown_until_capture`` because macOS exposes denial through the capture
+    attempt itself.
+    """
+    return _guarded("workspace_status")
+
+
+@server.tool(structured_output=False)
+def capture_workspace(
+    display: int = 1,
+    allow_full_display: bool = False,
+    x: int | None = None,
+    y: int | None = None,
+    width: int | None = None,
+    height: int | None = None,
+) -> CallToolResult:
+    """Capture the current mirrored iPad screen for visual inspection.
+
+    The privacy-safe path is to pass all of ``x``, ``y``, ``width``, and
+    ``height`` and capture only the visible iPad region in global screen
+    coordinates. A whole display (numbered from 1) is refused unless
+    ``allow_full_display`` is explicitly true, because it can expose unrelated
+    windows and notifications. Capture happens only when this tool is called;
+    there is no background recording.
+
+    The result contains a PNG image plus JSON metadata. ``sha256`` lets a client
+    tell whether the page changed since its last observation. Before checking
+    handwritten mathematics, transcribe the visible equations and ask the user
+    to confirm that transcription; subscripts, signs, and fraction bars are not
+    safe to infer silently.
+    """
+    result = _guarded(
+        "capture_workspace",
+        display=display,
+        allow_full_display=allow_full_display,
+        x=x,
+        y=y,
+        width=width,
+        height=height,
+    )
+    if not result.get("ok"):
+        return CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(result))],
+            structured_content=result,
+        )
+
+    png = result.pop("png")
+    return CallToolResult(
+        content=[
+            TextContent(type="text", text=json.dumps(result)),
+            ImageContent(
+                type="image",
+                data=base64.b64encode(png).decode("ascii"),
+                mime_type="image/png",
+            ),
+        ],
+        structured_content=result,
+    )
+
+
+@server.tool()
+def ipad_capture_status() -> dict[str, Any]:
+    """Report AirPlay receiver and USB-C iPad screen availability."""
+    return IPAD_CAPTURE.status()
+
+
+@server.tool()
+def ipad_receiver_start() -> dict[str, Any]:
+    """Start the local PIN-protected EE2300 AirPlay receiver."""
+    try:
+        return IPAD_CAPTURE.start_airplay()
+    except IPadCaptureError as exc:
+        return _failure("ipad_capture_error", str(exc))
+
+
+@server.tool()
+def ipad_receiver_stop() -> dict[str, Any]:
+    """Stop the local AirPlay receiver and discard its ephemeral PIN."""
+    return IPAD_CAPTURE.stop_airplay()
+
+
+@server.tool(structured_output=False)
+def capture_ipad_screen(source: str = "auto") -> CallToolResult:
+    """Capture the current iPadOS screen, preferring AirPlay then USB-C."""
+    try:
+        result = IPAD_CAPTURE.capture(source)
+    except IPadCaptureError as exc:
+        failure = _failure("ipad_capture_error", str(exc))
+        return CallToolResult(content=[TextContent(type="text", text=json.dumps(failure))],
+                              structured_content=failure)
+    png = result.pop("png")
+    return CallToolResult(content=[
+        TextContent(type="text", text=json.dumps(result)),
+        ImageContent(type="image", data=base64.b64encode(png).decode("ascii"),
+                     mime_type="image/png"),
+    ], structured_content=result)
+
+
+def _decode_image(image_base64: str) -> bytes | dict[str, Any]:
+    """Strict base64 input for OCR tools, or a structured error."""
+    try:
+        png = base64.b64decode(image_base64, validate=True)
+    except (ValueError, TypeError) as exc:
+        return _failure("bad_image", f"image_base64 is not valid base64: {exc}")
+    if not png.startswith(b"\x89PNG\r\n\x1a\n"):
+        return _failure("bad_image", "Decoded image is not a PNG.")
+    return png
+
+
+def _transcription_content(
+    result: dict[str, Any], png: bytes | None = None
+) -> CallToolResult:
+    """OCR metadata/LaTeX and, for workspace calls, the exact reviewed frame."""
+    blocks: list[Any] = [
+        TextContent(type="text", text=json.dumps(result, sort_keys=True))
+    ]
+    if png is not None:
+        blocks.append(
+            ImageContent(
+                type="image",
+                data=base64.b64encode(png).decode("ascii"),
+                mime_type="image/png",
+            )
+        )
+    return CallToolResult(content=blocks, structured_content=result)
+
+
+@server.tool()
+def ocr_status(load_model: bool = False) -> dict[str, Any]:
+    """Report UniMERNet availability, process state, device, and memory data.
+
+    With ``load_model=false`` this is cheap and does not start PyTorch. Set it
+    true to start the persistent worker, load UniMERNet, and prove that its
+    selected device (normally ``mps`` on Apple Silicon) is operational.
+    """
+    if not load_model and OCR_WORKER.pid is None:
+        return OCR_WORKER.availability()
+    return OCR_WORKER.call({"action": "status", "load_model": load_model})
+
+
+@server.tool(structured_output=False)
+def transcribe_image(image_base64: str) -> CallToolResult:
+    """Convert one tightly cropped PNG mathematical expression to LaTeX.
+
+    UniMERNet is a formula recognizer, not a page-layout or circuit-topology
+    model. Crop to one expression before calling. The output is untrusted
+    transcription: echo it to the student and obtain confirmation before using
+    it in any circuit verdict.
+    """
+    decoded = _decode_image(image_base64)
+    if isinstance(decoded, dict):
+        return _transcription_content(decoded)
+    result = OCR_WORKER.call({"action": "transcribe", "png": decoded})
+    return _transcription_content(result)
+
+
+@server.tool()
+def workspace_configuration() -> dict[str, Any]:
+    """Return the saved privacy-scoped iPad screen capture source."""
+    return _read_workspace()
+
+
+@server.tool()
+def configure_workspace(
+    x: int, y: int, width: int, height: int, display: int = 1
+) -> dict[str, Any]:
+    """Save the visible iPad screen rectangle used by transcription tools.
+
+    Coordinates are global macOS screen coordinates. Only this rectangle is
+    captured; full-display capture is intentionally not configurable here.
+    """
+    try:
+        return _configure_workspace(x, y, width, height, display)
+    except CaptureError as exc:
+        return _failure("capture_error", str(exc))
+
+
+@server.tool(structured_output=False)
+def transcribe_workspace(
+    x: int | None = None,
+    y: int | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    display: int | None = None,
+) -> CallToolResult:
+    """Capture an iPad screen region and transcribe it locally with UniMERNet.
+
+    Explicit coordinates override the saved workspace. When none are supplied,
+    :func:`configure_workspace` must have saved a region first. The response
+    includes the exact PNG seen by OCR, the LaTeX, frame hash, model/device, and
+    timing. Always show both image and transcription to the student and wait for
+    confirmation before checking their mathematics.
+    """
+    supplied = (x, y, width, height)
+    if all(value is None for value in supplied):
+        configuration = _read_workspace()
+        if not configuration.get("ok"):
+            return _transcription_content(configuration)
+        x, y, width, height = (
+            configuration["x"],
+            configuration["y"],
+            configuration["width"],
+            configuration["height"],
+        )
+        chosen_display = configuration["display"]
+    else:
+        chosen_display = 1 if display is None else display
+    captured = _guarded(
+        "capture_workspace",
+        display=chosen_display,
+        allow_full_display=False,
+        x=x,
+        y=y,
+        width=width,
+        height=height,
+    )
+    if not captured.get("ok"):
+        return _transcription_content(captured)
+    png = captured.pop("png")
+    transcription = OCR_WORKER.call({"action": "transcribe", "png": png})
+    result = {**transcription, "capture": captured}
+    return _transcription_content(result, png)
 
 
 def main() -> None:

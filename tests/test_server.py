@@ -19,7 +19,6 @@ import asyncio
 import json
 import os
 import signal
-import subprocess
 import sys
 import threading
 import time
@@ -34,8 +33,16 @@ from circuit_mcp.server import (
     check_derivation,
     check_equivalence,
     check_setup,
+    configure_workspace,
+    ocr_status,
+    transcribe_image,
+    transcribe_workspace,
+    workspace_status,
+    workspace_configuration,
     circuit_equations,
+    characterize_transfer,
     derive,
+    simulate_spice,
 )
 from circuit_mcp.symbols import SymbolConflictError
 
@@ -59,17 +66,71 @@ C1 2 0 {C}
 """
 
 TOOL_NAMES = {
+    "animation_create",
+    "animation_list",
+    "animation_update",
+    "animation_delete",
+    "animation_from_template",
+    "animation_list_templates",
+    "alias_frequency",
+    "bjt_emitter_follower",
     "derive",
     "check_equivalence",
     "check_derivation",
     "circuit_equations",
     "check_setup",
+    "workspace_status",
+    "capture_workspace",
+    "ipad_capture_status",
+    "ipad_receiver_start",
+    "ipad_receiver_stop",
+    "capture_ipad_screen",
+    "ocr_status",
+    "transcribe_image",
+    "transcribe_workspace",
+    "configure_workspace",
+    "workspace_configuration",
+    "simulate_spice",
+    "characterize_transfer",
+    "converter_metrics",
+    "dac_output",
+    "spectrum_metrics",
+    "quantize",
+    "opamp_limits",
+    "rectifier_metrics",
+    "relaxation_oscillator",
+    "transimpedance",
+    "library_search",
+    "document_get",
+    "problem_get",
+    "study_context",
+    "attempt_history",
+    "course_progress",
+    "problem_create",
+    "problem_update_interpretation",
+    "transcription_confirm",
+    "attempt_create",
+    "attempt_complete",
+    "problem_tag",
+    "import_waveform_csv",
+    "instrument_status",
+    "instrument_query",
 }
 
 
 def exact(rendered: dict) -> sp.Expr:
     """Recover an expression the way a caller would: through ``srepr``."""
     return sp.sympify(rendered["srepr"])
+
+
+def test_loop_characterization_labels_and_computes_negative_unity_feedback():
+    result = characterize_transfer("100/(s*(s+10))", feedback="negative_unity")
+    assert result["analysis_scope"] == "supplied_transfer"
+    assert result["feedback"] == "negative_unity"
+    assert result["stable"] is False
+    assert result["stability_classification"] == "marginally_stable"
+    assert result["closed_loop"]["stable"] is True
+    assert result["closed_loop"]["stability_classification"] == "asymptotically_stable"
 
 
 # --------------------------------------------------------------------------
@@ -90,6 +151,9 @@ def test_every_tool_returns_something_json_serialisable():
         check_derivation(["-Rf/Ri"], "-Ri/Rf"),
         circuit_equations(DIVIDER),
         check_setup(DIVIDER, ["V1 = V"], ["V1", "V2"]),
+        workspace_status(),
+        ocr_status(),
+        simulate_spice("V1 in 0 1\nR1 in 0 1k", "op", ["v(in)"]),
     ]
     for result in results:
         json.dumps(result)  # raises TypeError on a stray SymPy object
@@ -305,6 +369,42 @@ def test_an_s_domain_derivation_checks_out():
     assert result["ok"] is True, result["message"]
 
 
+def test_derivation_applies_explicit_numeric_parameters_to_every_step():
+    result = check_derivation(
+        ["1/(1 + s*R*C)", "1/(1 + s*1000*0.000001)", "1000/(s + 1000)"],
+        "1/(1 + s*R*C)",
+        {"R": 1000, "C": 1e-6},
+    )
+    assert result["ok"] is True, result["message"]
+    assert result["parameters"] == {"R": 1000, "C": 1e-6}
+
+
+def test_derivation_decimal_parameters_do_not_create_binary_float_phantoms():
+    result = check_derivation(
+        ["1/(1+s*R*C)", "1/(1+s*(427/125000))", "(125000/427)/(s+125000/427)"],
+        "1/(1+s*R*C)",
+        {"R": 6100, "C": 5.6e-7},
+    )
+    assert result["ok"] is True, result["message"]
+
+
+def test_derivation_with_parameters_locates_later_coefficient_error():
+    result = check_derivation(
+        ["1/(1 + s*R*C)", "1/(1 + s*1000*0.000001)", "100/(s + 1000)"],
+        "1/(1 + s*R*C)",
+        {"R": 1000, "C": 1e-6},
+    )
+    assert result["ok"] is False
+    assert result["kind"] == "algebra"
+    assert result["step_index"] == 1
+
+
+def test_derivation_rejects_unknown_parameter_name():
+    result = check_derivation(["1/(1+s*R*C)"], "1/(1+s*R*C)", {"X": 2})
+    assert result["ok"] is False
+    assert result["error"] == "substitution_error"
+
+
 def test_no_steps_is_reported_not_silently_passed():
     result = check_derivation([], TRUTH)
     assert result["ok"] is False
@@ -395,6 +495,73 @@ def test_a_correct_nodal_setup_passes():
     assert result["ok"] is True, result["message"]
     assert result["kind"] == "ok"
     assert result["failing_equation"] is None
+
+
+def test_setup_equation_roles_are_exposed_and_json_serialisable():
+    result = check_setup(
+        DIVIDER,
+        ["V1 = V", "V2 = R2*V/(R1 + R2)"],
+        ["V1", "V2"],
+    )
+
+    assert result["ok"] is True
+    assert [role["role"] for role in result["equation_roles"]] == [
+        "law", "ambiguous"
+    ]
+    assert result["equation_roles"][0]["element"] == "Vs"
+    second = result["equation_roles"][1]
+    assert second["index"] == 1
+    assert second["unknown"] == "V2"
+    assert second["value"] is not None
+    assert set(second["value"]) == {"text", "srepr"}
+    json.dumps(result)
+
+
+def test_setup_equation_roles_are_empty_when_validation_stops_early():
+    result = check_setup(DIVIDER, ["V1 = V + 1"], ["V1"])
+    assert result["ok"] is False
+    assert result["kind"] == "not_satisfied"
+    assert result["equation_roles"] == []
+
+
+def test_transcribe_image_rejects_non_base64_without_starting_ocr_worker():
+    before = server_module.OCR_WORKER.pid
+    result = transcribe_image("not base64!")
+    assert result.structured_content["ok"] is False
+    assert result.structured_content["error"] == "bad_image"
+    assert server_module.OCR_WORKER.pid == before
+
+
+def test_workspace_transcription_returns_exact_frame_and_local_ocr_metadata(monkeypatch):
+    png = b"\x89PNG\r\n\x1a\nformula"
+    monkeypatch.setattr(
+        server_module,
+        "_guarded",
+        lambda name, **kwargs: {
+            "ok": True,
+            "mime_type": "image/png",
+            "bytes": len(png),
+            "sha256": "abc",
+            "selection": {"kind": "region"},
+            "png": png,
+        },
+    )
+    monkeypatch.setattr(
+        server_module.OCR_WORKER,
+        "call",
+        lambda request: {
+            "ok": True,
+            "latex": r"V_o=-\frac{R_f}{R_i}",
+            "device": "mps",
+            "model": "unimernet_small",
+            "inference_seconds": 0.7,
+        },
+    )
+    result = transcribe_workspace(x=1, y=2, width=300, height=200)
+    assert result.structured_content["ok"] is True
+    assert result.structured_content["device"] == "mps"
+    assert result.structured_content["capture"]["sha256"] == "abc"
+    assert [block.type for block in result.content] == ["text", "image"]
 
 
 def test_a_differently_formulated_but_correct_setup_passes():
@@ -690,33 +857,68 @@ def test_the_worker_survives_a_call_that_dies_mid_flight():
     """
     check_equivalence("Rf/Ri", "Rf/Ri")  # warm
     worker = server_module._WORKER.pid
-
-    def kill_the_child():
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            found = subprocess.run(
-                ["pgrep", "-P", str(worker)], capture_output=True, text=True
-            )
-            children = [int(pid) for pid in found.stdout.split()]
-            if children:
-                for pid in children:
-                    os.kill(pid, signal.SIGKILL)
-                return
-            time.sleep(0.02)
-
-    assassin = threading.Thread(target=kill_the_child)
-    assassin.start()
     start = time.monotonic()
-    result = check_equivalence("9^(9^9)", "1")
+    result = server_module._WORKER.call(
+        "_crash_child_for_test", {}, server_module.TIMEOUT_SECONDS
+    )
     elapsed = time.monotonic() - start
-    assassin.join()
 
     assert result["ok"] is False
     assert result["error"] == "internal_error"
+    assert "exited with code 7" in result["message"]
     assert elapsed < 25, f"took {elapsed:.1f}s -- it blocked on a dead writer"
     # The worker itself is untouched, and still serving.
     assert server_module._WORKER.pid == worker
     assert check_equivalence("Rf/Ri", "Rf/Ri")["equivalent"] is True
+
+
+def test_scoped_storage_implementations_persist_problem_attempt_and_progress(tmp_path, monkeypatch):
+    data = tmp_path / "command_center"
+    monkeypatch.setattr(server_module, "default_data_dir", lambda: data)
+    database = server_module._storage()
+    database.add_document({
+        "id": "d" * 32, "name": "rc-note.md", "category": "lecture",
+        "extension": ".md", "media_type": "text/markdown", "size": 2,
+        "sha256": "0" * 64, "relative_path": "files/internal.md",
+        "source": "upload", "created": time.time(), "pages": None,
+    }, "RC reference")
+    searched = server_module._dispatch("library_search", {"query": "RC", "category": "", "limit": 10})
+    assert searched["items"][0]["id"] == "d" * 32
+    assert "relative_path" not in searched["items"][0]
+    assert "relative_path" not in server_module._dispatch("document_get", {"document_id": "d" * 32})["document"]
+    created = server_module._dispatch("problem_create", {
+        "title": "RC pole", "topic": "filters", "prompt": "Find the pole",
+        "document_id": None, "circuit_interpretation": "", "status": "draft",
+        "source_page": None,
+    })
+    assert created["ok"] is True
+    problem_id = created["problem"]["id"]
+    updated = server_module._dispatch("problem_update_interpretation", {
+        "problem_id": problem_id, "circuit_interpretation": "series R, shunt C",
+        "status": "confirmed",
+    })
+    assert updated["problem"]["status"] == "confirmed"
+    tagged = server_module._dispatch("problem_tag", {"problem_id": problem_id, "tag": "exam-1"})
+    assert tagged["problem"]["tags"] == ["exam-1"]
+    attempt = server_module._dispatch("attempt_create", {
+        "problem_id": problem_id, "actor": "student", "answer": "", "status": "working",
+    })["attempt"]
+    completed = server_module._dispatch("attempt_complete", {
+        "attempt_id": attempt["id"], "answer": "-1/RC", "status": "correct",
+        "first_divergence": None,
+    })
+    assert completed["attempt"]["status"] == "correct"
+    assert server_module._dispatch("course_progress", {})["attempts"] == {"correct": 1}
+    assert server_module._dispatch("attempt_history", {"problem_id": problem_id, "limit": 10})["items"][0]["id"] == attempt["id"]
+    assert server_module._dispatch("study_context", {"query": "RC", "limit": 10})["problems"][0]["id"] == problem_id
+
+
+def test_scoped_storage_errors_are_structured_and_no_sql_surface_exists(tmp_path, monkeypatch):
+    monkeypatch.setattr(server_module, "default_data_dir", lambda: tmp_path / "data")
+    missing = server_module._dispatch("problem_get", {"problem_id": "not-real"})
+    assert missing["ok"] is False
+    assert missing["error"] == "storage_error"
+    assert "sql" not in server_module._IMPLEMENTATIONS
 
 
 def test_concurrent_calls_each_get_their_own_answer():

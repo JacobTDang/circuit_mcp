@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Circuit Command Center</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23111312'/%3E%3Cpath d='M7 7v18M7 7h18' stroke='%23ecece7' stroke-width='2'/%3E%3C/svg%3E"><link rel="stylesheet" href="/assets/style.css"><link rel="stylesheet" href="/assets/canvas.css"><style>.source-pin{font:600 13px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.12em;color:var(--accent)}.legacy{margin:-2px 0 18px;border:1px solid var(--line);background:rgba(23,25,24,.9);padding:14px 22px}.legacy summary{cursor:pointer;color:var(--muted);font:10px ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.12em}.legacy[open] summary{margin-bottom:14px}</style></head>
+<body>
+<aside>
+  <div class="brand"><span class="mark">⌜</span><div><strong>EE 2300</strong><small>LOCAL COMMAND CENTER</small></div></div>
+  <nav><button class="active" data-view="dashboard">desk</button><button data-view="library">notebook</button><button data-view="problems">problem board</button><button data-view="workspace">iPad page</button><button data-view="tools">circuit bench</button></nav>
+  <button id="captureGlobal" class="capture-button">snap iPad <kbd>⌘⇧I</kbd></button>
+  <div class="local"><i></i> LOCAL · PORT 2300</div>
+</aside>
+<main>
+  <header><div><p>IOWA STATE UNIVERSITY · EE 2300</p><h1><span class="prompt">›</span> <span id="title">desk</span><span class="cursor"></span></h1></div><button id="refresh" class="ghost">REFRESH</button></header>
+  <section id="dashboard" class="view active">
+    <div id="workspaceCanvas" class="workspace-canvas" aria-label="Blank command workspace">
+      <div id="canvasHint" class="canvas-hint"><span>+</span><p>click blank space to add something</p></div>
+      <div id="spawnMenu" class="spawn-menu" hidden><small>ADD TO WORKSPACE</small><button data-spawn="ipad">iPad screen</button><button data-spawn="library">course files</button><button data-spawn="problems">problem board</button><button data-spawn="tools">circuit bench</button><button data-spawn="activity">recent activity</button></div>
+    </div>
+  </section>
+  <section id="library" class="view">
+    <div class="toolbar"><input id="search" placeholder="Search filenames and extracted notes"><select id="categoryFilter"><option value="">All categories</option><option>homework</option><option>lecture</option><option>reference</option><option>solution</option></select><label class="upload">Upload files<input id="fileInput" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.txt,.md,.csv"></label></div>
+    <div id="dropzone">Drop homework, lecture PDFs, screenshots, or CSV measurements here</div><div id="libraryGrid" class="files"></div>
+  </section>
+  <section id="problems" class="view">
+    <div class="grid"><article class="panel"><div class="panel-head"><h3>course progress</h3></div><div id="progressSummary" class="empty">No problem records yet.</div></article><article class="panel"><h3>add a problem</h3><div class="problem-form"><input id="problemTitle" placeholder="Problem title"><input id="problemTopic" placeholder="Topic, e.g. RC filters"><textarea id="problemPrompt" placeholder="Confirmed problem statement"></textarea><button id="createProblem" class="primary">save problem</button></div></article></div>
+    <div class="panel problem-board"><div class="panel-head"><h3>problems and attempts</h3></div><div id="problemList" class="files"></div></div>
+  </section>
+  <section id="workspace" class="view">
+    <div class="capture-strip"><div><h3>live iPadOS feed</h3><p id="ipadSourceState">Checking AirPlay and USB-C…</p></div><div class="coords"><span id="ipadPin" class="source-pin"></span><button id="startReceiver" class="primary">start airplay</button><button id="stopReceiver" class="ghost">stop</button></div></div>
+    <div class="capture-strip"><div><h3>current screen</h3><p>Capture whatever is visible in any iPadOS app.</p></div><button id="capturePage" class="primary">snap now</button></div>
+    <details class="legacy"><summary>manual display or crop fallback</summary><div class="coords"><input id="capX" type="number" placeholder="x"><input id="capY" type="number" placeholder="y"><input id="capW" type="number" placeholder="width"><input id="capH" type="number" placeholder="height"><input id="capDisplay" type="number" value="1" min="1" title="display"><button id="useDisplay" class="ghost">use full display</button><button id="saveCapture" class="ghost">save crop</button></div></details>
+    <div class="grid"><article class="panel"><h3>saved pages</h3><p class="muted">Formula OCR works only on one tightly cropped expression. For a full homework page or circuit drawing, ask the vision agent to inspect it and confirm the transcription.</p><div id="imageList"></div></article><article class="panel"><h3>formula OCR result</h3><div id="capturePreview" class="capture-preview">Your latest iPad snap will appear here.</div><pre id="ocrOutput">Select a tightly cropped formula PNG—not a full page.</pre></article></div>
+  </section>
+  <section id="tools" class="view">
+    <div class="tool-layout"><div class="tool-list" id="toolList"></div><article class="panel runner"><h3 id="toolName">Select a tool</h3><p id="toolHint" class="muted">Parameters are JSON and use the same contract as MCP.</p><textarea id="toolArgs" spellcheck="false">{}</textarea><button id="runTool" class="primary">Run analysis</button><pre id="toolOutput">Results appear here.</pre></article></div>
+  </section>
+</main><div id="toast"></div><script src="/assets/animation.js?v=2"></script><script src="/assets/app.js?v=canvas-9"></script><script>document.addEventListener('click',event=>{const close=event.target.closest('[data-close]'),card=close?.closest('.workspace-item[data-kind="animation"]');if(card){const item=canvasItems.find(x=>x.id===card.dataset.id),animation=state.animations.find(x=>x.id===item?.animationId),dismissed=dismissedAnimations();if(animation){dismissed[animation.id]=animation.revision;localStorage.setItem(DISMISSED_ANIMATIONS,JSON.stringify(dismissed))}}},true);loadAnimations().catch(()=>{});setInterval(()=>loadAnimations().catch(()=>{}),2000)</script>
+</body></html>

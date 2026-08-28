@@ -1,12 +1,18 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv-ocr.nosync/
 venv/
 .pytest_cache/
 *.egg-info/
 dist/
 build/
 .DS_Store
+.local/
+models/
+benchmarks/handwriting/*.png
+.playwright-cli/
+output/playwright/
 
 # spice / simulation artifacts
 *.raw
