@@ -327,3 +327,37 @@ def test_the_canvas_reconciles_instead_of_rebuilding_every_card(tmp_path, monkey
         assert "existing" in script and "keep" in script, "render must reuse elements it already has"
         # a reused element must not accumulate a second ResizeObserver
         assert script.count("new ResizeObserver") == 1
+
+
+def test_the_suite_cannot_write_to_the_real_command_center_store(isolated_command_center):
+    """A route that records data must never land rows in the developer's database."""
+    project_store = web.ROOT / ".local" / "command_center"
+
+    assert web.DATA == isolated_command_center
+    assert web.DATA != project_store
+    assert project_store not in web.DATA.parents
+
+
+def test_generate_records_the_visual_into_the_isolated_store(monkeypatch):
+    """The route that persists a render must land it in the test's own store."""
+    project_store = web.ROOT / ".local" / "command_center"
+    before = _visual_count(project_store)
+
+    monkeypatch.setattr(web.SHOWMAN, "start", lambda *a, **k: {"ok": True, "authoring": "openrouter"})
+    monkeypatch.setattr(web.SHOWMAN, "request_json", lambda path, payload, timeout: (
+        200, {"video": {"key": "videos/x.mp4"}, "durationSec": 5, "fps": 30, "spec": {}}))
+    browser = TestClient(web.app, headers={"host": "localhost:2300"})
+
+    assert browser.post("/api/showman/generate", json={"brief": "explain an RC circuit"}).status_code == 200
+    assert (web.DATA / "circuit_mcp.sqlite3").exists(), "the row belongs in the isolated store"
+    assert _visual_count(project_store) == before, "the real database must be untouched"
+
+
+def _visual_count(store) -> int:
+    import sqlite3
+
+    database = store / "circuit_mcp.sqlite3"
+    if not database.exists():
+        return 0
+    with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+        return connection.execute("SELECT count(*) FROM visual_assets").fetchone()[0]
