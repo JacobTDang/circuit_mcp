@@ -66,12 +66,6 @@ C1 2 0 {C}
 """
 
 TOOL_NAMES = {
-    "animation_create",
-    "animation_list",
-    "animation_update",
-    "animation_delete",
-    "animation_from_template",
-    "animation_list_templates",
     "alias_frequency",
     "bjt_emitter_follower",
     "derive",
@@ -86,6 +80,11 @@ TOOL_NAMES = {
     "ipad_receiver_stop",
     "capture_ipad_screen",
     "ocr_status",
+    "visual_status",
+    "visual_generate",
+    "visual_list",
+    "visual_get",
+    "visual_preview",
     "transcribe_image",
     "transcribe_workspace",
     "configure_workspace",
