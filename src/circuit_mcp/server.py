@@ -64,6 +64,7 @@ from .analysis import (
     with_finite_gbw,
 )
 from .showman import SHOWMAN
+from .retention import sweep_if_due
 from .capture import CaptureError, capture_status as _capture_status
 from .capture import capture_workspace as _capture_workspace
 from .course_metrics import (
@@ -1504,14 +1505,17 @@ def visual_generate(brief: str, problem_id: str | None = None) -> dict[str, Any]
     except StorageError as exc:
         return _failure("storage_error", str(exc))
     database.record_event("visual_generate", brief[:80], True, "visual", visual["id"], {"actor": "mcp"})
+    sweep_if_due(database, SHOWMAN.data_dir / "objects")
     return {"ok": True, "visual": _visual_summary(visual)}
 
 
 @server.tool()
 def visual_list(problem_id: str | None = None, limit: int = 20) -> dict[str, Any]:
     """List locally rendered visuals, newest first, optionally for one problem."""
+    database = _storage()
+    sweep_if_due(database, SHOWMAN.data_dir / "objects")
     try:
-        items = _storage().list_visuals(problem_id, limit)
+        items = database.list_visuals(problem_id, limit)
     except StorageError as exc:
         return _failure("storage_error", str(exc))
     return {"ok": True, "items": [_visual_summary(item) for item in items]}
