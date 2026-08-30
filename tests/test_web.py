@@ -41,6 +41,12 @@ def test_dashboard_starts_as_a_manual_blank_spatial_workspace(tmp_path, monkeypa
         assert canvas_css.status_code == 200
         assert ".workspace-item" in canvas_css.text
         assert "resize:horizontal" in canvas_css.text
+        app_script = browser.get("/assets/app.js").text
+        assert "data-generate-visual" in app_script
+        assert "/api/showman/generate" in app_script
+        assert "<video controls playsinline" in app_script
+        assert "hydrateVisualCards" in app_script
+        assert "videoMeta" in app_script
 
 
 def test_legacy_animation_assets_are_not_loaded_by_the_workspace(tmp_path, monkeypatch):
