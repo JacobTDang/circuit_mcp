@@ -1,9 +1,15 @@
 import os
 import subprocess
 import threading
+import urllib.error
+import urllib.request
 from pathlib import Path
 
-from circuit_mcp.showman import ShowmanManager
+from circuit_mcp.showman import (
+    ShowmanConnectionError,
+    ShowmanManager,
+    ShowmanTimeoutError,
+)
 
 
 def test_status_never_exposes_openrouter_secret(tmp_path, monkeypatch):
@@ -69,6 +75,43 @@ def test_render_urls_are_rewritten_to_the_local_proxy(monkeypatch):
     assert artifact.content == b"video" and artifact.headers["content-type"] == "video/mp4"
 
 
+def test_every_object_reference_is_localized_not_just_video(monkeypatch):
+    """Issue #7: captions, poster, and any nested artifact must lose their
+    upstream file:// URL, not just the top-level video."""
+    from circuit_mcp import web
+    from fastapi.testclient import TestClient
+
+    upstream = {
+        "video": {
+            "key": "videos/a40e5d8d.mp4",
+            "url": "file:///Users/jacobdang/Desktop/tools/circuit_mcp/.local/showman/objects/videos/a40e5d8d.mp4",
+        },
+        "captions": {
+            "key": "videos/a40e5d8d.vtt",
+            "url": "file:///Users/jacobdang/Desktop/tools/circuit_mcp/.local/showman/objects/videos/a40e5d8d.vtt",
+        },
+        "poster": {
+            "key": "videos/a40e5d8d.png",
+            "url": "file:///Users/jacobdang/Desktop/tools/circuit_mcp/.local/showman/objects/videos/a40e5d8d.png",
+        },
+        "tracks": [
+            {"key": "videos/extra.vtt", "url": "file:///Users/jacobdang/extra.vtt"},
+        ],
+    }
+    monkeypatch.setattr(web.SHOWMAN, "request_json", lambda path, payload, timeout: (200, upstream))
+    client = TestClient(web.app, headers={"host": "localhost:2300"})
+
+    rendered = client.post("/api/showman/render", json={"spec": {"title": "RC"}})
+
+    body = rendered.json()
+    assert body["video"]["url"] == "/api/showman/objects/videos/a40e5d8d.mp4"
+    assert body["captions"]["url"] == "/api/showman/objects/videos/a40e5d8d.vtt"
+    assert body["poster"]["url"] == "/api/showman/objects/videos/a40e5d8d.png"
+    assert body["tracks"][0]["url"] == "/api/showman/objects/videos/extra.vtt"
+    assert "file://" not in rendered.text
+    assert "/Users/" not in rendered.text
+
+
 def test_object_keys_cannot_escape_the_showman_namespace(tmp_path):
     manager = ShowmanManager(tmp_path, port=32994)
     for key in ("../secret", "video/../../secret", "/absolute"):
@@ -77,6 +120,153 @@ def test_object_keys_cannot_escape_the_showman_namespace(tmp_path):
             assert False
         except ValueError:
             pass
+
+
+# --- transport error mapping (issue #9) ---------------------------------------
+
+
+def _raise(exc):
+    def _raiser(*args, **kwargs):
+        raise exc
+    return _raiser
+
+
+def test_request_json_read_timeout_is_reported_as_a_typed_timeout(monkeypatch):
+    """A read timeout must name which call timed out and after how long, not a bare 500."""
+    manager = ShowmanManager(Path("/nonexistent"), port=33010)
+    monkeypatch.setattr(manager, "start", lambda: {"ok": True})
+    monkeypatch.setattr(urllib.request, "urlopen", _raise(TimeoutError("timed out")))
+
+    try:
+        manager.request_json("/render", {"spec": {}}, timeout=45)
+        assert False
+    except ShowmanTimeoutError as exc:
+        assert "/render" in str(exc)
+        assert "45" in str(exc)
+
+
+def test_request_json_dropped_connection_is_reported_as_a_typed_error(monkeypatch):
+    """A worker killed mid-request raises URLError; it must not escape as a bare 500."""
+    manager = ShowmanManager(Path("/nonexistent"), port=33011)
+    monkeypatch.setattr(manager, "start", lambda: {"ok": True})
+    monkeypatch.setattr(urllib.request, "urlopen", _raise(urllib.error.URLError("connection refused")))
+
+    try:
+        manager.request_json("/render", {"spec": {}}, timeout=45)
+        assert False
+    except ShowmanConnectionError as exc:
+        assert "/render" in str(exc)
+
+
+def test_object_bytes_read_timeout_is_reported_as_a_typed_timeout(monkeypatch):
+    manager = ShowmanManager(Path("/nonexistent"), port=33012)
+    monkeypatch.setattr(manager, "start", lambda: {"ok": True})
+    monkeypatch.setattr(urllib.request, "urlopen", _raise(TimeoutError("timed out")))
+
+    try:
+        manager.object_bytes("videos/a.mp4", timeout=20)
+        assert False
+    except ShowmanTimeoutError as exc:
+        assert "videos/a.mp4" in str(exc)
+        assert "20" in str(exc)
+
+
+def test_object_bytes_dropped_connection_is_reported_as_a_typed_error(monkeypatch):
+    manager = ShowmanManager(Path("/nonexistent"), port=33013)
+    monkeypatch.setattr(manager, "start", lambda: {"ok": True})
+    monkeypatch.setattr(urllib.request, "urlopen", _raise(urllib.error.URLError("connection refused")))
+
+    try:
+        manager.object_bytes("videos/a.mp4")
+        assert False
+    except ShowmanConnectionError as exc:
+        assert "videos/a.mp4" in str(exc)
+
+
+def test_preview_read_timeout_is_reported_as_a_typed_timeout(monkeypatch):
+    manager = ShowmanManager(Path("/nonexistent"), port=33014)
+    monkeypatch.setattr(manager, "start", lambda: {"ok": True})
+    monkeypatch.setattr(urllib.request, "urlopen", _raise(TimeoutError("timed out")))
+
+    try:
+        manager.preview({"title": "RC"}, timeout=10)
+        assert False
+    except ShowmanTimeoutError as exc:
+        assert "preview" in str(exc)
+        assert "10" in str(exc)
+
+
+def test_preview_dropped_connection_is_reported_as_a_typed_error(monkeypatch):
+    manager = ShowmanManager(Path("/nonexistent"), port=33015)
+    monkeypatch.setattr(manager, "start", lambda: {"ok": True})
+    monkeypatch.setattr(urllib.request, "urlopen", _raise(urllib.error.URLError("connection refused")))
+
+    try:
+        manager.preview({"title": "RC"})
+        assert False
+    except ShowmanConnectionError as exc:
+        assert "preview" in str(exc)
+
+
+def test_render_route_maps_a_showman_timeout_to_504_with_an_actionable_message(monkeypatch):
+    from circuit_mcp import web
+    from fastapi.testclient import TestClient
+
+    def _raise_timeout(path, payload, timeout):
+        raise ShowmanTimeoutError(f"POST {path}", timeout)
+
+    monkeypatch.setattr(web.SHOWMAN, "request_json", _raise_timeout)
+    client = TestClient(web.app, headers={"host": "localhost:2300"})
+
+    response = client.post("/api/showman/render", json={"spec": {"title": "RC"}})
+
+    assert response.status_code == 504
+    assert "/render" in response.json()["detail"]
+
+
+def test_render_route_maps_a_dropped_connection_to_502(monkeypatch):
+    from circuit_mcp import web
+    from fastapi.testclient import TestClient
+
+    def _raise_dropped(path, payload, timeout):
+        raise ShowmanConnectionError(f"POST {path}", "connection refused")
+
+    monkeypatch.setattr(web.SHOWMAN, "request_json", _raise_dropped)
+    client = TestClient(web.app, headers={"host": "localhost:2300"})
+
+    response = client.post("/api/showman/render", json={"spec": {"title": "RC"}})
+
+    assert response.status_code == 502
+
+
+def test_object_route_maps_a_showman_timeout_to_504(monkeypatch):
+    from circuit_mcp import web
+    from fastapi.testclient import TestClient
+
+    def _raise_timeout(key, timeout=30):
+        raise ShowmanTimeoutError(f"GET /objects/{key}", timeout)
+
+    monkeypatch.setattr(web.SHOWMAN, "object_bytes", _raise_timeout)
+    client = TestClient(web.app, headers={"host": "localhost:2300"})
+
+    response = client.get("/api/showman/objects/videos/a.mp4")
+
+    assert response.status_code == 504
+
+
+def test_preview_route_maps_a_showman_timeout_to_504(monkeypatch):
+    from circuit_mcp import web
+    from fastapi.testclient import TestClient
+
+    def _raise_timeout(spec, frame):
+        raise ShowmanTimeoutError("POST /preview", 30)
+
+    monkeypatch.setattr(web.SHOWMAN, "preview", _raise_timeout)
+    client = TestClient(web.app, headers={"host": "localhost:2300"})
+
+    response = client.post("/api/showman/preview", json={"spec": {"title": "RC"}, "frame": 0})
+
+    assert response.status_code == 504
 
 
 # --- worker lifecycle (issues #2, #3, #4, #5) ---------------------------------
