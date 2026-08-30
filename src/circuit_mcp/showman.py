@@ -19,6 +19,28 @@ WORKER_SCRIPT = Path("dist") / "service" / "worker.js"
 OBJECT_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,240}")
 
 
+class ShowmanTransportError(RuntimeError):
+    """A Showman HTTP call failed at the transport level, not with an HTTP status."""
+
+
+class ShowmanTimeoutError(ShowmanTransportError):
+    """The worker did not respond to one call within its bounded timeout."""
+
+    def __init__(self, phase: str, timeout: float):
+        super().__init__(f"Showman did not respond to {phase} within {timeout:g}s")
+        self.phase = phase
+        self.timeout = timeout
+
+
+class ShowmanConnectionError(ShowmanTransportError):
+    """The connection to the worker dropped mid-request (e.g. the worker crashed)."""
+
+    def __init__(self, phase: str, reason: str):
+        super().__init__(f"Showman worker connection was lost during {phase}: {reason}")
+        self.phase = phase
+        self.reason = reason
+
+
 class ShowmanManager:
     """Own one Showman worker: spawn it, prove it is ours, and report what it can do.
 
@@ -231,6 +253,7 @@ class ShowmanManager:
             f"{self.base_url}{path}", data=encoded,
             headers={"Content-Type": "application/json"}, method="POST",
         )
+        phase = f"POST {path}"
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return response.status, json.load(response)
@@ -238,12 +261,17 @@ class ShowmanManager:
             try: body = json.load(exc)
             except (ValueError, OSError): body = {"error": "showman_request_failed"}
             return exc.code, body
+        except TimeoutError as exc:
+            raise ShowmanTimeoutError(phase, timeout) from exc
+        except OSError as exc:
+            raise ShowmanConnectionError(phase, str(exc)) from exc
 
     def object_bytes(self, key: str, timeout: float = 30) -> tuple[bytes, str]:
         """Read a content-addressed artifact; keys never escape Showman's object namespace."""
         if not OBJECT_KEY.fullmatch(key) or ".." in key.split("/"):
             raise ValueError("invalid Showman object key")
         if not self.start().get("ok"): raise RuntimeError(self._last_error or "Showman is unavailable")
+        phase = f"GET /objects/{key}"
         try:
             with urllib.request.urlopen(f"{self.base_url}/objects/{key}", timeout=timeout) as response:
                 data = response.read(256 * 1024 * 1024 + 1)
@@ -251,6 +279,10 @@ class ShowmanManager:
                 return data, response.headers.get_content_type()
         except urllib.error.HTTPError as exc:
             raise RuntimeError(f"Showman object failed with status {exc.code}") from exc
+        except TimeoutError as exc:
+            raise ShowmanTimeoutError(phase, timeout) from exc
+        except OSError as exc:
+            raise ShowmanConnectionError(phase, str(exc)) from exc
 
     def preview(self, spec: dict[str, Any], frame: int = 0, timeout: float = 30) -> bytes:
         """Render one bounded local preview frame without accepting an upstream URL."""
@@ -265,6 +297,7 @@ class ShowmanManager:
             f"{self.base_url}/preview", data=encoded,
             headers={"Content-Type": "application/json"}, method="POST",
         )
+        phase = "POST /preview"
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 data = response.read(16 * 1024 * 1024 + 1)
@@ -272,6 +305,10 @@ class ShowmanManager:
                 return data
         except urllib.error.HTTPError as exc:
             raise RuntimeError(f"Showman preview failed with status {exc.code}") from exc
+        except TimeoutError as exc:
+            raise ShowmanTimeoutError(phase, timeout) from exc
+        except OSError as exc:
+            raise ShowmanConnectionError(phase, str(exc)) from exc
 
 
 SHOWMAN = ShowmanManager()
