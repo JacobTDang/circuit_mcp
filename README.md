@@ -13,7 +13,7 @@ verdicts.
 ## Status
 
 The linear-circuit MCP server is implemented and registered by [`.mcp.json`](.mcp.json).
-It currently provides forty-three tools:
+It currently provides forty-eight tools:
 
 | Tool | Purpose |
 |---|---|
@@ -60,6 +60,11 @@ It currently provides forty-three tools:
 | `attempt_create` | Start a student or agent attempt |
 | `attempt_complete` | Complete an attempt with a graded workflow status |
 | `problem_tag` | Attach a normalized course tag |
+| `visual_status` | Report whether the local renderer can author a visual |
+| `visual_generate` | Render one local teaching video from a brief and persist it |
+| `visual_list` | List locally rendered visuals, newest first |
+| `visual_get` | Read one visual and the specification it was rendered from |
+| `visual_preview` | Return one still frame of a stored visual as an image |
 
 The detailed rationale, evaluated alternatives, and known lcapy limitations are
 recorded in [`docs/2026-08-24-design.md`](docs/2026-08-24-design.md).
@@ -124,10 +129,12 @@ Every returned frame includes a SHA-256 hash.
 
 ## Visual explanations
 
-The former browser SVG renderer has been retired. Showman is pinned under
-`vendor/showman` and will provide deterministic, smooth circuit animations,
-camera motion, previews, and local video rendering. Existing scene records are
-retained for migration but are no longer spawned by the board. See the
+The former browser SVG renderer has been retired, and with it the legacy
+`animation_*` tools that drove it. Showman is pinned under `vendor/showman` and
+renders locally: `visual_generate` turns a brief into an MP4, and
+`visual_preview` returns a still frame so a visual can be checked against its
+brief before a student sees it. The legacy `animation_scenes` rows are retained
+untouched pending a versioned migration. See the
 [Showman integration scope](docs/SHOWMAN_INTEGRATION.md).
 
 MCP clients decide when to call tools, so “continuous awareness” means the agent

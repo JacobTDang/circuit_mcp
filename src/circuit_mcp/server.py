@@ -63,7 +63,7 @@ from .analysis import (
     transfer,
     with_finite_gbw,
 )
-from .animation_engine import build_template, template_names, validate_scene
+from .showman import SHOWMAN
 from .capture import CaptureError, capture_status as _capture_status
 from .capture import capture_workspace as _capture_workspace
 from .course_metrics import (
@@ -463,30 +463,6 @@ def _problem_tag(problem_id: str, tag: str) -> dict[str, Any]:
     return {"ok": True, "problem": problem}
 
 
-def _animation_create(scene: dict[str, Any], problem_id: str | None) -> dict[str, Any]:
-    database = _storage(); item = database.create_animation(validate_scene(scene), problem_id)
-    database.record_event("animation_create", item["title"], True, "animation", item["id"], {"actor": "mcp"})
-    return {"ok": True, "animation": item, "board_action": "spawn"}
-
-
-def _animation_list(updated_after: float, limit: int) -> dict[str, Any]:
-    return {"ok": True, "items": _storage().list_animations(updated_after, limit)}
-
-
-def _animation_update(animation_id: str, scene: dict[str, Any]) -> dict[str, Any]:
-    item = _storage().update_animation(animation_id, validate_scene(scene))
-    return {"ok": True, "animation": item, "board_action": "refresh"}
-
-
-def _animation_delete(animation_id: str) -> dict[str, Any]:
-    _storage().delete_animation(animation_id); return {"ok": True, "animation_id": animation_id, "board_action": "remove"}
-
-
-def _animation_from_template(template: str, title: str | None, problem_id: str | None) -> dict[str, Any]:
-    item = _storage().create_animation(build_template(template, title), problem_id)
-    return {"ok": True, "animation": item, "board_action": "spawn"}
-
-
 _IMPLEMENTATIONS = {
     "derive": _derive,
     "check_equivalence": _check_equivalence,
@@ -516,11 +492,6 @@ _IMPLEMENTATIONS = {
     "attempt_create": _attempt_create,
     "attempt_complete": _attempt_complete,
     "problem_tag": _problem_tag,
-    "animation_create": _animation_create,
-    "animation_list": _animation_list,
-    "animation_update": _animation_update,
-    "animation_delete": _animation_delete,
-    "animation_from_template": _animation_from_template,
     "import_waveform_csv": _import_waveform_csv,
     "instrument_status": _instrument_status,
     "instrument_query": _instrument_query,
@@ -1472,40 +1443,124 @@ def problem_tag(problem_id: str, tag: str) -> dict[str, Any]:
     return _guarded("problem_tag", problem_id=problem_id, tag=tag)
 
 
-@server.tool()
-def animation_create(scene: dict[str, Any], problem_id: str | None = None) -> dict[str, Any]:
-    """Create a validated hand-drawn visual scene and request that the board spawn it."""
-    return _guarded("animation_create", scene=scene, problem_id=problem_id)
+# ---------------------------------------------------------------------------
+# visual explanations, rendered locally by Showman
+#
+# These deliberately do NOT go through ``_guarded``. That wrapper exists to
+# isolate lcapy's process-global symbol registry behind a 20-second wall clock;
+# a render takes 12-16 seconds on a good authoring model and longer on a retry,
+# so the bound would kill the work it is supposed to protect. Nothing here
+# touches lcapy, so there is no registry to isolate -- the same reasoning the
+# capture tools already rely on.
+# ---------------------------------------------------------------------------
+
+_OFFLINE_AUTHORING = (
+    "The Showman worker has no authoring model configured, so it can only produce "
+    "generic template lessons unrelated to your brief. Set OPENROUTER_API_KEY in .env "
+    "and restart the command center."
+)
+
+
+def _renderer() -> dict[str, Any] | None:
+    """Return a failure when no worker can author the caller's brief, else None."""
+    state = SHOWMAN.start()
+    if not state.get("ok"):
+        return _failure("showman_unavailable", state.get("error") or "Showman is unavailable")
+    if state.get("authoring") == "offline":
+        return _failure("showman_offline_authoring", _OFFLINE_AUTHORING)
+    return None
 
 
 @server.tool()
-def animation_list(updated_after: float = 0, limit: int = 100) -> dict[str, Any]:
-    """List persisted visual scenes for board synchronization."""
-    return _guarded("animation_list", updated_after=updated_after, limit=limit)
+def visual_status() -> dict[str, Any]:
+    """Report whether the local renderer can author a visual, without rendering one."""
+    state = SHOWMAN.status()
+    return {"ok": True, "renderer": state,
+            "can_author": state.get("ok") is True and state.get("authoring") != "offline"}
 
 
 @server.tool()
-def animation_update(animation_id: str, scene: dict[str, Any]) -> dict[str, Any]:
-    """Replace a visual scene with a validated revision and refresh its board card."""
-    return _guarded("animation_update", animation_id=animation_id, scene=scene)
+def visual_generate(brief: str, problem_id: str | None = None) -> dict[str, Any]:
+    """Render one local teaching video from a brief and persist it.
+
+    Takes roughly 15 seconds. The brief is never substituted: if the renderer
+    cannot author it, this fails rather than returning an unrelated lesson.
+    """
+    brief = brief.strip()
+    if not brief or len(brief) > 20_000:
+        return _failure("bad_brief", "brief must contain 1 to 20000 characters")
+    unavailable = _renderer()
+    if unavailable:
+        return unavailable
+    try:
+        status_code, result = SHOWMAN.request_json("/generate", {"brief": brief}, timeout=600)
+    except (RuntimeError, ValueError, OSError) as exc:
+        return _failure("showman_unavailable", str(exc))
+    if status_code >= 400 or not isinstance(result.get("video"), dict):
+        return _failure("render_failed", json.dumps(result)[:800])
+    database = _storage()
+    try:
+        visual = database.create_visual(brief, result, problem_id)
+    except StorageError as exc:
+        return _failure("storage_error", str(exc))
+    database.record_event("visual_generate", brief[:80], True, "visual", visual["id"], {"actor": "mcp"})
+    return {"ok": True, "visual": _visual_summary(visual)}
 
 
 @server.tool()
-def animation_delete(animation_id: str) -> dict[str, Any]:
-    """Soft-delete a visual scene and remove it from synchronized boards."""
-    return _guarded("animation_delete", animation_id=animation_id)
+def visual_list(problem_id: str | None = None, limit: int = 20) -> dict[str, Any]:
+    """List locally rendered visuals, newest first, optionally for one problem."""
+    try:
+        items = _storage().list_visuals(problem_id, limit)
+    except StorageError as exc:
+        return _failure("storage_error", str(exc))
+    return {"ok": True, "items": [_visual_summary(item) for item in items]}
 
 
 @server.tool()
-def animation_from_template(template: str, title: str | None = None, problem_id: str | None = None) -> dict[str, Any]:
-    """Spawn one legacy visual template; use animation_list_templates for names."""
-    return _guarded("animation_from_template", template=template, title=title, problem_id=problem_id)
+def visual_get(visual_id: str) -> dict[str, Any]:
+    """Read one rendered visual, including the specification it was rendered from."""
+    try:
+        visual = _storage().get_visual(visual_id)
+    except StorageError as exc:
+        return _failure("not_found", str(exc))
+    return {"ok": True, "visual": {**_visual_summary(visual), "spec": visual["spec"]}}
 
 
 @server.tool()
-def animation_list_templates() -> dict[str, Any]:
-    """List legacy circuit visual templates pending Showman migration."""
-    return {"ok": True, "templates": template_names()}
+def visual_preview(visual_id: str, frame: int = 0) -> CallToolResult:
+    """Render one still frame of a stored visual so its content can be inspected.
+
+    A video URL cannot be read by a language model; this returns the frame as an
+    image, so a visual can be checked against the brief before a student sees it.
+    """
+    try:
+        visual = _storage().get_visual(visual_id)
+    except StorageError as exc:
+        return _tool_failure("not_found", str(exc))
+    if not visual["spec"]:
+        return _tool_failure("no_specification", "this visual was stored without a specification")
+    try:
+        png = SHOWMAN.preview(visual["spec"], frame)
+    except (RuntimeError, ValueError, OSError) as exc:
+        return _tool_failure("preview_failed", str(exc))
+    summary = {"ok": True, "visual_id": visual_id, "frame": frame, "url": visual["url"]}
+    return CallToolResult(content=[
+        TextContent(type="text", text=json.dumps(summary)),
+        ImageContent(type="image", data=base64.b64encode(png).decode("ascii"), mime_type="image/png"),
+    ], structured_content=summary)
+
+
+def _visual_summary(visual: dict[str, Any]) -> dict[str, Any]:
+    """The fields a tutoring agent needs; the full spec stays behind visual_get."""
+    return {field: visual[field] for field in
+            ("id", "problem_id", "brief", "url", "duration_sec", "fps", "width", "height", "created_at")}
+
+
+def _tool_failure(kind: str, message: str) -> CallToolResult:
+    failure = _failure(kind, message)
+    return CallToolResult(content=[TextContent(type="text", text=json.dumps(failure))],
+                          structured_content=failure)
 
 
 @server.tool()

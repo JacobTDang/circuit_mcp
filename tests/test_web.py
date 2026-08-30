@@ -57,21 +57,25 @@ def test_legacy_animation_assets_are_not_loaded_by_the_workspace(tmp_path, monke
         assert browser.get("/assets/animation.js").status_code == 404
 
 
-def test_animation_scene_lifecycle_is_persistent_and_bounded(tmp_path, monkeypatch):
-    scene = {"title": "Phasor lesson", "elements": [
-        {"id": "v1", "type": "phasor", "x": 100, "y": 100, "angle": 30, "color": "blue"}
-    ], "steps": [{"at_ms": 0, "caption": "Rotate the voltage phasor."}]}
+def test_rendered_visuals_are_listed_for_the_board(tmp_path, monkeypatch):
+    from circuit_mcp import web
+
+    render = {"video": {"key": "videos/abc.mp4"}, "durationSec": 20.0, "fps": 30,
+              "width": 960, "height": 540, "spec": {"specVersion": 1}}
     with client(tmp_path, monkeypatch) as browser:
-        created = browser.post("/api/animations", json={"scene": scene}).json()["animation"]
-        assert created["revision"] == 1
-        assert browser.get("/api/animations").json()["items"][0]["id"] == created["id"]
-        scene["title"] = "Updated phasor lesson"
-        updated = browser.put(f"/api/animations/{created['id']}", json={"scene": scene}).json()["animation"]
-        assert updated["revision"] == 2
-        assert browser.delete(f"/api/animations/{created['id']}").json()["ok"] is True
-        assert browser.get("/api/animations").json()["items"] == []
-        unsafe = {"title": "bad", "elements": [{"id": "x", "type": "text", "onclick": "steal()"}]}
-        assert browser.post("/api/animations", json={"scene": unsafe}).status_code == 400
+        assert browser.get("/api/visuals").json()["items"] == []
+        stored = web._db().create_visual("explain RC charging", render)
+        items = browser.get("/api/visuals").json()["items"]
+        assert [item["id"] for item in items] == [stored["id"]]
+        # The board must never receive an upstream file:// handle.
+        assert items[0]["url"] == "/api/showman/objects/videos/abc.mp4"
+        assert "file://" not in browser.get("/api/visuals").text
+
+
+def test_the_legacy_animation_routes_are_retired(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as browser:
+        assert browser.get("/api/animations").status_code == 404
+        assert browser.post("/api/animations", json={"scene": {}}).status_code == 404
 
 
 def test_upload_search_preview_and_delete_stay_in_private_store(tmp_path, monkeypatch):
