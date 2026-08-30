@@ -24,7 +24,8 @@ from .storage import CommandCenterDB, StorageError
 from .capture import CaptureError, capture_workspace as _capture_workspace
 from .workspace import configure_display as _configure_display
 from .ipad_capture import IPAD_CAPTURE, IPadCaptureError
-from .showman import SHOWMAN, ShowmanConnectionError, ShowmanTimeoutError
+from .showman import SHOWMAN, ShowmanConnectionError, ShowmanMissingObject, ShowmanTimeoutError
+from .retention import sweep_if_due
 from .server import (
     alias_frequency,
     bjt_emitter_follower,
@@ -314,13 +315,23 @@ def showman_generate(request: ShowmanGenerateRequest) -> Response:
         raise HTTPException(502, str(exc)) from exc
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(503, str(exc)) from exc
-    return Response(content=json.dumps(_localize_showman_result(result)), status_code=status_code, media_type="application/json")
+    localized = _localize_showman_result(result)
+    if status_code < 400 and isinstance(result.get("video"), dict):
+        # Track it, so a render started here is not mistaken for an orphan and swept.
+        database = _db()
+        try:
+            localized["visualId"] = database.create_visual(brief, result)["id"]
+        except StorageError as exc:
+            raise HTTPException(500, f"render succeeded but could not be recorded: {exc}") from exc
+        sweep_if_due(database, SHOWMAN.data_dir / "objects")
+    return Response(content=json.dumps(localized), status_code=status_code, media_type="application/json")
 
 
 @app.get("/api/showman/objects/{key:path}")
 def showman_object(key: str) -> Response:
     try: data, media_type = SHOWMAN.object_bytes(key)
     except ValueError as exc: raise HTTPException(400, str(exc)) from exc
+    except ShowmanMissingObject as exc: raise HTTPException(404, str(exc)) from exc
     except ShowmanTimeoutError as exc: raise HTTPException(504, str(exc)) from exc
     except RuntimeError as exc: raise HTTPException(502, str(exc)) from exc
     return Response(content=data, media_type=media_type, headers={"Cache-Control": "private, max-age=31536000, immutable"})
@@ -562,8 +573,10 @@ def history() -> dict[str, Any]:
 @app.get("/api/visuals")
 def visuals(problem_id: str = "", limit: int = 50) -> dict[str, Any]:
     """List locally rendered visuals so the board can show what an agent made."""
+    database = _db()
+    sweep_if_due(database, SHOWMAN.data_dir / "objects")
     try:
-        items = _db().list_visuals(problem_id or None, limit)
+        items = database.list_visuals(problem_id or None, limit)
     except StorageError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True, "items": items}

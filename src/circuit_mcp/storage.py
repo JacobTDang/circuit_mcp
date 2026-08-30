@@ -516,6 +516,31 @@ class CommandCenterDB:
             ).fetchall()
         return [_visual(row) for row in rows]
 
+    def expire_unlinked_visuals(self, cutoff: float) -> list[str]:
+        """Soft-delete ad-hoc visuals older than the cutoff and report their keys.
+
+        A visual attached to a problem is exempt: it is the work that cost
+        something, and the clock has no claim on it.
+        """
+        with self.transaction() as connection:
+            rows = connection.execute(
+                "SELECT id,object_key FROM visual_assets "
+                "WHERE deleted_at IS NULL AND problem_id IS NULL AND created_at<?",
+                (float(cutoff),),
+            ).fetchall()
+            if rows:
+                connection.executemany(
+                    "UPDATE visual_assets SET deleted_at=? WHERE id=?",
+                    [(time.time(), row["id"]) for row in rows],
+                )
+        return [row["object_key"] for row in rows]
+
+    def age_visual_for_test(self, identifier: str, created_at: float) -> None:
+        """Backdate one visual. Tests need an old row; nothing else may use this."""
+        with self.transaction() as connection:
+            connection.execute("UPDATE visual_assets SET created_at=? WHERE id=?",
+                               (float(created_at), identifier))
+
     def delete_visual(self, identifier: str) -> None:
         with self.transaction() as connection:
             connection.execute("UPDATE visual_assets SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
