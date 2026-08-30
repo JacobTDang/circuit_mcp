@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import mimetypes
 import os
 import re
@@ -87,6 +88,23 @@ app.mount("/assets", StaticFiles(directory=STATIC), name="assets")
 class ToolRequest(BaseModel):
     arguments: dict[str, Any]
     attempt_id: str | None = None
+
+
+class ShowmanAuthorRequest(BaseModel):
+    brief: str
+
+
+class ShowmanPreviewRequest(BaseModel):
+    spec: dict[str, Any]
+    frame: int = 0
+
+
+class ShowmanRenderRequest(BaseModel):
+    spec: dict[str, Any]
+
+
+class ShowmanGenerateRequest(BaseModel):
+    brief: str
 
 
 class ProblemRequest(BaseModel):
@@ -205,6 +223,82 @@ def status() -> dict[str, Any]:
 def showman_status(start: bool = False) -> dict[str, Any]:
     """Report the local renderer state; optionally start the pinned worker."""
     return SHOWMAN.start() if start else SHOWMAN.status()
+
+
+OFFLINE_AUTHORING = (
+    "The Showman worker has no authoring model configured, so it can only produce "
+    "generic template lessons unrelated to your brief. Set OPENROUTER_API_KEY in .env "
+    "and restart the command center."
+)
+
+
+def _authoring_worker() -> dict[str, Any]:
+    """Return a worker that can actually author the caller's brief, or fail loudly."""
+    state = SHOWMAN.start()
+    if not state.get("ok"):
+        raise HTTPException(503, state.get("error") or "Showman is unavailable")
+    if state.get("authoring") == "offline":
+        raise HTTPException(503, OFFLINE_AUTHORING)
+    return state
+
+
+@app.post("/api/showman/author")
+def showman_author(request: ShowmanAuthorRequest) -> Response:
+    brief = request.brief.strip()
+    if not brief or len(brief) > 20_000:
+        raise HTTPException(400, "brief must contain 1 to 20000 characters")
+    _authoring_worker()
+    try:
+        status_code, result = SHOWMAN.request_json("/author", {"brief": brief}, timeout=120)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return Response(content=json.dumps(result), status_code=status_code, media_type="application/json")
+
+
+@app.post("/api/showman/preview")
+def showman_preview(request: ShowmanPreviewRequest) -> Response:
+    try: png = SHOWMAN.preview(request.spec, request.frame)
+    except ValueError as exc: raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc: raise HTTPException(502, str(exc)) from exc
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+def _localize_showman_result(result: dict[str, Any]) -> dict[str, Any]:
+    localized = dict(result)
+    video = result.get("video")
+    if isinstance(video, dict) and isinstance(video.get("key"), str):
+        localized["video"] = {**video, "url": f"/api/showman/objects/{video['key']}"}
+        localized["videoUrl"] = localized["video"]["url"]
+    return localized
+
+
+@app.post("/api/showman/render")
+def showman_render(request: ShowmanRenderRequest) -> Response:
+    try: status_code, result = SHOWMAN.request_json("/render", {"spec": request.spec}, timeout=600)
+    except (RuntimeError, ValueError) as exc: raise HTTPException(503, str(exc)) from exc
+    return Response(content=json.dumps(_localize_showman_result(result)), status_code=status_code, media_type="application/json")
+
+
+@app.post("/api/showman/generate")
+def showman_generate(request: ShowmanGenerateRequest) -> Response:
+    """Turn one brief into one local video. The brief is never substituted."""
+    brief = request.brief.strip()
+    if not brief or len(brief) > 20_000:
+        raise HTTPException(400, "brief must contain 1 to 20000 characters")
+    _authoring_worker()
+    try:
+        status_code, result = SHOWMAN.request_json("/generate", {"brief": brief}, timeout=600)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return Response(content=json.dumps(_localize_showman_result(result)), status_code=status_code, media_type="application/json")
+
+
+@app.get("/api/showman/objects/{key:path}")
+def showman_object(key: str) -> Response:
+    try: data, media_type = SHOWMAN.object_bytes(key)
+    except ValueError as exc: raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc: raise HTTPException(502, str(exc)) from exc
+    return Response(content=data, media_type=media_type, headers={"Cache-Control": "private, max-age=31536000, immutable"})
 
 
 @app.get("/api/library")
