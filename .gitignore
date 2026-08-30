@@ -8,6 +8,8 @@ venv/
 dist/
 build/
 .DS_Store
+.env
+.env.local
 .local/
 models/
 benchmarks/handwriting/*.png
