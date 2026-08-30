@@ -24,7 +24,7 @@ from .storage import CommandCenterDB, StorageError
 from .capture import CaptureError, capture_workspace as _capture_workspace
 from .workspace import configure_display as _configure_display
 from .ipad_capture import IPAD_CAPTURE, IPadCaptureError
-from .showman import SHOWMAN
+from .showman import SHOWMAN, ShowmanConnectionError, ShowmanTimeoutError
 from .animation_engine import SceneValidationError, validate_scene
 from .server import (
     alias_frequency,
@@ -250,6 +250,10 @@ def showman_author(request: ShowmanAuthorRequest) -> Response:
     _authoring_worker()
     try:
         status_code, result = SHOWMAN.request_json("/author", {"brief": brief}, timeout=120)
+    except ShowmanTimeoutError as exc:
+        raise HTTPException(504, str(exc)) from exc
+    except ShowmanConnectionError as exc:
+        raise HTTPException(502, str(exc)) from exc
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(503, str(exc)) from exc
     return Response(content=json.dumps(result), status_code=status_code, media_type="application/json")
@@ -259,22 +263,44 @@ def showman_author(request: ShowmanAuthorRequest) -> Response:
 def showman_preview(request: ShowmanPreviewRequest) -> Response:
     try: png = SHOWMAN.preview(request.spec, request.frame)
     except ValueError as exc: raise HTTPException(400, str(exc)) from exc
+    except ShowmanTimeoutError as exc: raise HTTPException(504, str(exc)) from exc
     except RuntimeError as exc: raise HTTPException(502, str(exc)) from exc
     return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
+def _localize_object_reference(value: Any) -> Any:
+    """Rewrite every object reference anywhere in a Showman payload to the local proxy.
+
+    Showman's LocalObjectStorage returns a raw upstream URL (a file:// path when
+    no public URL is configured) alongside each object's content-addressed key.
+    That upstream URL must never reach the browser, so any dict carrying a
+    string "key" -- video, captions, poster, or any future artifact, at any
+    nesting depth -- has its "url" replaced with the local proxy path.
+    """
+    if isinstance(value, dict):
+        localized = {field: _localize_object_reference(item) for field, item in value.items()}
+        key = localized.get("key")
+        if isinstance(key, str):
+            localized["url"] = f"/api/showman/objects/{key}"
+        return localized
+    if isinstance(value, list):
+        return [_localize_object_reference(item) for item in value]
+    return value
+
+
 def _localize_showman_result(result: dict[str, Any]) -> dict[str, Any]:
-    localized = dict(result)
-    video = result.get("video")
-    if isinstance(video, dict) and isinstance(video.get("key"), str):
-        localized["video"] = {**video, "url": f"/api/showman/objects/{video['key']}"}
-        localized["videoUrl"] = localized["video"]["url"]
+    localized = _localize_object_reference(result)
+    video = localized.get("video")
+    if isinstance(video, dict) and isinstance(video.get("url"), str):
+        localized["videoUrl"] = video["url"]
     return localized
 
 
 @app.post("/api/showman/render")
 def showman_render(request: ShowmanRenderRequest) -> Response:
     try: status_code, result = SHOWMAN.request_json("/render", {"spec": request.spec}, timeout=600)
+    except ShowmanTimeoutError as exc: raise HTTPException(504, str(exc)) from exc
+    except ShowmanConnectionError as exc: raise HTTPException(502, str(exc)) from exc
     except (RuntimeError, ValueError) as exc: raise HTTPException(503, str(exc)) from exc
     return Response(content=json.dumps(_localize_showman_result(result)), status_code=status_code, media_type="application/json")
 
@@ -288,6 +314,10 @@ def showman_generate(request: ShowmanGenerateRequest) -> Response:
     _authoring_worker()
     try:
         status_code, result = SHOWMAN.request_json("/generate", {"brief": brief}, timeout=600)
+    except ShowmanTimeoutError as exc:
+        raise HTTPException(504, str(exc)) from exc
+    except ShowmanConnectionError as exc:
+        raise HTTPException(502, str(exc)) from exc
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(503, str(exc)) from exc
     return Response(content=json.dumps(_localize_showman_result(result)), status_code=status_code, media_type="application/json")
@@ -297,6 +327,7 @@ def showman_generate(request: ShowmanGenerateRequest) -> Response:
 def showman_object(key: str) -> Response:
     try: data, media_type = SHOWMAN.object_bytes(key)
     except ValueError as exc: raise HTTPException(400, str(exc)) from exc
+    except ShowmanTimeoutError as exc: raise HTTPException(504, str(exc)) from exc
     except RuntimeError as exc: raise HTTPException(502, str(exc)) from exc
     return Response(content=data, media_type=media_type, headers={"Cache-Control": "private, max-age=31536000, immutable"})
 
