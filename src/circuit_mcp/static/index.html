@@ -7,9 +7,9 @@
   <nav><button class="active" data-view="dashboard">desk</button><button data-view="library">notebook</button><button data-view="problems">problem board</button><button data-view="workspace">iPad page</button><button data-view="tools">circuit bench</button></nav>
   <button id="captureGlobal" class="capture-button">snap iPad <kbd>⌘⇧I</kbd></button>
   <div class="local"><i></i> LOCAL · PORT 2300</div>
+  <button id="refresh" class="ghost">REFRESH</button>
 </aside>
 <main>
-  <header><div><p>LOCAL CIRCUIT LEARNING WORKSPACE</p><h1><span class="prompt">›</span> <span id="title">desk</span><span class="cursor"></span></h1></div><button id="refresh" class="ghost">REFRESH</button></header>
   <section id="dashboard" class="view active">
     <div id="workspaceCanvas" class="workspace-canvas" aria-label="Blank command workspace">
       <div id="canvasHint" class="canvas-hint"><span>+</span><p>click blank space to add something</p></div>
@@ -33,5 +33,5 @@
   <section id="tools" class="view">
     <div class="tool-layout"><div class="tool-list" id="toolList"></div><article class="panel runner"><h3 id="toolName">Select a tool</h3><p id="toolHint" class="muted">Parameters are JSON and use the same contract as MCP.</p><textarea id="toolArgs" spellcheck="false">{}</textarea><button id="runTool" class="primary">Run analysis</button><pre id="toolOutput">Results appear here.</pre></article></div>
   </section>
-</main><div id="toast"></div><script src="/assets/app.js?v=canvas-15"></script>
+</main><div id="toast"></div><script src="/assets/app.js?v=canvas-16"></script>
 </body></html>
