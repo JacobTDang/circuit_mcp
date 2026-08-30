@@ -137,6 +137,14 @@ brief before a student sees it. The legacy `animation_scenes` rows are retained
 untouched pending a versioned migration. See the
 [Showman integration scope](docs/SHOWMAN_INTEGRATION.md).
 
+Authoring a lesson from a brief needs an OpenRouter key and a model that can
+emit a valid scene specification. Copy [`.env.example`](.env.example) to `.env`
+and fill it in; `run_ui.py` loads it and the render worker inherits it at spawn.
+Without a key the worker can only produce generic template lessons, so the
+command center refuses to author rather than return one unrelated to the brief.
+Model choice is not incidental — the recorded measurements are in the example
+file.
+
 MCP clients decide when to call tools, so “continuous awareness” means the agent
 takes a fresh frame when asked or periodically during an active tutoring loop;
 the server does not push images into an idle conversation.
