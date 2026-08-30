@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pypdf import PdfReader
@@ -24,7 +24,8 @@ from .storage import CommandCenterDB, StorageError
 from .capture import CaptureError, capture_workspace as _capture_workspace
 from .workspace import configure_display as _configure_display
 from .ipad_capture import IPAD_CAPTURE, IPadCaptureError
-from .showman import SHOWMAN, ShowmanConnectionError, ShowmanMissingObject, ShowmanTimeoutError
+from .showman import (SHOWMAN, ShowmanArtifact, ShowmanConnectionError,
+                      ShowmanMissingObject, ShowmanTimeoutError)
 from .retention import sweep_if_due
 from .server import (
     alias_frequency,
@@ -327,14 +328,39 @@ def showman_generate(request: ShowmanGenerateRequest) -> Response:
     return Response(content=json.dumps(localized), status_code=status_code, media_type="application/json")
 
 
+_RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
+
+
+def _byte_range(header: str | None) -> tuple[int, int | None] | None:
+    """Parse a single byte range. A header we cannot read means serve it whole."""
+    if not header:
+        return None
+    match = _RANGE.match(header.strip())
+    if match is None:
+        return None
+    first, last = match.group(1), match.group(2)
+    if not first:
+        return None if not last else (-int(last), None)
+    return int(first), int(last) if last else None
+
+
 @app.get("/api/showman/objects/{key:path}")
-def showman_object(key: str) -> Response:
-    try: data, media_type = SHOWMAN.object_bytes(key)
+def showman_object(key: str, request: Request) -> Response:
+    """Serve one artifact, honouring byte ranges so a video can be seeked."""
+    try:
+        artifact = SHOWMAN.object_response(key, _byte_range(request.headers.get("range")))
     except ValueError as exc: raise HTTPException(400, str(exc)) from exc
     except ShowmanMissingObject as exc: raise HTTPException(404, str(exc)) from exc
     except ShowmanTimeoutError as exc: raise HTTPException(504, str(exc)) from exc
+    except ShowmanConnectionError as exc: raise HTTPException(502, str(exc)) from exc
     except RuntimeError as exc: raise HTTPException(502, str(exc)) from exc
-    return Response(content=data, media_type=media_type, headers={"Cache-Control": "private, max-age=31536000, immutable"})
+    headers = {"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=31536000, immutable"}
+    if artifact.content_range:
+        headers["Content-Range"] = artifact.content_range
+    if artifact.length is not None:
+        headers["Content-Length"] = str(artifact.length)
+    return StreamingResponse(artifact.chunks, status_code=artifact.status,
+                             media_type=artifact.media_type, headers=headers)
 
 
 @app.get("/api/library")
