@@ -316,3 +316,14 @@ def test_soft_delete_moves_file_to_recoverable_trash(tmp_path, monkeypatch):
         assert browser.delete(f"/api/library/{item['id']}").status_code == 200
         assert not (web.FILES / f"{item['id']}.md").exists()
         assert (web.DATA / "trash" / f"{item['id']}.md").read_bytes() == b"recover me"
+
+
+def test_the_canvas_reconciles_instead_of_rebuilding_every_card(tmp_path, monkeypatch):
+    """Issue #19: recreating a card tears down a playing video and a typed brief."""
+    with client(tmp_path, monkeypatch) as browser:
+        script = browser.get("/assets/app.js").text
+        assert "querySelectorAll('.workspace-item').forEach(x=>x.remove())" not in script, \
+            "a blanket teardown destroys live card state on every render"
+        assert "existing" in script and "keep" in script, "render must reuse elements it already has"
+        # a reused element must not accumulate a second ResizeObserver
+        assert script.count("new ResizeObserver") == 1
