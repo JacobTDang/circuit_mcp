@@ -41,6 +41,10 @@ class ShowmanConnectionError(ShowmanTransportError):
         self.reason = reason
 
 
+class ShowmanMissingObject(ShowmanTransportError):
+    """The worker has no artifact for this key -- expired, swept, or never made."""
+
+
 class ShowmanManager:
     """Own one Showman worker: spawn it, prove it is ours, and report what it can do.
 
@@ -278,6 +282,8 @@ class ShowmanManager:
                 if len(data) > 256 * 1024 * 1024: raise ValueError("artifact exceeds 256 MiB")
                 return data, response.headers.get_content_type()
         except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise ShowmanMissingObject(f"no artifact for {key}") from exc
             raise RuntimeError(f"Showman object failed with status {exc.code}") from exc
         except TimeoutError as exc:
             raise ShowmanTimeoutError(phase, timeout) from exc
