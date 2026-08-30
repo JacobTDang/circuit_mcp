@@ -49,6 +49,34 @@ def test_dashboard_starts_as_a_manual_blank_spatial_workspace(tmp_path, monkeypa
         assert "videoMeta" in app_script
 
 
+def test_page_title_block_is_removed_and_refresh_stays_reachable(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as browser:
+        page = browser.get("/")
+        assert "LOCAL CIRCUIT LEARNING WORKSPACE" not in page.text
+        assert "<header>" not in page.text
+        assert 'id="title"' not in page.text
+        assert "app.js?v=canvas-15" not in page.text
+        aside = page.text.split("<aside>", 1)[1].split("</aside>", 1)[0]
+        assert 'id="refresh"' in aside
+        assert "LOCAL · PORT 2300" in aside
+        app_script = browser.get("/assets/app.js").text
+        assert "$('#title').textContent=names[view]" not in app_script
+        assert "const t=$('#title');if(t)t.textContent=names[view]" in app_script
+        assert "$('#refresh').onclick=refresh" in app_script
+
+
+def test_workspace_canvas_grows_to_contain_its_cards_instead_of_clipping(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as browser:
+        canvas_css = browser.get("/assets/canvas.css").text
+        rule = canvas_css.split(".workspace-canvas{", 1)[1].split("}", 1)[0]
+        assert "overflow:hidden" not in rule
+        assert "205px" not in rule
+        app_script = browser.get("/assets/app.js").text
+        assert "canvas.style.height=''" in app_script
+        assert "maxBottom=Math.max(maxBottom,item.y+el.offsetHeight)" in app_script
+        assert "canvas.style.height=`${maxBottom+40}px`" in app_script
+
+
 def test_app_js_surfaces_upstream_errors_and_guards_optional_fields(tmp_path, monkeypatch):
     with client(tmp_path, monkeypatch) as browser:
         app_script = browser.get("/assets/app.js").text

@@ -1,4 +1,4 @@
-.workspace-canvas{position:relative;min-height:calc(100vh - 205px);overflow:hidden;border:1px solid transparent}
+.workspace-canvas{position:relative;min-height:calc(100vh - 72px - 43px);overflow:visible;border:1px solid transparent}
 .workspace-canvas:focus{outline:0}
 .canvas-hint{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;color:#606461;pointer-events:none;transition:opacity .15s}
 .canvas-hint span{display:grid;place-items:center;width:38px;height:38px;border:1px solid #303331;font:300 24px ui-monospace,SFMono-Regular,Menlo,monospace;margin-bottom:10px}
