@@ -67,7 +67,9 @@ def test_render_urls_are_rewritten_to_the_local_proxy(monkeypatch):
     monkeypatch.setattr(web.SHOWMAN, "request_json", lambda path, payload, timeout: (
         200, {"video": {"key": "video/abc.mp4", "url": "http://127.0.0.1/private"}}
     ))
-    monkeypatch.setattr(web.SHOWMAN, "object_bytes", lambda key: (b"video", "video/mp4"))
+    monkeypatch.setattr(web.SHOWMAN, "object_response",
+                        lambda key, byte_range=None, timeout=30: web.ShowmanArtifact(
+                            200, "video/mp4", iter([b"video"]), 5, None, 5))
     client = TestClient(web.app, headers={"host": "localhost:2300"})
     rendered = client.post("/api/showman/render", json={"spec": {"title": "RC"}})
     assert rendered.json()["videoUrl"] == "/api/showman/objects/video/abc.mp4"
@@ -243,10 +245,10 @@ def test_object_route_maps_a_showman_timeout_to_504(monkeypatch):
     from circuit_mcp import web
     from fastapi.testclient import TestClient
 
-    def _raise_timeout(key, timeout=30):
+    def _raise_timeout(key, byte_range=None, timeout=30):
         raise ShowmanTimeoutError(f"GET /objects/{key}", timeout)
 
-    monkeypatch.setattr(web.SHOWMAN, "object_bytes", _raise_timeout)
+    monkeypatch.setattr(web.SHOWMAN, "object_response", _raise_timeout)
     client = TestClient(web.app, headers={"host": "localhost:2300"})
 
     response = client.get("/api/showman/objects/videos/a.mp4")

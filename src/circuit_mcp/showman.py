@@ -10,7 +10,8 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,18 @@ class ShowmanConnectionError(ShowmanTransportError):
         super().__init__(f"Showman worker connection was lost during {phase}: {reason}")
         self.phase = phase
         self.reason = reason
+
+
+@dataclass
+class ShowmanArtifact:
+    """One artifact response, streamed rather than held in memory."""
+
+    status: int
+    media_type: str
+    chunks: Iterator[bytes]
+    length: int | None
+    content_range: str | None
+    total: int | None
 
 
 class ShowmanMissingObject(ShowmanTransportError):
@@ -290,6 +303,42 @@ class ShowmanManager:
         except OSError as exc:
             raise ShowmanConnectionError(phase, str(exc)) from exc
 
+    def object_response(self, key: str, byte_range: tuple[int, int | None] | None = None,
+                        timeout: float = 30) -> ShowmanArtifact:
+        """Fetch an artifact, forwarding a byte range and streaming the body.
+
+        A video element seeks by range; answering 200 with the whole file makes
+        seeking a full re-download. Streaming also keeps a 200 MB render out of
+        this process's memory.
+        """
+        if not OBJECT_KEY.fullmatch(key) or ".." in key.split("/"):
+            raise ValueError("invalid Showman object key")
+        if not self.start().get("ok"):
+            raise RuntimeError(self._last_error or "Showman is unavailable")
+        request = urllib.request.Request(f"{self.base_url}/objects/{key}")
+        if byte_range is not None:
+            start, end = byte_range
+            request.add_header("Range", f"bytes={start}-{'' if end is None else end}")
+        try:
+            response = urllib.request.urlopen(request, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise ShowmanMissingObject(f"no artifact for {key}") from exc
+            if exc.code == 416:
+                return ShowmanArtifact(416, exc.headers.get_content_type(), iter([b""]), 0,
+                                       exc.headers.get("Content-Range"), None)
+            raise RuntimeError(f"Showman object failed with status {exc.code}") from exc
+        except TimeoutError as exc:
+            raise ShowmanTimeoutError(f"Showman did not serve {key} within {timeout:g}s") from exc
+        except OSError as exc:
+            raise ShowmanConnectionError(f"Showman connection failed for {key}: {exc}") from exc
+        length = response.headers.get("Content-Length")
+        return ShowmanArtifact(
+            response.status, response.headers.get_content_type(),
+            _drain(response), int(length) if length is not None else None,
+            response.headers.get("Content-Range"), None,
+        )
+
     def preview(self, spec: dict[str, Any], frame: int = 0, timeout: float = 30) -> bytes:
         """Render one bounded local preview frame without accepting an upstream URL."""
         if frame < 0 or frame > 1_000_000:
@@ -315,6 +364,15 @@ class ShowmanManager:
             raise ShowmanTimeoutError(phase, timeout) from exc
         except OSError as exc:
             raise ShowmanConnectionError(phase, str(exc)) from exc
+
+
+def _drain(response: Any, chunk: int = 256 * 1024) -> Iterator[bytes]:
+    """Yield the body in bounded pieces and always close the connection."""
+    try:
+        while data := response.read(chunk):
+            yield data
+    finally:
+        response.close()
 
 
 SHOWMAN = ShowmanManager()
