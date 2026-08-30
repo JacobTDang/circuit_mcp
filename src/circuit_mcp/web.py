@@ -25,7 +25,6 @@ from .capture import CaptureError, capture_workspace as _capture_workspace
 from .workspace import configure_display as _configure_display
 from .ipad_capture import IPAD_CAPTURE, IPadCaptureError
 from .showman import SHOWMAN, ShowmanConnectionError, ShowmanTimeoutError
-from .animation_engine import SceneValidationError, validate_scene
 from .server import (
     alias_frequency,
     bjt_emitter_follower,
@@ -144,11 +143,6 @@ class DisplayRequest(BaseModel):
 
 class SourceRequest(BaseModel):
     source: str = "auto"
-
-
-class AnimationRequest(BaseModel):
-    scene: dict[str, Any]
-    problem_id: str | None = None
 
 
 def _db() -> CommandCenterDB:
@@ -565,37 +559,14 @@ def history() -> dict[str, Any]:
     return {"ok": True, "events": _db().events(100)}
 
 
-@app.get("/api/animations")
-def animations(updated_after: float = 0) -> dict[str, Any]:
-    return {"ok": True, "items": _db().list_animations(updated_after)}
-
-
-@app.get("/api/animations/{identifier}")
-def animation(identifier: str) -> dict[str, Any]:
-    try: return {"ok": True, "animation": _db().get_animation(identifier)}
-    except StorageError as exc: raise HTTPException(404, str(exc)) from exc
-
-
-@app.post("/api/animations")
-def create_animation(request: AnimationRequest) -> dict[str, Any]:
-    try: item = _db().create_animation(validate_scene(request.scene), request.problem_id)
-    except (StorageError, SceneValidationError) as exc: raise HTTPException(400, str(exc)) from exc
-    _record("animation_create", item["title"], True, "animation", item["id"])
-    return {"ok": True, "animation": item}
-
-
-@app.put("/api/animations/{identifier}")
-def update_animation(identifier: str, request: AnimationRequest) -> dict[str, Any]:
-    try: item = _db().update_animation(identifier, validate_scene(request.scene))
-    except (StorageError, SceneValidationError) as exc: raise HTTPException(400, str(exc)) from exc
-    return {"ok": True, "animation": item}
-
-
-@app.delete("/api/animations/{identifier}")
-def delete_animation(identifier: str) -> dict[str, Any]:
-    try: _db().delete_animation(identifier)
-    except StorageError as exc: raise HTTPException(404, str(exc)) from exc
-    return {"ok": True, "id": identifier}
+@app.get("/api/visuals")
+def visuals(problem_id: str = "", limit: int = 50) -> dict[str, Any]:
+    """List locally rendered visuals so the board can show what an agent made."""
+    try:
+        items = _db().list_visuals(problem_id or None, limit)
+    except StorageError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "items": items}
 
 
 @app.get("/api/problems")

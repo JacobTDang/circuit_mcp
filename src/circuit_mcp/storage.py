@@ -37,6 +37,22 @@ def default_data_dir() -> Path:
     return Path(os.environ.get("CIRCUIT_MCP_DATA_DIR", root / ".local" / "command_center")).expanduser().resolve()
 
 
+def _number(value: Any) -> float | None:
+    """Keep only finite numbers; a renderer that reports nonsense stores nothing."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def _visual(row: Any) -> dict[str, Any]:
+    """Serve an artifact through the local proxy; an upstream URL never leaves storage."""
+    item = dict(row)
+    item["spec"] = json.loads(item.pop("spec_json"))
+    item["provenance"] = json.loads(item.pop("provenance_json"))
+    item["url"] = f"/api/showman/objects/{item['object_key']}"
+    return item
+
+
 class CommandCenterDB:
     def __init__(self, path: Path | None = None):
         self.path = (path or default_data_dir() / "circuit_mcp.sqlite3").resolve()
@@ -151,6 +167,16 @@ class CommandCenterDB:
                 );
                 CREATE INDEX IF NOT EXISTS animation_scenes_updated
                     ON animation_scenes(course_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS visual_assets (
+                    id TEXT PRIMARY KEY, course_id TEXT NOT NULL REFERENCES courses(id),
+                    problem_id TEXT REFERENCES problems(id) ON DELETE SET NULL,
+                    brief TEXT NOT NULL, object_key TEXT NOT NULL, spec_json TEXT NOT NULL,
+                    duration_sec REAL, fps REAL, width INTEGER, height INTEGER,
+                    provenance_json TEXT NOT NULL,
+                    created_at REAL NOT NULL, deleted_at REAL
+                );
+                CREATE INDEX IF NOT EXISTS visual_assets_created
+                    ON visual_assets(course_id, created_at DESC);
                 """
             )
             checksum = hashlib.sha256(b"command-center-schema-v1").hexdigest()
@@ -443,6 +469,59 @@ class CommandCenterDB:
             connection.execute("UPDATE animation_scenes SET deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL",
                                (time.time(), time.time(), identifier))
             if connection.execute("SELECT changes()").fetchone()[0] != 1: raise StorageError("animation not found")
+
+    # -- Showman-rendered visuals ------------------------------------------
+
+    def create_visual(self, brief: str, render: dict[str, Any],
+                      problem_id: str | None = None) -> dict[str, Any]:
+        """Record one rendered visual. A render with no artifact never becomes a row."""
+        video = render.get("video")
+        key = video.get("key") if isinstance(video, dict) else None
+        if not isinstance(key, str) or not key:
+            raise StorageError("render carries no object key")
+        if problem_id:
+            self.get_problem(problem_id)
+        identifier, now = uuid.uuid4().hex, time.time()
+        with self.transaction() as connection:
+            connection.execute(
+                "INSERT INTO visual_assets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NULL)",
+                (identifier, COURSE_ID, problem_id, brief, key,
+                 json.dumps(render.get("spec") or {}, separators=(",", ":"), ensure_ascii=False),
+                 _number(render.get("durationSec")), _number(render.get("fps")),
+                 _number(render.get("width")), _number(render.get("height")),
+                 json.dumps(render.get("provenance") or {}, separators=(",", ":"), ensure_ascii=False),
+                 now),
+            )
+        return self.get_visual(identifier)
+
+    def get_visual(self, identifier: str) -> dict[str, Any]:
+        if not UUID_RE.fullmatch(identifier):
+            raise StorageError("visual not found")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM visual_assets WHERE id=? AND deleted_at IS NULL", (identifier,)
+            ).fetchone()
+        if row is None:
+            raise StorageError("visual not found")
+        return _visual(row)
+
+    def list_visuals(self, problem_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        clause = " AND problem_id=?" if problem_id else ""
+        parameters: tuple[Any, ...] = (COURSE_ID, problem_id) if problem_id else (COURSE_ID,)
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM visual_assets WHERE course_id=?" + clause
+                + " AND deleted_at IS NULL ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                (*parameters, max(1, min(int(limit), 200))),
+            ).fetchall()
+        return [_visual(row) for row in rows]
+
+    def delete_visual(self, identifier: str) -> None:
+        with self.transaction() as connection:
+            connection.execute("UPDATE visual_assets SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
+                               (time.time(), identifier))
+            if connection.execute("SELECT changes()").fetchone()[0] != 1:
+                raise StorageError("visual not found")
 
     def get_problem(self, identifier: str) -> dict[str, Any]:
         with self._connect() as connection:

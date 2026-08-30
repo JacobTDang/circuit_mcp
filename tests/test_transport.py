@@ -42,12 +42,6 @@ async def _exercise_server(data_dir: Path) -> None:
 
             tools = await session.list_tools()
             assert {tool.name for tool in tools.tools} == {
-                "animation_create",
-                "animation_list",
-                "animation_update",
-                "animation_delete",
-                "animation_from_template",
-                "animation_list_templates",
                 "derive",
                 "check_equivalence",
                 "check_derivation",
@@ -70,6 +64,11 @@ async def _exercise_server(data_dir: Path) -> None:
                 "spectrum_metrics",
                 "quantize",
                 "opamp_limits",
+                "visual_status",
+                "visual_generate",
+                "visual_list",
+                "visual_get",
+                "visual_preview",
                 "import_waveform_csv",
                 "instrument_status",
                 "instrument_query",
@@ -93,17 +92,15 @@ async def _exercise_server(data_dir: Path) -> None:
                 "problem_tag",
             }
 
-            visual = await session.call_tool("animation_create", {"scene": {
-                "title": "RC charging",
-                "elements": [
-                    {"id": "r1", "type": "resistor", "x": 120, "y": 150},
-                    {"id": "c1", "type": "capacitor", "x": 360, "y": 150},
-                ],
-                "steps": [{"at_ms": 0, "caption": "Current begins flowing."}],
-            }})
-            assert visual.is_error is False
-            assert visual.structured_content["ok"] is True
-            assert visual.structured_content["board_action"] == "spawn"
+            # Reachable without a renderer: both report honestly instead of pretending.
+            renderer = await session.call_tool("visual_status", {})
+            assert renderer.is_error is False
+            assert renderer.structured_content["ok"] is True
+            assert isinstance(renderer.structured_content["can_author"], bool)
+
+            visuals = await session.call_tool("visual_list", {})
+            assert visuals.is_error is False
+            assert visuals.structured_content["items"] == []
 
             derived = await session.call_tool(
                 "derive",
