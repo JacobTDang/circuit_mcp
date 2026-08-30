@@ -13,7 +13,7 @@ import urllib.request
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WORKER_SCRIPT = Path("dist") / "service" / "worker.js"
@@ -110,6 +110,11 @@ class ShowmanManager:
         return "offline"
 
     @property
+    def log_path(self) -> Path:
+        """Where the worker's own output goes; discarding it makes an incident undiagnosable."""
+        return self.data_dir / f"worker-{self.port}.log"
+
+    @property
     def _identity_path(self) -> Path:
         return self.data_dir / f"worker-{self.port}.json"
 
@@ -204,10 +209,15 @@ class ShowmanManager:
             env = {**os.environ, "PORT": str(self.port), "SHOWMAN_HOST": "127.0.0.1",
                    "SHOWMAN_DATA_DIR": str(self.data_dir)}
             self.data_dir.mkdir(parents=True, exist_ok=True)
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            if self.log_path.exists() and self.log_path.stat().st_size > 4 * 1024 * 1024:
+                self.log_path.unlink()  # bounded: one rollover, never an unbounded file
+            log = self.log_path.open("ab")
             process = subprocess.Popen(
                 ["node", str(WORKER_SCRIPT)], cwd=self.root, env=env,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                stdout=log, stderr=log, start_new_session=True,
             )
+            log.close()
             self.process = process
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
@@ -257,6 +267,33 @@ class ShowmanManager:
             "error": "" if (running and identity) else self._last_error,
         }
 
+    def _within(self, budget: float, label: str, work: Callable[[], Any]) -> Any:
+        """Run one upstream call under a wall-clock budget.
+
+        ``urlopen``'s own timeout bounds each socket operation, not the request,
+        so a worker that keeps answering is never cut off -- a generate was seen
+        running 968 s against a nominal 600 s. Running the call on a daemon
+        thread and joining for the budget makes the bound real. The thread is
+        left to unwind on its own socket timeout; it holds nothing this process
+        needs, and it cannot outlive the interpreter.
+        """
+        box: dict[str, Any] = {}
+
+        def run() -> None:
+            try:
+                box["value"] = work()
+            except BaseException as exc:  # re-raised on the calling thread
+                box["error"] = exc
+
+        worker = threading.Thread(target=run, name=f"showman{label}", daemon=True)
+        worker.start()
+        worker.join(budget)
+        if worker.is_alive():
+            raise ShowmanTimeoutError(label, budget)
+        if "error" in box:
+            raise box["error"]
+        return box["value"]
+
     def request_json(self, path: str, payload: dict[str, Any], timeout: float = 30) -> tuple[int, dict[str, Any]]:
         """Send bounded JSON to one fixed worker capability path."""
         if path not in {"/author", "/validate", "/assemble", "/build", "/generate", "/render"}:
@@ -271,9 +308,12 @@ class ShowmanManager:
             headers={"Content-Type": "application/json"}, method="POST",
         )
         phase = f"POST {path}"
-        try:
+        def call() -> tuple[int, dict[str, Any]]:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return response.status, json.load(response)
+
+        try:
+            return self._within(timeout, f"POST {path}", call)
         except urllib.error.HTTPError as exc:
             try: body = json.load(exc)
             except (ValueError, OSError): body = {"error": "showman_request_failed"}
