@@ -68,6 +68,14 @@ def test_app_js_preserves_typed_briefs_without_a_document_wide_observer(tmp_path
         assert "hydrateVisualCards()" in app_script
 
 
+def test_app_js_persists_typed_briefs_before_generate_is_clicked(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        assert "addEventListener('input',event=>{const brief=event.target.closest('.visual-brief')" in app_script
+        assert "item.brief=brief.value;saveCanvas()" in app_script
+        assert "setTimeout(()=>{item.brief=brief.value;saveCanvas()},300)" in app_script
+
+
 def test_legacy_animation_assets_are_not_loaded_by_the_workspace(tmp_path, monkeypatch):
     with client(tmp_path, monkeypatch) as browser:
         page = browser.get("/")
