@@ -133,8 +133,9 @@ The former browser SVG renderer has been retired, and with it the legacy
 `animation_*` tools that drove it. Showman is pinned under `vendor/showman` and
 renders locally: `visual_generate` turns a brief into an MP4, and
 `visual_preview` returns a still frame so a visual can be checked against its
-brief before a student sees it. The legacy `animation_scenes` rows are retained
-untouched pending a versioned migration. See the
+brief before a student sees it. The legacy `animation_scenes` table is gone:
+schema migration 2 archived its rows to `.local/command_center/archive/` as JSON
+before dropping it. See the
 [Showman integration scope](docs/SHOWMAN_INTEGRATION.md).
 
 Authoring a lesson from a brief needs an OpenRouter key and a model that can

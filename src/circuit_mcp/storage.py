@@ -16,14 +16,15 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 
 class StorageError(ValueError):
     """A bounded repository operation could not be completed."""
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+BASELINE_VERSION = 1
 COURSE_ID = "circuits"
 COURSE_CODE = "CIRCUITS"
 CATEGORIES = {"homework", "lecture", "reference", "solution"}
@@ -53,9 +54,77 @@ def _visual(row: Any) -> dict[str, Any]:
     return item
 
 
+def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
+    return connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone() is not None
+
+
+def _archive_rows(destination: Path, table: str, rows: list[dict[str, Any]]) -> Path:
+    """Write rows beside the destination and flush them, returning the partial file.
+
+    The caller promotes it only once it verifies, so a half-written copy never
+    carries a name someone would later restore from.
+    """
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    partial = destination.with_name(destination.name + ".partial")
+    payload = json.dumps({"table": table, "archived_at": time.time(), "rows": rows},
+                         indent=2, ensure_ascii=False)
+    with open(partial, "w", encoding="utf-8") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return partial
+
+
+def _verify_archive(destination: Path, table: str, rows: list[dict[str, Any]]) -> None:
+    """Read the archive back off disk and compare it to what the table held.
+
+    The check deliberately does not trust the write that just happened: an
+    irreversible drop is only worth running against a copy that a separate read
+    can reproduce.
+    """
+    try:
+        stored = json.loads(destination.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise StorageError(f"archive of {table} could not be read back: {exc}") from exc
+    if stored.get("table") != table or stored.get("rows") != rows:
+        raise StorageError(f"archive of {table} does not match the rows it was written from")
+
+
+def _drop_animation_scenes(db: CommandCenterDB, connection: sqlite3.Connection) -> None:
+    """Retire the browser-SVG scene table, keeping its rows as JSON.
+
+    The scenes are a circuit-specific DSL of absolute coordinates and explicit
+    paths. Nothing has read them since the ``animation_*`` tools were removed,
+    and Showman lays out its own geometry, so a mechanical translation would
+    silently relocate the drawing. They leave as an archive, not as a conversion.
+    """
+    if not _table_exists(connection, "animation_scenes"):
+        return
+    rows = [dict(row) for row in connection.execute(
+        "SELECT * FROM animation_scenes ORDER BY created_at")]
+    if rows:
+        destination = db.archive_dir / f"animation_scenes-{time.strftime('%Y%m%d-%H%M%S')}.json"
+        partial = _archive_rows(destination, "animation_scenes", rows)
+        _verify_archive(partial, "animation_scenes", rows)
+        os.replace(partial, destination)
+    connection.execute("DROP TABLE animation_scenes")
+
+
+MIGRATIONS: tuple[tuple[int, str, Callable[[CommandCenterDB, sqlite3.Connection], None]], ...] = (
+    (2, "drop legacy animation_scenes", _drop_animation_scenes),
+)
+
+
 class CommandCenterDB:
     def __init__(self, path: Path | None = None):
         self.path = (path or default_data_dir() / "circuit_mcp.sqlite3").resolve()
+
+    @property
+    def archive_dir(self) -> Path:
+        """Where a migration puts data it is about to make unreachable."""
+        return self.path.parent / "archive"
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -81,6 +150,21 @@ class CommandCenterDB:
             connection.close()
 
     def prepare(self, index_path: Path | None = None, history_path: Path | None = None) -> dict[str, Any]:
+        """Bring the store to ``SCHEMA_VERSION``. Safe to call on every request.
+
+        The baseline builds whatever is missing, the versioned steps then carry
+        an older store forward, and only then is the course table consolidated --
+        a step may drop a table the consolidation would otherwise have to know
+        about.
+        """
+        self._create_baseline()
+        self._apply_migrations()
+        self._consolidate_courses()
+        migrated = self._migrate_legacy(index_path, history_path)
+        return {"ok": True, "path": str(self.path), "schema_version": SCHEMA_VERSION, **migrated}
+
+    def _create_baseline(self) -> None:
+        """Create every table the current code expects, and stamp the baseline."""
         with self.transaction() as connection:
             connection.executescript(
                 """
@@ -158,15 +242,6 @@ class CommandCenterDB:
                     created_at REAL NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS events_created ON events(created_at DESC);
-                CREATE TABLE IF NOT EXISTS animation_scenes (
-                    id TEXT PRIMARY KEY, course_id TEXT NOT NULL REFERENCES courses(id),
-                    problem_id TEXT REFERENCES problems(id) ON DELETE SET NULL,
-                    title TEXT NOT NULL, scene_json TEXT NOT NULL,
-                    revision INTEGER NOT NULL, created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL, deleted_at REAL
-                );
-                CREATE INDEX IF NOT EXISTS animation_scenes_updated
-                    ON animation_scenes(course_id, updated_at DESC);
                 CREATE TABLE IF NOT EXISTS visual_assets (
                     id TEXT PRIMARY KEY, course_id TEXT NOT NULL REFERENCES courses(id),
                     problem_id TEXT REFERENCES problems(id) ON DELETE SET NULL,
@@ -182,19 +257,44 @@ class CommandCenterDB:
             checksum = hashlib.sha256(b"command-center-schema-v1").hexdigest()
             connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations VALUES(?, ?, ?, ?)",
-                (SCHEMA_VERSION, "initial command-center schema", checksum, time.time()),
+                (BASELINE_VERSION, "initial command-center schema", checksum, time.time()),
             )
             connection.execute(
                 "INSERT OR IGNORE INTO courses(id, code, title, institution, term, created_at) VALUES(?,?,?,?,?,?)",
                 (COURSE_ID, COURSE_CODE, "Circuit Learning Workspace", "Local", None, time.time()),
             )
+
+    def _apply_migrations(self) -> None:
+        """Run the pending steps in order, each with its own stamp.
+
+        Forward-only: a step raises rather than half-applying, leaving the store
+        at the last version that committed, and ``prepare()`` fails loudly rather
+        than serving a partially migrated database. The version is re-read inside
+        the write transaction, so a second process that was waiting on the lock
+        does not run a step the first one just finished.
+        """
+        with self._connect() as connection:
+            applied = {int(row[0]) for row in connection.execute("SELECT version FROM schema_migrations")}
+        for version, name, step in MIGRATIONS:
+            if version in applied:
+                continue
+            with self.transaction() as connection:
+                if connection.execute("SELECT 1 FROM schema_migrations WHERE version=?", (version,)).fetchone():
+                    continue
+                step(self, connection)
+                connection.execute(
+                    "INSERT INTO schema_migrations VALUES(?, ?, ?, ?)",
+                    (version, name, hashlib.sha256(f"{version}:{name}".encode()).hexdigest(), time.time()),
+                )
+
+    def _consolidate_courses(self) -> None:
+        """One workspace, one course. Anything filed under another is moved here."""
+        with self.transaction() as connection:
             legacy = connection.execute("SELECT id FROM courses WHERE id<>?", (COURSE_ID,)).fetchall()
             for row in legacy:
-                for table in ("documents", "problems", "animation_scenes"):
+                for table in ("documents", "problems", "visual_assets"):
                     connection.execute(f"UPDATE {table} SET course_id=? WHERE course_id=?", (COURSE_ID, row["id"]))
                 connection.execute("DELETE FROM courses WHERE id=?", (row["id"],))
-        migrated = self._migrate_legacy(index_path, history_path)
-        return {"ok": True, "path": str(self.path), "schema_version": SCHEMA_VERSION, **migrated}
 
     def _migrate_legacy(self, index_path: Path | None, history_path: Path | None) -> dict[str, int]:
         with self._connect() as connection:
@@ -423,52 +523,6 @@ class CommandCenterDB:
                  status, source_page, now, now),
             )
         return self.get_problem(identifier)
-
-    def create_animation(self, scene: dict[str, Any], problem_id: str | None = None) -> dict[str, Any]:
-        if problem_id: self.get_problem(problem_id)
-        identifier, now = uuid.uuid4().hex, time.time()
-        payload = json.dumps(scene, separators=(",", ":"), ensure_ascii=False)
-        with self.transaction() as connection:
-            connection.execute(
-                "INSERT INTO animation_scenes VALUES(?,?,?,?,?,?,?,?,NULL)",
-                (identifier, COURSE_ID, problem_id, scene["title"], payload, 1, now, now),
-            )
-        return self.get_animation(identifier)
-
-    def get_animation(self, identifier: str) -> dict[str, Any]:
-        if not UUID_RE.fullmatch(identifier): raise StorageError("animation not found")
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT * FROM animation_scenes WHERE id=? AND deleted_at IS NULL", (identifier,)
-            ).fetchone()
-        if row is None: raise StorageError("animation not found")
-        result = dict(row); result["scene"] = json.loads(result.pop("scene_json")); return result
-
-    def list_animations(self, updated_after: float = 0, limit: int = 100) -> list[dict[str, Any]]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT * FROM animation_scenes WHERE course_id=? AND deleted_at IS NULL AND updated_at>? ORDER BY updated_at DESC LIMIT ?",
-                (COURSE_ID, float(updated_after), max(1, min(int(limit), 200))),
-            ).fetchall()
-        results = []
-        for row in rows:
-            item = dict(row); item["scene"] = json.loads(item.pop("scene_json")); results.append(item)
-        return results
-
-    def update_animation(self, identifier: str, scene: dict[str, Any]) -> dict[str, Any]:
-        with self.transaction() as connection:
-            connection.execute(
-                "UPDATE animation_scenes SET title=?,scene_json=?,revision=revision+1,updated_at=? WHERE id=? AND deleted_at IS NULL",
-                (scene["title"], json.dumps(scene, separators=(",", ":"), ensure_ascii=False), time.time(), identifier),
-            )
-            if connection.execute("SELECT changes()").fetchone()[0] != 1: raise StorageError("animation not found")
-        return self.get_animation(identifier)
-
-    def delete_animation(self, identifier: str) -> None:
-        with self.transaction() as connection:
-            connection.execute("UPDATE animation_scenes SET deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL",
-                               (time.time(), time.time(), identifier))
-            if connection.execute("SELECT changes()").fetchone()[0] != 1: raise StorageError("animation not found")
 
     # -- Showman-rendered visuals ------------------------------------------
 
