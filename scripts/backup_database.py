@@ -16,9 +16,12 @@ def main() -> None:
     data = default_data_dir()
     destination = args.destination or data / "backups" / time.strftime("circuit-mcp-%Y%m%d-%H%M%S.sqlite3")
     database = CommandCenterDB(data / "circuit_mcp.sqlite3")
+    # Copy first: prepare() applies pending schema migrations, and a backup taken
+    # after one has run is no longer a way back from it.
+    backup = database.backup(destination)
     database.prepare(data / "library.json", data / "history.jsonl")
-    print(json.dumps({"database": database.integrity(), "files": database.audit_files(),
-                      "backup": database.backup(destination)}, indent=2))
+    print(json.dumps({"backup": backup, "database": database.integrity(),
+                      "files": database.audit_files()}, indent=2))
 
 
 if __name__ == "__main__":

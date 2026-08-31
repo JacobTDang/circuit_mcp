@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from circuit_mcp.storage import CommandCenterDB, StorageError
+from circuit_mcp.storage import SCHEMA_VERSION, CommandCenterDB, StorageError
 
 
 def database(tmp_path):
@@ -37,7 +37,8 @@ def test_schema_pragmas_course_and_integrity(tmp_path):
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 0
         assert connection.execute("SELECT code FROM courses").fetchone()[0] == "CIRCUITS"
-        assert connection.execute("SELECT version FROM schema_migrations").fetchone()[0] == 1
+        versions = [row[0] for row in connection.execute("SELECT version FROM schema_migrations ORDER BY version")]
+    assert versions == list(range(1, SCHEMA_VERSION + 1))
     assert db.integrity() == {"ok": True, "integrity_check": "ok", "foreign_key_violations": []}
 
 

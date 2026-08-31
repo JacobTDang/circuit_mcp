@@ -1,7 +1,8 @@
 # Showman integration scope
 
 Showman is the sole production animation renderer. The former browser SVG renderer is removed.
-The existing `animation_scenes` rows remain recoverable until migration is complete.
+The `animation_scenes` table has been dropped. Schema migration 2 archives its rows as JSON
+under `archive/` in the data directory and verifies that copy off disk before the drop runs.
 
 ## Runtime boundary
 
