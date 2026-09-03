@@ -92,7 +92,9 @@ def test_app_js_preserves_typed_briefs_without_a_document_wide_observer(tmp_path
     with client(tmp_path, monkeypatch) as browser:
         app_script = browser.get("/assets/app.js").text
         assert "MutationObserver" not in app_script
-        assert "if(item.kind==='visual')return" in app_script
+        # A visual keeps its typed brief and a server card keeps its payload: neither
+        # is rebuilt from state on a status refresh.
+        assert "if(item.kind==='visual'||item.server)return" in app_script
         assert "hydrateVisualCards()" in app_script
 
 
