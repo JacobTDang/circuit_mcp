@@ -65,6 +65,7 @@ from .analysis import (
 )
 from .showman import SHOWMAN
 from .retention import sweep_if_due
+from .cards import CardError, build_card
 from .capture import CaptureError, capture_status as _capture_status
 from .capture import capture_workspace as _capture_workspace
 from .course_metrics import (
@@ -464,7 +465,13 @@ def _problem_tag(problem_id: str, tag: str) -> dict[str, Any]:
     return {"ok": True, "problem": problem}
 
 
+def _build_card(kind: str, title: str, content: Any) -> dict[str, Any]:
+    """Parse, verify, and render one canvas card. Storage happens in the parent."""
+    return {"ok": True, **build_card(kind, title, content)}
+
+
 _IMPLEMENTATIONS = {
+    "build_card": _build_card,
     "derive": _derive,
     "check_equivalence": _check_equivalence,
     "check_derivation": _check_derivation,
@@ -535,6 +542,7 @@ _ERROR_KINDS: tuple[tuple[type[BaseException], str], ...] = (
     (LabDataError, "lab_data_error"),
     (InstrumentError, "instrument_error"),
     (StorageError, "storage_error"),
+    (CardError, "card_refused"),
 )
 
 
@@ -1565,6 +1573,64 @@ def _tool_failure(kind: str, message: str) -> CallToolResult:
     failure = _failure(kind, message)
     return CallToolResult(content=[TextContent(type="text", text=json.dumps(failure))],
                           structured_content=failure)
+
+
+# Canvas cards put the agent's explanation on the board beside the student's
+# work. The words are the agent's; every piece of math is parsed and rendered by
+# the server, and a walkthrough is refused unless each step is a proved equality.
+# Building runs under _guarded like any other SymPy call; only the store is
+# touched from here.
+
+
+@server.tool()
+def canvas_card_add(
+    kind: str, title: str, content: dict[str, Any], problem_id: str | None = None
+) -> dict[str, Any]:
+    """Put one card on the student's canvas. Kinds, and the ``content`` each takes:
+
+    * ``formula`` -- ``{"items": [{"label", "expression"}, ...]}``
+    * ``walkthrough`` -- ``{"truth": expr, "steps": [{"expression", "note"}, ...]}``.
+      Every step is checked: each transition must be an algebraic identity and the
+      last step must equal ``truth``. A card with one bad step is refused, naming
+      the transition (``card_refused``). Substituting a circuit law such as
+      ``I = C*dV_C`` is not an identity -- a walkthrough is the algebra *after*
+      setup, so start a new card at the substituted form.
+    * ``vocabulary`` -- ``{"terms": [{"term", "definition", "expression"?}, ...]}``
+
+    Expressions use the same restricted syntax as ``check_derivation`` and are
+    rendered to MathML by the server; the browser escapes every text field.
+    """
+    built = _guarded("build_card", kind=kind, title=title, content=content)
+    if not built.get("ok"):
+        return built
+    database = _storage()
+    try:
+        card = database.create_card(built["kind"], built["title"], built["payload"], problem_id)
+    except StorageError as exc:
+        return _failure("storage_error", str(exc))
+    database.record_event("canvas_card_add", f"{card['kind']}: {card['title'][:60]}", True,
+                          "canvas_card", card["id"], {"actor": "mcp", "kind": card["kind"]})
+    return {"ok": True, "card": card}
+
+
+@server.tool()
+def canvas_card_list(problem_id: str | None = None, limit: int = 50) -> dict[str, Any]:
+    """Cards currently on the canvas, newest first, optionally for one problem."""
+    try:
+        items = _storage().list_cards(problem_id, limit)
+    except StorageError as exc:
+        return _failure("storage_error", str(exc))
+    return {"ok": True, "items": items}
+
+
+@server.tool()
+def canvas_card_remove(card_id: str) -> dict[str, Any]:
+    """Take one card off the canvas."""
+    try:
+        _storage().delete_card(card_id)
+    except StorageError as exc:
+        return _failure("not_found", str(exc))
+    return {"ok": True, "removed": card_id}
 
 
 @server.tool()
