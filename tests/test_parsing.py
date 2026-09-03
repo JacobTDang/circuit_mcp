@@ -419,3 +419,24 @@ def test_parse_equation_rejects_an_injection_attempt(tmp_path):
     with pytest.raises(ParseError):
         parse_equation("y = " + _write_payload(target))
     assert not os.path.exists(target)
+
+
+# --- display-only parse: the tree keeps the written order --------------------
+
+def test_parse_as_written_keeps_factor_and_term_order():
+    from circuit_mcp.parsing import parse_as_written
+
+    tree = parse_as_written("R*C")
+    assert [str(a) for a in tree.args] == ["R", "C"]
+    tree = parse_as_written("x^2 - 2*x + 1")
+    assert [str(a) for a in tree.args][0] == "x**2"
+    assert str(tree.args[-1]) == "1"
+
+
+def test_parse_as_written_runs_the_same_screen_as_the_checker():
+    from circuit_mcp.parsing import ParseError, parse_as_written
+
+    with pytest.raises(ParseError):
+        parse_as_written("R.__class__")
+    with pytest.raises(ParseError):
+        parse_as_written("")

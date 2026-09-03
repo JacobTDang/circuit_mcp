@@ -173,3 +173,53 @@ def test_online_backup_is_integral_and_restorable(tmp_path):
     assert restored.get_document(document["id"])["name"] == "backup.md"
     with pytest.raises(StorageError):
         db.backup(db.path)
+
+
+# --- canvas cards -------------------------------------------------------------
+
+def _card(db, kind="formula", title="RC", problem_id=None):
+    return db.create_card(kind, title, {"items": [{"label": "tau", "expression": "R*C",
+                                                  "mathml": "<math>x</math>"}]}, problem_id)
+
+
+def test_a_card_round_trips_with_its_payload_intact(tmp_path):
+    db, _ = database(tmp_path)
+    created = _card(db)
+    fetched = db.get_card(created["id"])
+    assert fetched["kind"] == "formula" and fetched["title"] == "RC"
+    assert fetched["payload"]["items"][0]["mathml"] == "<math>x</math>"
+    assert fetched["problem_id"] is None
+    assert "payload_json" not in fetched
+
+
+def test_cards_list_newest_first_and_optionally_by_problem(tmp_path):
+    db, _ = database(tmp_path)
+    problem = db.create_problem("RC", "rc", "find tau")
+    _card(db, title="first")
+    time.sleep(0.01)
+    linked = _card(db, title="second", problem_id=problem["id"])
+    assert [c["title"] for c in db.list_cards()] == ["second", "first"]
+    assert [c["id"] for c in db.list_cards(problem_id=problem["id"])] == [linked["id"]]
+
+
+def test_a_card_for_an_unknown_problem_is_refused(tmp_path):
+    db, _ = database(tmp_path)
+    with pytest.raises(StorageError):
+        _card(db, problem_id="f" * 32)
+
+
+def test_deleting_a_card_hides_it_and_a_second_delete_is_an_error(tmp_path):
+    db, _ = database(tmp_path)
+    card = _card(db)
+    db.delete_card(card["id"])
+    assert db.list_cards() == []
+    with pytest.raises(StorageError, match="not found"):
+        db.get_card(card["id"])
+    with pytest.raises(StorageError, match="not found"):
+        db.delete_card(card["id"])
+
+
+def test_a_card_kind_outside_the_known_set_is_refused_at_the_store(tmp_path):
+    db, _ = database(tmp_path)
+    with pytest.raises(StorageError, match="kind"):
+        db.create_card("diagram", "t", {"items": []})

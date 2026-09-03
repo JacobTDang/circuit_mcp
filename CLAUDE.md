@@ -21,6 +21,14 @@ their iPad:
 8. Explain the first divergence and the relevant principle. Do not replace the
    student's derivation with a complete worked solution unless they explicitly
    ask for that.
+9. When an explanation would land better on the desk than in chat, use
+   `canvas_card_add`: a `formula` card for the equations in play, a
+   `vocabulary` card for terms, and a `walkthrough` card for the algebra --
+   ordered steps in the restricted syntax with a short note on each. A
+   walkthrough is verified step by step and refused if any transition is not an
+   identity; a circuit-law substitution such as `I = C*dV_C` is not one, so
+   start a new card at the substituted form. Write the words as text, never
+   markup; the server renders the math.
 
 When the user has already attached or uploaded a privacy-scoped image, skip
 steps 1–3: do not require a workspace configuration and do not capture the
