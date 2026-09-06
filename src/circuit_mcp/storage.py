@@ -30,6 +30,7 @@ CATEGORIES = {"homework", "lecture", "reference", "solution"}
 STATUSES = {"draft", "confirmed", "solved", "needs_review"}
 ATTEMPT_STATUSES = {"working", "correct", "incorrect", "partial", "gap"}
 UUID_RE = re.compile(r"^[0-9a-f]{32}$")
+CARD_KINDS = ("formula", "walkthrough", "vocabulary")
 
 
 def default_data_dir() -> Path:
@@ -42,6 +43,12 @@ def _number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value) if math.isfinite(value) else None
+
+
+def _card(row: Any) -> dict[str, Any]:
+    item = dict(row)
+    item["payload"] = json.loads(item.pop("payload_json"))
+    return item
 
 
 def _visual(row: Any) -> dict[str, Any]:
@@ -177,6 +184,14 @@ class CommandCenterDB:
                 );
                 CREATE INDEX IF NOT EXISTS visual_assets_created
                     ON visual_assets(course_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS canvas_cards (
+                    id TEXT PRIMARY KEY, course_id TEXT NOT NULL REFERENCES courses(id),
+                    problem_id TEXT REFERENCES problems(id) ON DELETE SET NULL,
+                    kind TEXT NOT NULL, title TEXT NOT NULL, payload_json TEXT NOT NULL,
+                    created_at REAL NOT NULL, deleted_at REAL
+                );
+                CREATE INDEX IF NOT EXISTS canvas_cards_created
+                    ON canvas_cards(course_id, created_at DESC);
                 """
             )
             checksum = hashlib.sha256(b"command-center-schema-v1").hexdigest()
@@ -190,7 +205,7 @@ class CommandCenterDB:
             )
             legacy = connection.execute("SELECT id FROM courses WHERE id<>?", (COURSE_ID,)).fetchall()
             for row in legacy:
-                for table in ("documents", "problems", "animation_scenes"):
+                for table in ("documents", "problems", "animation_scenes", "canvas_cards"):
                     connection.execute(f"UPDATE {table} SET course_id=? WHERE course_id=?", (COURSE_ID, row["id"]))
                 connection.execute("DELETE FROM courses WHERE id=?", (row["id"],))
         migrated = self._migrate_legacy(index_path, history_path)
@@ -547,6 +562,58 @@ class CommandCenterDB:
                                (time.time(), identifier))
             if connection.execute("SELECT changes()").fetchone()[0] != 1:
                 raise StorageError("visual not found")
+
+    # -- canvas cards ---------------------------------------------------------
+
+    def create_card(self, kind: str, title: str, payload: dict[str, Any],
+                    problem_id: str | None = None) -> dict[str, Any]:
+        """Record one rendered card. The payload arrives already built and verified."""
+        if kind not in CARD_KINDS:
+            raise StorageError(f"card kind must be one of {', '.join(CARD_KINDS)}")
+        if not isinstance(title, str) or not title.strip():
+            raise StorageError("card title is required")
+        if problem_id:
+            self.get_problem(problem_id)
+        identifier, now = uuid.uuid4().hex, time.time()
+        with self.transaction() as connection:
+            connection.execute(
+                "INSERT INTO canvas_cards VALUES(?,?,?,?,?,?,?,NULL)",
+                (identifier, COURSE_ID, problem_id, kind, title.strip(),
+                 json.dumps(payload, separators=(",", ":"), ensure_ascii=False), now),
+            )
+        return self.get_card(identifier)
+
+    def get_card(self, identifier: str) -> dict[str, Any]:
+        if not UUID_RE.fullmatch(identifier):
+            raise StorageError("card not found")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM canvas_cards WHERE id=? AND deleted_at IS NULL", (identifier,)
+            ).fetchone()
+        if row is None:
+            raise StorageError("card not found")
+        return _card(row)
+
+    def list_cards(self, problem_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        clause, params = "", [COURSE_ID]
+        if problem_id:
+            if not UUID_RE.fullmatch(problem_id):
+                raise StorageError("problem not found")
+            clause, params = " AND problem_id=?", [COURSE_ID, problem_id]
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM canvas_cards WHERE course_id=? AND deleted_at IS NULL" + clause +
+                " ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                (*params, max(1, min(int(limit), 200))),
+            ).fetchall()
+        return [_card(row) for row in rows]
+
+    def delete_card(self, identifier: str) -> None:
+        with self.transaction() as connection:
+            connection.execute("UPDATE canvas_cards SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
+                               (time.time(), identifier))
+            if connection.execute("SELECT changes()").fetchone()[0] != 1:
+                raise StorageError("card not found")
 
     def get_problem(self, identifier: str) -> dict[str, Any]:
         with self._connect() as connection:
