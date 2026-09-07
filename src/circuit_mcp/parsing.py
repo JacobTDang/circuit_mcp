@@ -317,6 +317,33 @@ def parse_expression(
     return expr
 
 
+def parse_as_written(text: str) -> sp.Expr:
+    """Parse for display only. The tree keeps the order the text was written in.
+
+    ``parse_expression`` evaluates as it builds, and SymPy's canonical order turns
+    ``V_s/R * exp(-t/(R*C))`` into ``V_s/(R*exp(t/(C*R)))`` -- equal, and not the
+    form a student is trying to learn. This runs the same screen and then builds
+    the tree unevaluated so a printer can show what was actually typed.
+
+    Display only: an unevaluated tree must never be compared for equality. Use
+    ``parse_expression`` for anything that decides a verdict.
+    """
+    stripped = _require_text(text)
+    _screen(stripped)
+    try:
+        return parse_expr(
+            stripped,
+            local_dict={},
+            global_dict={**_GLOBAL_DICT, "Mul": sp.Mul, "Add": sp.Add, "Pow": sp.Pow},
+            transformations=_TRANSFORMATIONS,
+            evaluate=False,
+        )
+    except Exception as exc:  # translated, not swallowed -- the cause is chained
+        raise ParseError(
+            f"Could not lay out {text!r} as written: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
 def _split_on_equals(text: str) -> tuple[str, str]:
     """Split on the single top-level ``=``, refusing zero, several, or ``==``."""
     if "==" in text:
