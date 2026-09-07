@@ -427,6 +427,7 @@ def test_status_cannot_claim_authoring_for_a_worker_that_is_not_running(tmp_path
 
 def test_a_spawned_worker_inherits_the_authoring_key_and_binds_loopback(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "forwarded-value")
+    monkeypatch.setenv("OPENROUTER_MODEL", "z-ai/glm-5.2:free")
     healthy = {"value": False}
     manager, spawns, fake_popen = _manager(tmp_path, 33002, healthy)
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
@@ -504,3 +505,82 @@ def test_stop_never_signals_a_worker_this_manager_did_not_start(tmp_path):
     manager.stop()
 
     assert signalled == [], "stop() may only terminate a process this manager holds"
+
+
+# --- free-model policy --------------------------------------------------------
+#
+# OpenRouter bills every model that does not carry the ``:free`` suffix, and
+# Showman's own default (``openai/gpt-oss-120b``) is one of them. This workspace
+# authors only on free models, so the manager refuses to hand a paid one to a
+# worker instead of discovering it on an invoice.
+
+
+def _openrouter(monkeypatch, model=None):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "forwarded-value")
+    monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
+    if model is not None:
+        monkeypatch.setenv("OPENROUTER_MODEL", model)
+
+
+def test_a_paid_model_is_refused_before_the_worker_spawns(tmp_path, monkeypatch):
+    _openrouter(monkeypatch, "google/gemini-2.5-flash")
+    manager, spawns, fake_popen = _manager(tmp_path, 33010, {"value": False})
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    status = manager.start(timeout=2)
+
+    assert status["ok"] is False
+    assert "google/gemini-2.5-flash" in status["error"]
+    assert ":free" in status["error"]
+    assert spawns == [], "a paid model must never reach a worker"
+
+
+def test_an_unset_model_is_refused_because_the_showman_default_is_paid(tmp_path, monkeypatch):
+    _openrouter(monkeypatch)
+    manager, spawns, fake_popen = _manager(tmp_path, 33011, {"value": False})
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    status = manager.start(timeout=2)
+
+    assert status["ok"] is False
+    assert "OPENROUTER_MODEL" in status["error"]
+    assert spawns == []
+
+
+def test_a_free_model_spawns_and_is_forwarded(tmp_path, monkeypatch):
+    _openrouter(monkeypatch, "z-ai/glm-5.2:free")
+    manager, spawns, fake_popen = _manager(tmp_path, 33012, {"value": False})
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    status = manager.start(timeout=2)
+
+    assert status["ok"] is True
+    assert spawns[0]["OPENROUTER_MODEL"] == "z-ai/glm-5.2:free"
+    assert manager._read_identity()["model"] == "z-ai/glm-5.2:free"
+    assert status["model"] == "z-ai/glm-5.2:free"
+
+
+def test_offline_authoring_needs_no_model(tmp_path, monkeypatch):
+    """The template author makes no upstream call, so it cannot bill anything."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
+    manager, spawns, fake_popen = _manager(tmp_path, 33013, {"value": False})
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    status = manager.start(timeout=2)
+
+    assert status["ok"] is True
+    assert len(spawns) == 1
+
+
+def test_a_running_worker_started_on_a_paid_model_is_not_adopted(tmp_path, monkeypatch):
+    """The worker outlives the session that spawned it; adopting one bills for it."""
+    _openrouter(monkeypatch, "z-ai/glm-5.2:free")
+    healthy = {"value": True}
+    manager, spawns, fake_popen = _manager(tmp_path, 33014, healthy)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    manager._write_identity(_FakeProcess(), fingerprint=manager.build_fingerprint(),
+                            authoring="openrouter", model="google/gemini-2.5-flash")
+
+    assert manager._verified_identity() is None
