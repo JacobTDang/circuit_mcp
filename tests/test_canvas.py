@@ -153,3 +153,13 @@ def test_the_browser_cannot_author_cards(tmp_path, monkeypatch):
     """Content comes from the agent through MCP; the board only shows and closes."""
     with _browser(tmp_path, monkeypatch) as browser:
         assert browser.post("/api/canvas", json={"kind": "formula"}).status_code == 405
+
+
+def test_app_js_keeps_agent_card_layout_across_reload(tmp_path, monkeypatch):
+    """readCanvas must keep formula/walkthrough/vocabulary or freeSpot reshuffles on refresh."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        # The allowlist inside readCanvas — not just CARD_KINDS elsewhere.
+        read = app_script.split("function readCanvas()", 1)[1].split("function saveCanvas()", 1)[0]
+        for kind in ("formula", "walkthrough", "vocabulary"):
+            assert kind in read, f"readCanvas drops {kind}; layout resets on reload"
