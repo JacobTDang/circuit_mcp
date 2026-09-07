@@ -18,6 +18,8 @@ from typing import Any, Callable
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WORKER_SCRIPT = Path("dist") / "service" / "worker.js"
 OBJECT_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,240}")
+FREE_MODEL_SUFFIX = ":free"
+SHOWMAN_DEFAULT_MODEL = "openai/gpt-oss-120b"  # what Showman picks when OPENROUTER_MODEL is unset
 
 
 class ShowmanTransportError(RuntimeError):
@@ -109,6 +111,31 @@ class ShowmanManager:
             return "anthropic"
         return "offline"
 
+    @staticmethod
+    def _paid_authoring_reason(env: Mapping[str, str]) -> str:
+        """Say why this environment would bill for authoring, or "" if it would not.
+
+        This workspace authors on free models only. OpenRouter charges for every
+        model without the ``:free`` suffix, Showman falls back to a paid default
+        when ``OPENROUTER_MODEL`` is unset, and Anthropic has no free tier at all.
+        A billed configuration is refused here rather than found on an invoice.
+        """
+        mode = ShowmanManager._authoring_mode(env)
+        if mode == "anthropic":
+            return ("ANTHROPIC_API_KEY authors through a billed API and this workspace uses "
+                    "free models only; unset it, or set OPENROUTER_API_KEY together with an "
+                    f"OPENROUTER_MODEL ending in {FREE_MODEL_SUFFIX}")
+        if mode != "openrouter":
+            return ""
+        model = str(env.get("OPENROUTER_MODEL", "")).strip()
+        if not model:
+            return (f"OPENROUTER_MODEL is unset, so Showman would author on its paid default "
+                    f"{SHOWMAN_DEFAULT_MODEL!r}; set a model ending in {FREE_MODEL_SUFFIX}")
+        if not model.endswith(FREE_MODEL_SUFFIX):
+            return (f"OPENROUTER_MODEL {model!r} is billed per token and this workspace uses "
+                    f"free models only; choose a model ending in {FREE_MODEL_SUFFIX}")
+        return ""
+
     @property
     def log_path(self) -> Path:
         """Where the worker's own output goes; discarding it makes an incident undiagnosable."""
@@ -125,11 +152,13 @@ class ShowmanManager:
             return None
         return identity if isinstance(identity, dict) else None
 
-    def _write_identity(self, process: Any, fingerprint: str, authoring: str | None = None) -> None:
+    def _write_identity(self, process: Any, fingerprint: str, authoring: str | None = None,
+                        model: str | None = None) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._identity_path.write_text(json.dumps({
             "pid": process.pid, "port": self.port, "fingerprint": fingerprint,
             "authoring": authoring or self._authoring_mode(os.environ),
+            "model": model if model is not None else os.environ.get("OPENROUTER_MODEL", ""),
             "started_at": time.time(),
         }))
 
@@ -162,6 +191,11 @@ class ShowmanManager:
         if not identity or identity.get("port") != self.port:
             return None
         if identity.get("fingerprint") != self.build_fingerprint():
+            return None
+        if identity.get("authoring") == "anthropic":
+            return None
+        if (identity.get("authoring") == "openrouter"
+                and not str(identity.get("model", "")).endswith(FREE_MODEL_SUFFIX)):
             return None
         if not self._process_alive(identity.get("pid")):
             return None
@@ -208,7 +242,10 @@ class ShowmanManager:
             fingerprint = self.build_fingerprint()
             env = {**os.environ, "PORT": str(self.port), "SHOWMAN_HOST": "127.0.0.1",
                    "SHOWMAN_DATA_DIR": str(self.data_dir)}
-            self.data_dir.mkdir(parents=True, exist_ok=True)
+            billed = self._paid_authoring_reason(env)
+            if billed:
+                self._last_error = billed
+                return self.status()
             self.data_dir.mkdir(parents=True, exist_ok=True)
             if self.log_path.exists() and self.log_path.stat().st_size > 4 * 1024 * 1024:
                 self.log_path.unlink()  # bounded: one rollover, never an unbounded file
@@ -222,7 +259,8 @@ class ShowmanManager:
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 if self._health():
-                    self._write_identity(process, fingerprint, self._authoring_mode(env))
+                    self._write_identity(process, fingerprint, self._authoring_mode(env),
+                                         env.get("OPENROUTER_MODEL", ""))
                     self._last_error = ""
                     return self.status()
                 if process.poll() is not None:
@@ -263,6 +301,7 @@ class ShowmanManager:
             "built": bool(self.build_fingerprint()),
             "worker_verified": identity is not None,
             "authoring": identity.get("authoring", "unknown") if identity else "unknown",
+            "model": identity.get("model", "") if identity else "",
             "key_available": self._authoring_mode(os.environ) != "offline",
             "error": "" if (running and identity) else self._last_error,
         }
