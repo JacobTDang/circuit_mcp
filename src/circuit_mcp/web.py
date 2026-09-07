@@ -608,6 +608,30 @@ def visuals(problem_id: str = "", limit: int = 50) -> dict[str, Any]:
     return {"ok": True, "items": items}
 
 
+@app.get("/api/canvas")
+def canvas_cards(problem_id: str = "", limit: int = 50) -> dict[str, Any]:
+    """Cards the agent has put on the canvas. The board polls this; it never authors."""
+    try:
+        items = _db().list_cards(problem_id or None, limit)
+    except StorageError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "items": items}
+
+
+@app.delete("/api/canvas/{card_id}")
+def canvas_card_close(card_id: str) -> dict[str, Any]:
+    """Closing a card on the board takes it off the canvas for the agent too."""
+    database = _db()
+    try:
+        card = database.get_card(card_id)
+        database.delete_card(card_id)
+    except StorageError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    _record("canvas_card_close", f"{card['kind']}: {card['title'][:60]}", True,
+            "canvas_card", card_id, {"actor": "browser"})
+    return {"ok": True, "removed": card_id}
+
+
 @app.get("/api/problems")
 def problems(topic: str = "", status: str = "") -> dict[str, Any]:
     try: return {"ok": True, "items": _db().list_problems(topic, status)}

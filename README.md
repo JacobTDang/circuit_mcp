@@ -138,6 +138,19 @@ schema migration 2 archived its rows to `.local/command_center/archive/` as JSON
 before dropping it. See the
 [Showman integration scope](docs/SHOWMAN_INTEGRATION.md).
 
+## Canvas cards
+
+The agent can put its explanation on the desk beside the student's work with
+`canvas_card_add`. Three kinds: `formula` (labelled expressions), `walkthrough`
+(ordered algebra steps, each with a note), and `vocabulary` (terms with optional
+math). The agent writes the words; the server produces every piece of math.
+Expressions use the same restricted syntax as `check_derivation`, so anything the
+checker cannot parse never reaches the canvas, and a walkthrough is refused unless
+every transition is a proved identity that reaches the stated truth. Math renders
+as native MathML -- no library, no CDN -- laid out in the order it was written
+rather than SymPy's canonical order. Cards are draggable and resizable like
+everything else on the desk; closing one in the browser removes it for the agent.
+
 Authoring a lesson from a brief needs an OpenRouter key and a model that can
 emit a valid scene specification. Copy [`.env.example`](.env.example) to `.env`
 and fill it in; `run_ui.py` loads it and the render worker inherits it at spawn.
