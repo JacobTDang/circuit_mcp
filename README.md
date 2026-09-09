@@ -48,6 +48,8 @@ It currently provides forty-eight tools:
 | `import_waveform_csv` | Parse bounded oscilloscope/DMM CSV payloads without filesystem access |
 | `instrument_status` | Discover VISA instruments only after explicit opt-in |
 | `instrument_query` | Send allow-listed read-only SCPI queries; write commands are prohibited |
+| `matlab_status` | Report whether MATLAB is enabled and whether a session is warm, without starting it |
+| `matlab_eval` | Evaluate MATLAB code in a persistent Engine session; return text and an optional figure PNG |
 | `library_search` | Search local document names and indexed study text |
 | `document_get` | Read document metadata and bounded extracted text by opaque ID |
 | `problem_get` | Read one stored problem and its tags |
@@ -159,6 +161,33 @@ command center refuses to author rather than return one unrelated to the brief.
 Model choice is not incidental — the recorded measurements are in the example
 file.
 
+## MATLAB bridge (opt-in)
+
+`matlab_status` reports whether MATLAB is enabled and whether a session is already
+warm, without starting the Engine. `matlab_eval` runs code in one persistent
+session and returns the captured text; when a figure is present afterward, the
+current figure comes back as a PNG on the tool result.
+
+Once enabled, the agent can run anything MATLAB can, including `system()`. Treat
+that as local trusted use only — the same trust boundary as sitting at the MATLAB
+desktop. Set `CIRCUIT_MCP_ENABLE_MATLAB=1` only in the shell of a session that
+needs MATLAB. Do not put it in [`.mcp.json`](.mcp.json): this server ingests
+untrusted OCR and documents, and MCP tools are not approved per call.
+
+The `matlabengine` package is optional and is not part of the core tutoring
+install. Install it from the local MATLAB tree so the wheel matches the installed
+release, for example:
+
+```console
+pip install /Applications/MATLAB_R2026a.app/extern/engines/python
+```
+
+Replace `R2026a` with whatever release is on the machine. Evaluation is bounded:
+timeout 5–120 s (default 30), code at most 100 000 characters, output truncated
+at 1 MB, and figure PNGs larger than 5 MB are skipped with a note. Details and
+review decisions are in
+[`docs/superpowers/specs/2026-09-08-matlab-bridge-design.md`](docs/superpowers/specs/2026-09-08-matlab-bridge-design.md).
+
 MCP clients decide when to call tools, so “continuous awareness” means the agent
 takes a fresh frame when asked or periodically during an active tutoring loop;
 the server does not push images into an idle conversation.
@@ -243,6 +272,7 @@ loading through MCP with `ocr_status(load_model=true)`; `device` should be
 | `CIRCUIT_MCP_OCR_DEVICE` | `auto` (`mps`, then CUDA, then CPU) |
 | `CIRCUIT_MCP_WORKSPACE_CONFIG` | `.local/workspace.json` |
 | `CIRCUIT_MCP_ENABLE_INSTRUMENTS` | unset; set exactly `1` to enable read-only VISA access |
+| `CIRCUIT_MCP_ENABLE_MATLAB` | unset; set exactly `1` only in a shell that needs MATLAB — never in `.mcp.json` |
 | `CIRCUIT_MCP_DATA_DIR` | `.local/command_center` |
 | `CIRCUIT_MCP_AIRPLAY_SIZE` | `800x600@30`; headless receiver stream resolution and frame rate |
 
