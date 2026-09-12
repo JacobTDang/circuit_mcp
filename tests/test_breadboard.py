@@ -287,3 +287,55 @@ def test_free_hole_on_a_rail_prefers_the_column_nearest_its_other_end_then_the_l
     layout = Layout(parse_build(lab1.EXP1_NONINVERTING))
     assert _free_hole(layout, ("rail", "bot+"), near=14) == ("rail", "bot+", 14)
     assert _free_hole(layout, ("rail", "bot+"), near=14) == ("rail", "bot+", 13)
+
+
+# --- output --------------------------------------------------------------------
+
+import re  # noqa: E402
+
+from circuit_mcp.breadboard import hole_name, layout_payload, svg, wire_list  # noqa: E402
+
+
+def test_hole_names_read_like_a_breadboard():
+    assert hole_name(("top", 13, "a")) == "a13"
+    assert hole_name(("rail", "bot-", 3)) == "bot- rail (col 3)"
+
+
+def test_the_wire_list_starts_with_power_and_names_every_part_and_probe():
+    layout = place(parse_build(lab1.EXP1_NONINVERTING))
+    wires = wire_list(layout)
+    assert wires[0].startswith("Power: +15 V to the bottom red rail")
+    assert "-15 V to the top red rail" in wires[0]
+    assert any(w.startswith("U1 LM324: straddle the trench with pin 1 at f12") for w in wires)
+    for ref in ("R1 1kΩ", "R2 15kΩ", "R3 10kΩ pot"):
+        assert any(w.startswith(ref) for w in wires), ref
+    assert any("CH1 vi" in w and "probe" in w for w in wires)
+    assert any("VS +" in w and "Function generator" in w for w in wires)
+
+
+def test_single_supply_wire_list_has_no_negative_rail():
+    wires = wire_list(place(parse_build(lab1.EXP4A_DIVIDER_LED)))
+    assert "top red rail" not in wires[0]
+
+
+def test_svg_escapes_every_label_the_agent_wrote():
+    hostile = copy.deepcopy(lab1.EXP1_NONINVERTING)
+    hostile["probes"] = [{"label": "<script>x</script>", "node": "out"}]
+    picture = svg(place(parse_build(hostile)))
+    assert "<script>" not in picture
+    assert "&lt;script&gt;" in picture
+
+
+def test_svg_draws_the_chip_rails_and_probes():
+    picture = svg(place(parse_build(lab1.EXP1_NONINVERTING)))
+    assert picture.startswith('<svg xmlns="http://www.w3.org/2000/svg"')
+    assert "U1 LM324" in picture
+    assert ">V+<" in picture and ">V-<" in picture and picture.count(">GND<") == 2
+    assert "CH2 vo" in picture
+
+
+def test_layout_payload_has_what_the_card_renders():
+    payload = layout_payload(lab1.EXP4B_BUFFERED)
+    assert set(payload) == {"svg", "wires", "holes", "probes"}
+    assert all(re.match(r"^([a-j]\d+|(top|bot)[+-] rail \(col \d+\))$", h) for holes in payload["holes"].values() for h in holes)
+    assert [p["label"] for p in payload["probes"]] == ["VA", "VB"]

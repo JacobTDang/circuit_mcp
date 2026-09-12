@@ -565,3 +565,115 @@ def verify(layout: Layout) -> None:
     for net, found in roots.items():
         if len(found) > 1:
             raise BuildError(f"layout error: net {net} is split into {len(found)} groups")
+
+
+# --- output: wire list and SVG ---------------------------------------------------
+
+def hole_name(hole: Hole) -> str:
+    if hole[0] == "rail":
+        return f"{hole[1]} rail (col {hole[2]})"
+    return f"{hole[2]}{hole[1]}"
+
+
+VALUE_UNITS = {**P.UNITS, "pot": "Ω"}   # P.UNITS covers the two-terminal kinds; a pot is in ohms too
+
+
+def wire_list(layout: Layout) -> list[str]:
+    b = layout.build
+    steps = [f"Power: +{b.vplus:g} V to the bottom red rail (bot+); "
+             + (f"{b.vminus:g} V to the top red rail (top+); " if b.dual_supply else "")
+             + "supply COM/ground to both blue rails, and jumper the two blue rails together (col 1)."]
+    if layout.chip:
+        chip = b.chips[layout.chip["ref"]]
+        steps.append(f"{layout.chip['ref']} {chip.part}: straddle the trench with pin 1 at f{CHIP_COL0} "
+                     f"(notch to the left); pin 4 (V+) and pin 11 (V-) are wired below.")
+    for part in layout.placed:
+        unit = VALUE_UNITS.get(part["kind"], "")
+        label = f"{part['ref']} {part['value']}{unit}".strip()
+        if part["kind"] == "pot":
+            a, w, c = part["ends"]
+            steps.append(f"{label} pot: end at {hole_name(a)}, wiper at {hole_name(w)}, other end at {hole_name(c)}.")
+        elif part["kind"] == "led":
+            a, k = part["ends"]
+            steps.append(f"{part['ref']} LED: anode (long leg) at {hole_name(a)}, cathode (flat side) at {hole_name(k)}.")
+        else:
+            steps.append(f"{label}: {hole_name(part['ends'][0])} to {hole_name(part['ends'][1])}.")
+    for jumper in layout.jumpers:
+        steps.append(f"Jumper ({jumper['net']}): {hole_name(jumper['ends'][0])} to {hole_name(jumper['ends'][1])}.")
+    for item in layout.attachments:
+        who = "Function generator / supply lead" if item["kind"] == "source" else "Scope or meter probe"
+        steps.append(f"{who} {item['label']}: {hole_name(item['hole'])} (net {item['net']}); its ground clip to a blue rail.")
+    return steps
+
+
+PITCH = 20
+X0, Y0 = 48, 28
+ROW_Y = {"rail-top+": 0, "rail-top-": 1, "a": 3, "b": 4, "c": 5, "d": 6, "e": 7, "f": 9, "g": 10, "h": 11, "i": 12, "j": 13, "rail-bot+": 15, "rail-bot-": 16}
+COLORS = {"resistor": "#c8a04a", "capacitor": "#4a8fc8", "inductor": "#8a6ac8", "led": "#d9a33a", "pot": "#5aa86a"}
+
+
+def _xy(hole: Hole) -> tuple[float, float]:
+    if hole[0] == "rail":
+        return X0 + (hole[2] - 1) * PITCH, Y0 + ROW_Y[f"rail-{hole[1]}"] * PITCH
+    return X0 + (hole[1] - 1) * PITCH, Y0 + ROW_Y[hole[2]] * PITCH
+
+
+def svg(layout: Layout) -> str:
+    width, height = X0 * 2 + (COLUMNS - 1) * PITCH, Y0 * 2 + 16 * PITCH
+    out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="breadboard layout">',
+           f'<rect x="0" y="0" width="{width}" height="{height}" rx="10" fill="#f2efe6"/>']
+    for name, color in (("top+", "#c0392b"), ("top-", "#2c5aa0"), ("bot+", "#c0392b"), ("bot-", "#2c5aa0")):
+        y = Y0 + ROW_Y[f"rail-{name}"] * PITCH
+        out.append(f'<line x1="{X0 - 14}" y1="{y}" x2="{X0 + (COLUMNS - 1) * PITCH + 14}" y2="{y}" stroke="{color}" stroke-width="1.5" opacity=".7"/>')
+        label = {"top+": ("V-" if layout.build.dual_supply else "unused"), "top-": "GND", "bot+": "V+", "bot-": "GND"}[name]
+        out.append(f'<text x="{X0 - 40}" y="{y + 4}" font-size="10" font-family="ui-monospace,monospace" fill="{color}">{label}</text>')
+    for col in range(1, COLUMNS + 1):
+        x = X0 + (col - 1) * PITCH
+        out.append(f'<text x="{x}" y="{Y0 + 2.2 * PITCH}" font-size="8" text-anchor="middle" fill="#888">{col}</text>')
+        for row in "abcdefghij":
+            y = Y0 + ROW_Y[row] * PITCH
+            out.append(f'<circle cx="{x}" cy="{y}" r="2.6" fill="#bbb"/>')
+        for rail in ("top+", "top-", "bot+", "bot-"):
+            y = Y0 + ROW_Y[f"rail-{rail}"] * PITCH
+            out.append(f'<circle cx="{x}" cy="{y}" r="2.2" fill="#bbb"/>')
+    for row in "abcdefghij":
+        out.append(f'<text x="{X0 - 16}" y="{Y0 + ROW_Y[row] * PITCH + 3}" font-size="9" fill="#666">{row}</text>')
+    if layout.chip:
+        x1 = X0 + (CHIP_COL0 - 1) * PITCH - 8
+        y1 = Y0 + ROW_Y["e"] * PITCH - 8
+        w = 6 * PITCH + 16
+        h = (ROW_Y["f"] - ROW_Y["e"]) * PITCH + 16
+        out.append(f'<rect x="{x1}" y="{y1}" width="{w}" height="{h}" rx="3" fill="#2b2b2b"/>')
+        out.append(f'<circle cx="{x1 + 8}" cy="{y1 + h - 8}" r="3" fill="#888"/>')
+        out.append(f'<text x="{x1 + w / 2}" y="{y1 + h / 2 + 4}" font-size="11" text-anchor="middle" fill="#eee" font-family="ui-monospace,monospace">{escape(layout.chip["ref"])} {escape(layout.chip["part"])}</text>')
+        for pin, hole in layout.chip["pins"].items():
+            x, y = _xy(hole)
+            out.append(f'<text x="{x}" y="{y + (12 if hole[0] == "bottom" else -6)}" font-size="7" text-anchor="middle" fill="#ddd">{pin}</text>')
+    for jumper in layout.jumpers:
+        (xa, ya), (xb, yb) = _xy(jumper["ends"][0]), _xy(jumper["ends"][1])
+        out.append(f'<line x1="{xa}" y1="{ya}" x2="{xb}" y2="{yb}" stroke="#2e8b57" stroke-width="3" stroke-linecap="round" opacity=".85"/>')
+    for part in layout.placed:
+        color = COLORS[part["kind"]]
+        pts = [_xy(h) for h in part["ends"]]
+        for (xa, ya), (xb, yb) in zip(pts, pts[1:]):
+            out.append(f'<line x1="{xa}" y1="{ya}" x2="{xb}" y2="{yb}" stroke="#555" stroke-width="2"/>')
+        (xa, ya), (xb, yb) = pts[0], pts[-1]
+        mx, my = (xa + xb) / 2, (ya + yb) / 2
+        text = f"{part['ref']} {part['value']}".strip()
+        out.append(f'<rect x="{mx - 24}" y="{my - 8}" width="48" height="16" rx="4" fill="{color}" stroke="#333"/>')
+        out.append(f'<text x="{mx}" y="{my + 4}" font-size="8.5" text-anchor="middle" font-family="ui-monospace,monospace" fill="#111">{escape(text)}</text>')
+    for item in layout.attachments:
+        x, y = _xy(item["hole"])
+        color = "#b0306a" if item["kind"] == "source" else "#1f6fb0"
+        out.append(f'<circle cx="{x}" cy="{y}" r="5" fill="none" stroke="{color}" stroke-width="2"/>')
+        out.append(f'<text x="{x + 8}" y="{y - 6}" font-size="9" fill="{color}" font-family="ui-monospace,monospace">{escape(item["label"])}</text>')
+    out.append("</svg>")
+    return "".join(out)
+
+
+def layout_payload(content: Any) -> dict[str, Any]:
+    build = parse_build(content)
+    layout = place(build)
+    return {"svg": svg(layout), "wires": wire_list(layout),
+            "holes": {p["ref"]: [hole_name(h) for h in p["ends"]] for p in layout.placed},
+            "probes": [{"label": a["label"], "hole": hole_name(a["hole"]), "net": a["net"]} for a in layout.attachments if a["kind"] == "probe"]}
