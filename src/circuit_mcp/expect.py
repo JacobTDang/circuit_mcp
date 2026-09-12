@@ -78,17 +78,18 @@ def _sparkline(samples: list[float], lo: float, hi: float) -> str:
             f'<polyline points="{coords}" fill="none" stroke="#4aa3df" stroke-width="1.5"/></svg>')
 
 
-def _settle_time(build: Build, period: float) -> float:
+def _settle_time(build: Build, period: float) -> tuple[float, float]:
     """Long enough for the slowest RC in the build to reach steady state.
 
     ngspice's operating point sees each source at its t=0 value, so an
     integrator starts pinned at a rail and needs five of its own time constants
-    to come back, not two periods of the input.
+    to come back, not two periods of the input. The time constant comes back
+    with the window so the caller can name it when the window is unusable.
     """
     resistances = [P.parse_value(p.value) for p in build.parts if p.kind in ("resistor", "pot")]
     capacitances = [P.parse_value(p.value) for p in build.parts if p.kind == "capacitor"]
     tau = max(resistances, default=0.0) * max(capacitances, default=0.0)
-    return max(SETTLE_PERIODS * period, 5 * tau)
+    return max(SETTLE_PERIODS * period, 5 * tau), tau
 
 
 def _phase(correlation: float) -> str:
@@ -118,55 +119,70 @@ def expectations(content: Any) -> dict[str, Any]:
     outputs = [f"v({_spice_node(p.node)})" for p in build.probes]
     lo_limit, hi_limit = _swing(build)
     opamp_outputs = {u.out for u in build.opamps}
+    if ac:
+        freq = min(s.freq for s in ac)
+        period = 1 / freq
+        settle, tau = _settle_time(build, period)
+        stop = settle + CAPTURE_PERIODS * period
+        step = period / STEPS_PER_PERIOD
+        if stop / step > MAX_STEPS:
+            raise ExpectError(f"the slowest RC in this build (tau = {tau:.3g} s) needs a {settle:.3g} s settle "
+                              f"window, which cannot be resolved at {freq:g} Hz within the simulation budget; "
+                              f"lower the RC product or the frequency")
+        analysis = f"tran {step:.6g} {stop:.6g} {settle:.6g}"
+    else:
+        analysis = "op"
     try:
-        if ac:
-            period = 1 / min(s.freq for s in ac)
-            settle = _settle_time(build, period)
-            stop = settle + CAPTURE_PERIODS * period
-            step = max(period / STEPS_PER_PERIOD, stop / MAX_STEPS)
-            result = spice.simulate_spice(netlist, f"tran {step:.6g} {stop:.6g} {settle:.6g}", outputs)
-        else:
-            result = spice.simulate_spice(netlist, "op", outputs)
+        result = spice.simulate_spice(netlist, analysis, outputs)
     except spice.SpiceError as exc:
         raise ExpectError(f"simulation failed: {exc}") from exc
     points = result["points"]
     if not points:
         raise ExpectError("simulation returned no points")
-    readings = []
-    covariance: dict[tuple[str, str], float] = {}
+    samples: dict[str, list[float]] = {}
+    for probe in build.probes:
+        if probe.node not in samples:
+            key = f"v({_spice_node(probe.node)})".lower()
+            samples[probe.node] = [float(row[key]) for row in points]
+    correlation: dict[tuple[str, str], float] = {}
     if ac:
         for a in build.probes:
             for b in build.probes:
-                xa = [float(row[f"v({_spice_node(a.node)})".lower()]) for row in points]
-                xb = [float(row[f"v({_spice_node(b.node)})".lower()]) for row in points]
+                xa, xb = samples[a.node], samples[b.node]
                 ma, mb = sum(xa) / len(xa), sum(xb) / len(xb)
                 num = sum((u - ma) * (v - mb) for u, v in zip(xa, xb))
                 den = math.sqrt(sum((u - ma) ** 2 for u in xa) * sum((v - mb) ** 2 for v in xb)) or 1.0
-                covariance[(a.node, b.node)] = num / den   # correlation, -1..1
+                correlation[(a.node, b.node)] = num / den   # -1..1
+    readings: list[dict[str, Any]] = []
+    levels: list[float] = []   # the unrounded amplitude behind each reading, which the gains divide
     for probe in build.probes:
-        key = f"v({_spice_node(probe.node)})".lower()
-        samples = [float(row[key]) for row in points]
+        trace = samples[probe.node]
         if ac:
-            vmax, vmin = max(samples), min(samples)
-            mean = sum(samples) / len(samples)
-            vrms = math.sqrt(sum((v - mean) ** 2 for v in samples) / len(samples))
+            vmax, vmin = max(trace), min(trace)
+            vpk = (vmax - vmin) / 2
+            mean = sum(trace) / len(trace)
+            vrms = math.sqrt(sum((v - mean) ** 2 for v in trace) / len(trace))
             clipped = probe.node in opamp_outputs and (vmax >= hi_limit - 0.05 or vmin <= lo_limit + 0.05)
             readings.append({"label": probe.label, "node": probe.node, "role": probe.role, "kind": "ac",
-                             "vpp": round(vmax - vmin, 4), "vpk": round((vmax - vmin) / 2, 4), "vrms": round(vrms, 4),
+                             "vpp": round(vmax - vmin, 4), "vpk": round(vpk, 4), "vrms": round(vrms, 4),
                              "mean": round(mean, 4), "clipped": clipped,
-                             "sparkline": _sparkline(samples, min(lo_limit, vmin), max(hi_limit, vmax))})
+                             "sparkline": _sparkline(trace, min(lo_limit, vmin), max(hi_limit, vmax))})
+            levels.append(vpk)
         else:
             readings.append({"label": probe.label, "node": probe.node, "role": probe.role, "kind": "dc",
-                             "volts": round(samples[0], 4)})
+                             "volts": round(trace[0], 4)})
+            levels.append(trace[0])
     gains = []
-    inputs = [r for r in readings if r["role"] == "input"]
-    for out in (r for r in readings if r["role"] == "output"):
-        for inp in inputs:
-            if ac and inp["vpk"] > 0:
-                gains.append({"output": out["label"], "input": inp["label"], "gain": round(out["vpk"] / inp["vpk"], 3),
-                              "basis": "peak", "phase": _phase(covariance[(inp["node"], out["node"])])})
-            elif not ac and abs(inp["volts"]) > 1e-9:
-                gains.append({"output": out["label"], "input": inp["label"], "gain": round(out["volts"] / inp["volts"], 3), "basis": "dc"})
+    inputs = [(i, r) for i, r in enumerate(readings) if r["role"] == "input"]
+    for out_at, out in ((i, r) for i, r in enumerate(readings) if r["role"] == "output"):
+        for in_at, inp in inputs:
+            if ac and levels[in_at] > 0:
+                gains.append({"output": out["label"], "input": inp["label"],
+                              "gain": round(levels[out_at] / levels[in_at], 3),
+                              "basis": "peak", "phase": _phase(correlation[(inp["node"], out["node"])])})
+            elif not ac and abs(levels[in_at]) > 1e-9:
+                gains.append({"output": out["label"], "input": inp["label"],
+                              "gain": round(levels[out_at] / levels[in_at], 3), "basis": "dc"})
     notes = []
     for r in readings:
         if r.get("clipped"):
