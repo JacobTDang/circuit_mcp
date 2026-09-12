@@ -22,6 +22,7 @@ CHIP_COLS = range(CHIP_COL0, CHIP_COL0 + 7)
 LEFT_POOL = (10, 8, 6, 4, 2)
 RIGHT_POOL = (20, 22, 24, 26, 28)
 GROUND = "gnd"
+CROSSED_RAIL = {"top+": "top-", "bot-": "bot+"}   # the near rail a lead to the far rail lies over
 GROUND_ALIASES = {"0", "gnd", "ground"}
 NET_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 PART_KINDS = {"resistor": 2, "capacitor": 2, "inductor": 2, "led": 2, "pot": 3}
@@ -283,10 +284,17 @@ def _rail_side(name: str) -> str:
     return "top" if name.startswith("top") else "bottom"
 
 
-def _free_hole(layout: Layout, strip: tuple) -> Hole:
-    """A free hole in a column strip (outermost row first) or a rail. Loud when full."""
+def _free_hole(layout: Layout, strip: tuple, near: int | None = None) -> Hole:
+    """A free hole in a column strip (outermost row first) or a rail. Loud when full.
+
+    On a rail, `near` is the column of whatever the hole connects to: the nearest
+    free column to it wins, so the jumper is short. Ties go to the lower column.
+    """
     if strip[0] == "rail":
-        for col in range(1, COLUMNS + 1):
+        columns = range(1, COLUMNS + 1)
+        if near is not None:
+            columns = sorted(columns, key=lambda c: (abs(c - near), c))
+        for col in columns:
             hole = ("rail", strip[1], col)
             if hole not in layout.used:
                 layout.used.add(hole)
@@ -328,7 +336,9 @@ def _jumper(layout: Layout, a: tuple, b: tuple, net: str) -> None:
     """Connect two strips. Both ends take a free hole."""
     if a == b:
         return
-    ha, hb = _free_hole(layout, a), _free_hole(layout, b)
+    near_a = b[1] if b[0] != "rail" else None
+    near_b = a[1] if a[0] != "rail" else None
+    ha, hb = _free_hole(layout, a, near_a), _free_hole(layout, b, near_b)
     layout.jumpers.append({"net": net, "ends": [ha, hb]})
 
 
@@ -349,6 +359,18 @@ def _place_horizontal(layout: Layout, part: Part, side: str, c1: int, c2: int) -
         layout.spans.setdefault((side, row), []).append((lo, hi))
         return holes if c1 <= c2 else holes[::-1]
     raise BuildError(f"{part.ref}: no free row between columns {lo} and {hi}")
+
+
+def _route_to_rail(layout: Layout, part: Part, side: str, col: int, rail: str, net: str) -> list[Hole]:
+    """Lay a part from `col` to a fresh column on the nearer side, and jumper that to the rail.
+
+    The column end comes back first. This is the route for a part whose rail is on
+    the other side of the board, and for one whose straight run at `col` is blocked.
+    """
+    fresh = _take_column(layout, "left" if col <= CHIP_COL0 else "right")[0]
+    holes = _place_horizontal(layout, part, side, col, fresh)
+    _jumper(layout, (side, fresh), ("rail", rail), net)
+    return holes
 
 
 def _place_two_terminal(layout: Layout, part: Part) -> None:
@@ -392,20 +414,25 @@ def _place_two_terminal(layout: Layout, part: Part) -> None:
         column_end, rail_end = (0, 1) if not kinds[0] else (1, 0)
         side, col = layout.homes[part.nodes[column_end]]
         rail = layout.homes[part.nodes[rail_end]][1]
+        straight = None
         if _rail_side(rail) == side:
+            # Straight out of the outer row to the rail at the same column. A lead to
+            # the far rail also lies over the near rail's hole at that column.
             outer = "a" if side == "top" else "j"
             strip_hole, rail_hole = (side, col, outer), ("rail", rail, col)
-            if strip_hole in layout.used or rail_hole in layout.used:
-                strip_hole = _free_hole(layout, (side, col))
-                rail_hole = _free_hole(layout, ("rail", rail))
-            else:
-                layout.used.update((strip_hole, rail_hole))
-            ends = [strip_hole, rail_hole] if column_end == 0 else [rail_hole, strip_hole]
+            covered = [strip_hole, rail_hole]
+            crossed = CROSSED_RAIL.get(rail)
+            if crossed is not None:
+                covered.append(("rail", crossed, col))
+            if not any(hole in layout.used for hole in covered):
+                layout.used.update(covered)
+                straight = [strip_hole, rail_hole]
+        if straight is not None:
+            ends = straight if column_end == 0 else straight[::-1]
         else:
-            # Rail is on the other side: run the part to a fresh column, jumper that to the rail.
-            fresh = _take_column(layout, "left" if col <= CHIP_COL0 else "right")[0]
-            holes = _place_horizontal(layout, part, side, col, fresh)
-            _jumper(layout, (side, fresh), ("rail", rail), part.nodes[rail_end])
+            # No straight run: lay the part along the strip to a fresh column and
+            # jumper that column to the rail.
+            holes = _route_to_rail(layout, part, side, col, rail, part.nodes[rail_end])
             ends = holes if column_end == 0 else holes[::-1]
     layout.placed.append({"ref": part.ref, "kind": part.kind, "value": part.value,
                           "nodes": list(part.nodes), "ends": ends})
