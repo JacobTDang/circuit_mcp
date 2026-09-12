@@ -104,3 +104,14 @@ def test_a_build_without_probes_or_sources_is_refused():
     dark["sources"] = []
     with pytest.raises(ExpectError, match="at least one source"):
         expectations(dark)
+
+
+def test_an_upper_case_node_name_is_read_back_from_ngspice():
+    """ngspice lower-cases its vector names; a build may capitalise a net."""
+    shouty = copy.deepcopy(lab1.EXP1_NONINVERTING)
+    shouty["parts"][2]["nodes"] = ["Out", "fb"]
+    shouty["opamps"][0]["out"] = "Out"
+    shouty["probes"][1]["node"] = "Out"
+    result = expectations(shouty)
+    assert math.isclose(result["gains"][0]["gain"], 16.0, rel_tol=0.02)
+    assert reading(result, "CH2 vo")["node"] == "Out"
