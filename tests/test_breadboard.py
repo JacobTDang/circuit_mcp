@@ -118,3 +118,21 @@ def test_pot_positions_default_to_the_middle_and_are_bounded():
 def test_an_empty_build_is_refused():
     with pytest.raises(BuildError, match="nothing to place"):
         parse_build({"supply": {"vplus": 15, "vminus": 0}})
+
+
+@pytest.mark.parametrize("field", ["chips", "parts", "opamps", "sources", "probes"])
+def test_a_list_field_that_is_not_a_list_is_refused_by_name(field):
+    with pytest.raises(BuildError, match=f"{field} must be a list"):
+        parse_build(spec(**{field: 5}))
+
+
+def test_pot_positions_that_is_not_an_object_is_refused():
+    with pytest.raises(BuildError, match="pot_positions must be an object"):
+        parse_build(spec(pot_positions=["R1"]))
+
+
+def test_more_than_max_parts_is_refused():
+    from circuit_mcp.breadboard import MAX_PARTS
+    parts = [{"ref": f"R{i}", "kind": "resistor", "value": "1k", "nodes": [f"a{i}", f"b{i}"]} for i in range(MAX_PARTS + 1)]
+    with pytest.raises(BuildError, match=f"at most {MAX_PARTS} parts"):
+        parse_build(spec(parts=parts))
