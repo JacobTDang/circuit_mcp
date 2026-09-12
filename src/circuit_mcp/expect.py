@@ -137,8 +137,8 @@ def expectations(content: Any) -> dict[str, Any]:
     if ac:
         for a in build.probes:
             for b in build.probes:
-                xa = [float(row[f"v({_spice_node(a.node)})"]) for row in points]
-                xb = [float(row[f"v({_spice_node(b.node)})"]) for row in points]
+                xa = [float(row[f"v({_spice_node(a.node)})".lower()]) for row in points]
+                xb = [float(row[f"v({_spice_node(b.node)})".lower()]) for row in points]
                 ma, mb = sum(xa) / len(xa), sum(xb) / len(xb)
                 num = sum((u - ma) * (v - mb) for u, v in zip(xa, xb))
                 den = math.sqrt(sum((u - ma) ** 2 for u in xa) * sum((v - mb) ** 2 for v in xb)) or 1.0
