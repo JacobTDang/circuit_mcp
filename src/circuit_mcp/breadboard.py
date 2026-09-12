@@ -133,7 +133,10 @@ def parse_build(content: Any) -> Build:
 
     seen: set[str] = set()
     chips: dict[str, P.Chip] = {}
-    for entry in content.get("chips") or []:
+    raw_chips = content.get("chips")
+    if raw_chips is not None and not isinstance(raw_chips, list):
+        raise BuildError("chips must be a list")
+    for entry in raw_chips or []:
         if not isinstance(entry, dict):
             raise BuildError("each chip must be an object")
         ref = _ref(entry.get("ref"), "chip", seen)
@@ -145,7 +148,10 @@ def parse_build(content: Any) -> Build:
         raise BuildError("one chip per build; a quad op amp has four sections")
 
     parts: list[Part] = []
-    for entry in content.get("parts") or []:
+    raw_parts = content.get("parts")
+    if raw_parts is not None and not isinstance(raw_parts, list):
+        raise BuildError("parts must be a list")
+    for entry in raw_parts or []:
         if not isinstance(entry, dict):
             raise BuildError("each part must be an object")
         ref = _ref(entry.get("ref"), "part", seen)
@@ -166,7 +172,10 @@ def parse_build(content: Any) -> Build:
         raise BuildError(f"at most {MAX_PARTS} parts per build")
 
     opamps: list[OpAmpUse] = []
-    for entry in content.get("opamps") or []:
+    raw_opamps = content.get("opamps")
+    if raw_opamps is not None and not isinstance(raw_opamps, list):
+        raise BuildError("opamps must be a list")
+    for entry in raw_opamps or []:
         if not isinstance(entry, dict):
             raise BuildError("each opamp must be an object")
         ref = _ref(entry.get("ref"), "opamp", seen)
@@ -191,7 +200,10 @@ def parse_build(content: Any) -> Build:
     known = {n for p in parts for n in p.nodes} | {n for o in opamps for n in (o.inp, o.inn, o.out)}
 
     sources: list[Source] = []
-    for entry in content.get("sources") or []:
+    raw_sources = content.get("sources")
+    if raw_sources is not None and not isinstance(raw_sources, list):
+        raise BuildError("sources must be a list")
+    for entry in raw_sources or []:
         if not isinstance(entry, dict):
             raise BuildError("each source must be an object")
         ref = _ref(entry.get("ref"), "source", seen)
@@ -211,7 +223,10 @@ def parse_build(content: Any) -> Build:
         sources.append(Source(ref, kind, node, amplitude, freq))
 
     probes: list[Probe] = []
-    for entry in content.get("probes") or []:
+    raw_probes = content.get("probes")
+    if raw_probes is not None and not isinstance(raw_probes, list):
+        raise BuildError("probes must be a list")
+    for entry in raw_probes or []:
         if not isinstance(entry, dict):
             raise BuildError("each probe must be an object")
         label = str(entry.get("label", "")).strip()
@@ -226,7 +241,10 @@ def parse_build(content: Any) -> Build:
         probes.append(Probe(label, node, role))
 
     positions: dict[str, float] = {}
-    for ref, pos in (content.get("pot_positions") or {}).items():
+    raw_positions = content.get("pot_positions")
+    if raw_positions is not None and not isinstance(raw_positions, dict):
+        raise BuildError("pot_positions must be an object")
+    for ref, pos in (raw_positions or {}).items():
         if ref not in {p.ref for p in parts if p.kind == "pot"}:
             raise BuildError(f"pot_positions: {ref!r} is not a pot in this build")
         value = _number(pos, f"pot_positions.{ref}")
