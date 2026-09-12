@@ -14,7 +14,7 @@ MATH = '<math xmlns="http://www.w3.org/1998/Math/MathML"'
 
 
 def test_the_kinds_are_exactly_the_ones_the_canvas_renders():
-    assert KINDS == ("formula", "walkthrough", "vocabulary")
+    assert KINDS == ("formula", "walkthrough", "vocabulary", "breadboard", "expected")
 
 
 # --- formula ------------------------------------------------------------------
@@ -204,3 +204,29 @@ def test_when_the_written_form_cannot_be_laid_out_the_canonical_form_is_flagged(
     item = card["payload"]["items"][0]
     assert item["as_written"] is False
     assert item["mathml"].startswith(MATH)
+
+
+# --- breadboard and expected ------------------------------------------------------
+
+from tests.fixtures import lab1  # noqa: E402
+
+
+def test_a_breadboard_card_carries_the_drawing_and_the_wire_list():
+    card = build_card("breadboard", "Exp 1 build", lab1.EXP1_NONINVERTING)
+    assert card["kind"] == "breadboard"
+    assert card["payload"]["svg"].startswith("<svg")
+    assert card["payload"]["wires"][0].startswith("Power:")
+    assert "R1" in card["payload"]["holes"]
+
+
+def test_an_expected_card_carries_readings_and_gains():
+    card = build_card("expected", "Exp 1 bench", lab1.EXP1_NONINVERTING)
+    assert card["payload"]["readings"][1]["kind"] == "ac"
+    assert card["payload"]["gains"][0]["gain"] > 15
+
+
+def test_a_bad_build_is_refused_naming_the_field():
+    with pytest.raises(CardError, match="supply"):
+        build_card("breadboard", "x", {"parts": []})
+    with pytest.raises(CardError, match="at least one probe"):
+        build_card("expected", "x", {**lab1.EXP7_DAC, "probes": []})
