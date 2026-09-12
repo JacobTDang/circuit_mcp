@@ -29,6 +29,13 @@ their iPad:
    identity; a circuit-law substitution such as `I = C*dV_C` is not one, so
    start a new card at the substituted form. Write the words as text, never
    markup; the server renders the math.
+   When the student is about to build a circuit, add a `breadboard` card and an
+   `expected` card from the same build description, and only after the netlist
+   has been confirmed in step 5. The breadboard card is the wiring picture with a
+   build-order wire list; the expected card is what the meter and scope should
+   read at each probe. Chips are LM324 and LMC660; say which section and which
+   pins. If a measurement is far from the expected card, suspect the wiring
+   first, then the pot position, then the model.
 
 When the user has already attached or uploaded a privacy-scoped image, skip
 steps 1–3: do not require a workspace configuration and do not capture the
