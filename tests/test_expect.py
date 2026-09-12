@@ -145,3 +145,18 @@ def test_a_simulation_that_returns_nothing_is_refused(monkeypatch):
 
 def test_the_result_carries_the_deck_that_was_simulated():
     assert expectations(lab1.EXP1_NONINVERTING)["deck"] == deck(parse_build(lab1.EXP1_NONINVERTING))
+
+
+def test_a_flat_reading_is_not_called_quadrature():
+    """A trace that never moves has no phase. The correlation denominator used to
+    fall back to 1, which made zero over zero look like a quarter period apart."""
+    held = copy.deepcopy(lab1.EXP6_DIFFERENCE)
+    held["probes"][1] = {"label": "CH2 vb", "node": "vb", "role": "output"}
+    gain = expectations(held)["gains"][0]
+    assert gain["phase"] == "flat"
+    assert gain["gain"] == 0.0
+
+
+def test_the_expectation_names_the_pot_positions_its_numbers_depend_on():
+    assert expectations(lab1.EXP1_NONINVERTING)["pots"] == {"R3": 0.5}
+    assert expectations(lab1.EXP7_DAC)["pots"] == {}

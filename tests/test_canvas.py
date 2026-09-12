@@ -195,3 +195,27 @@ def test_app_js_refuses_to_render_a_card_kind_it_does_not_know(tmp_path, monkeyp
         poll = app_script.split("async function pollCanvasCards()", 1)[1].split("\n", 1)[0]
         assert "CARD_KINDS.has" in poll, "pollCanvasCards pushes every server kind onto the canvas"
         assert "unknown card kind" in poll, "an unknown kind must say so once, not render broken"
+
+
+# --- the drawing stays on the canvas ------------------------------------------
+
+from tests.fixtures import lab1  # noqa: E402
+
+
+def test_a_breadboard_card_returns_the_wire_list_not_the_drawing(tmp_path, monkeypatch):
+    """The SVG is 7 KB of holes the agent cannot act on; the canvas already has it."""
+    database = _mcp(tmp_path, monkeypatch)
+    result = server.canvas_card_add("breadboard", "Exp 1 build", lab1.EXP1_NONINVERTING)
+    assert result["ok"] is True
+    payload = result["card"]["payload"]
+    assert payload["svg"] == "(rendered on the canvas)"
+    assert payload["wires"][0].startswith("Power:")
+    assert payload["holes"]["R1"] and payload["probes"]
+    assert database.get_card(result["card"]["id"])["payload"]["svg"].startswith("<svg")
+
+
+def test_app_js_shows_the_pot_positions_on_the_expected_card(tmp_path, monkeypatch):
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        footer = app_script.split("card.kind==='expected'", 1)[1].split("card-verified", 1)[1].split("\n", 1)[0]
+        assert "p.pots" in footer, "the expected card never names the pot settings the numbers assume"

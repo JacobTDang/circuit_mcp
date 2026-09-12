@@ -28,6 +28,8 @@ NET_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 PART_KINDS = {"resistor": 2, "capacitor": 2, "inductor": 2, "led": 2, "pot": 3}
 SOURCE_KINDS = {"dc", "sine", "square"}
 MAX_PARTS = 24
+MAX_PROBES = 12
+BUILD_FIELDS = {"supply", "chips", "parts", "opamps", "sources", "probes", "pot_positions"}
 
 Hole = tuple  # ("top"|"bottom", column, row) or ("rail", name, column)
 
@@ -124,6 +126,11 @@ def _ref(value: Any, where: str, seen: set[str]) -> str:
 def parse_build(content: Any) -> Build:
     if not isinstance(content, dict):
         raise BuildError("build must be an object")
+    unknown = set(content) - BUILD_FIELDS
+    if unknown:
+        # Dropping a key silently drew a build nobody described: "opamp" left the
+        # chip unwired, "pot_position" reset every knob to the middle.
+        raise BuildError(f"unknown build field(s): {', '.join(sorted(unknown))}")
     supply = content.get("supply")
     if not isinstance(supply, dict):
         raise BuildError("build needs a supply object with vplus and vminus")
@@ -168,7 +175,12 @@ def parse_build(content: Any) -> Build:
                 P.parse_value(value)
             except P.PartError as exc:
                 raise BuildError(f"{ref}: {exc}") from exc
-        parts.append(Part(ref, kind, value, tuple(_node(n, ref) for n in nodes)))
+        named = tuple(_node(n, ref) for n in nodes)
+        if PART_KINDS[kind] == 2 and named[0] == named[1]:
+            # Both leads on one net is a short, not a part; the layout would put
+            # them in the same hole. A pot may legitimately repeat a node.
+            raise BuildError(f"{ref}: both leads are on {named[0]}")
+        parts.append(Part(ref, kind, value, named))
     if len(parts) > MAX_PARTS:
         raise BuildError(f"at most {MAX_PARTS} parts per build")
 
@@ -240,6 +252,8 @@ def parse_build(content: Any) -> Build:
         if role not in ("", "input", "output"):
             raise BuildError(f"probe {label!r}: role must be input, output, or omitted")
         probes.append(Probe(label, node, role))
+    if len(probes) > MAX_PROBES:
+        raise BuildError(f"at most {MAX_PROBES} probes per build")
 
     positions: dict[str, float] = {}
     raw_positions = content.get("pot_positions")
@@ -546,6 +560,8 @@ def verify(layout: Layout) -> None:
     for part in layout.placed:
         if len(part["ends"]) != len(part["nodes"]):
             raise BuildError(f"layout error: {part['ref']} has {len(part['ends'])} ends for {len(part['nodes'])} nodes")
+        if len(set(part["ends"])) != len(part["ends"]):
+            raise BuildError(f"layout error: {part['ref']} has two leads in one hole")
         for net, hole in zip(part["nodes"], part["ends"]):
             claims.setdefault(strip_of(hole), net)
             if claims[strip_of(hole)] != net:
@@ -595,7 +611,9 @@ def wire_list(layout: Layout) -> list[str]:
         label = f"{part['ref']} {part['value']}{unit}".strip()
         if part["kind"] == "pot":
             a, w, c = part["ends"]
-            steps.append(f"{label} pot: end at {hole_name(a)}, wiper at {hole_name(w)}, other end at {hole_name(c)}.")
+            pos = b.pot_positions[part["ref"]]
+            steps.append(f"{label} pot: end at {hole_name(a)}, wiper at {hole_name(w)}, other end at {hole_name(c)}."
+                         f" Set to {pos:.0%} of travel from the first end.")
         elif part["kind"] == "led":
             a, k = part["ends"]
             steps.append(f"{part['ref']} LED: anode (long leg) at {hole_name(a)}, cathode (flat side) at {hole_name(k)}.")
@@ -626,6 +644,9 @@ def _xy(hole: Hole) -> tuple[float, float]:
 def svg(layout: Layout) -> str:
     width, height = X0 * 2 + (COLUMNS - 1) * PITCH, Y0 * 2 + 16 * PITCH
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="breadboard layout">',
+           # 420 identical dots, drawn once and placed by reference: repeats of
+           # these two circles used to be 70% of the drawing.
+           '<defs><circle id="h" r="2.6" fill="#bbb"/><circle id="r" r="2.2" fill="#bbb"/></defs>',
            f'<rect x="0" y="0" width="{width}" height="{height}" rx="10" fill="#f2efe6"/>']
     for name, color in (("top+", "#c0392b"), ("top-", "#2c5aa0"), ("bot+", "#c0392b"), ("bot-", "#2c5aa0")):
         y = Y0 + ROW_Y[f"rail-{name}"] * PITCH
@@ -636,11 +657,9 @@ def svg(layout: Layout) -> str:
         x = X0 + (col - 1) * PITCH
         out.append(f'<text x="{x}" y="{Y0 + 2.2 * PITCH}" font-size="8" text-anchor="middle" fill="#888">{col}</text>')
         for row in "abcdefghij":
-            y = Y0 + ROW_Y[row] * PITCH
-            out.append(f'<circle cx="{x}" cy="{y}" r="2.6" fill="#bbb"/>')
+            out.append(f'<use href="#h" x="{x}" y="{Y0 + ROW_Y[row] * PITCH}"/>')
         for rail in ("top+", "top-", "bot+", "bot-"):
-            y = Y0 + ROW_Y[f"rail-{rail}"] * PITCH
-            out.append(f'<circle cx="{x}" cy="{y}" r="2.2" fill="#bbb"/>')
+            out.append(f'<use href="#r" x="{x}" y="{Y0 + ROW_Y[f"rail-{rail}"] * PITCH}"/>')
     for row in "abcdefghij":
         out.append(f'<text x="{X0 - 16}" y="{Y0 + ROW_Y[row] * PITCH + 3}" font-size="9" fill="#666">{row}</text>')
     if layout.chip:

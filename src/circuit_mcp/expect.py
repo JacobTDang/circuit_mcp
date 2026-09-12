@@ -146,13 +146,16 @@ def expectations(content: Any) -> dict[str, Any]:
             samples[probe.node] = [float(row[key]) for row in points]
     correlation: dict[tuple[str, str], float] = {}
     if ac:
-        for a in build.probes:
-            for b in build.probes:
+        # Only the pairs the gains name: every probe against every probe was
+        # quadratic in the probe count for readings nothing consumed.
+        for a in (p for p in build.probes if p.role == "input"):
+            for b in (p for p in build.probes if p.role == "output"):
                 xa, xb = samples[a.node], samples[b.node]
                 ma, mb = sum(xa) / len(xa), sum(xb) / len(xb)
                 num = sum((u - ma) * (v - mb) for u, v in zip(xa, xb))
-                den = math.sqrt(sum((u - ma) ** 2 for u in xa) * sum((v - mb) ** 2 for v in xb)) or 1.0
-                correlation[(a.node, b.node)] = num / den   # -1..1
+                den = math.sqrt(sum((u - ma) ** 2 for u in xa) * sum((v - mb) ** 2 for v in xb))
+                if den:   # a trace that never moves has no phase against anything
+                    correlation[(a.node, b.node)] = num / den   # -1..1
     readings: list[dict[str, Any]] = []
     levels: list[float] = []   # the unrounded amplitude behind each reading, which the gains divide
     for probe in build.probes:
@@ -177,9 +180,10 @@ def expectations(content: Any) -> dict[str, Any]:
     for out_at, out in ((i, r) for i, r in enumerate(readings) if r["role"] == "output"):
         for in_at, inp in inputs:
             if ac and levels[in_at] > 0:
+                pair = correlation.get((inp["node"], out["node"]))
                 gains.append({"output": out["label"], "input": inp["label"],
-                              "gain": round(levels[out_at] / levels[in_at], 3),
-                              "basis": "peak", "phase": _phase(correlation[(inp["node"], out["node"])])})
+                              "gain": round(levels[out_at] / levels[in_at], 3), "basis": "peak",
+                              "phase": _phase(pair) if pair is not None else "flat"})
             elif not ac and abs(levels[in_at]) > 1e-9:
                 gains.append({"output": out["label"], "input": inp["label"],
                               "gain": round(levels[out_at] / levels[in_at], 3), "basis": "dc"})
@@ -188,4 +192,5 @@ def expectations(content: Any) -> dict[str, Any]:
         if r.get("clipped"):
             notes.append(f"{r['label']} is clipping: the op amp output cannot go beyond about {lo_limit:g} V to {hi_limit:g} V on this supply.")
     return {"analysis": result["analysis"], "readings": readings, "gains": gains,
-            "swing": {"low": lo_limit, "high": hi_limit}, "notes": notes, "deck": netlist}
+            "swing": {"low": lo_limit, "high": hi_limit}, "notes": notes,
+            "pots": dict(build.pot_positions), "deck": netlist}

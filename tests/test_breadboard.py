@@ -376,3 +376,48 @@ def test_the_chip_step_names_the_chips_own_power_pins():
 def test_the_drawing_labels_parts_with_the_same_unit_as_the_wire_list():
     picture = svg(place(parse_build(lab1.EXP1_NONINVERTING)))
     assert ">R1 1kΩ<" in picture
+
+
+# --- the contract the review found holes in -----------------------------------
+
+@pytest.mark.parametrize("field", ["opamp", "pot_position"])
+def test_an_unknown_top_level_field_is_refused_by_name(field):
+    """A misspelled key used to be dropped: 'opamp' drew an unwired chip, and
+    'pot_position' quietly reset every pot to the middle."""
+    with pytest.raises(BuildError, match="unknown build field"):
+        parse_build({**MINIMAL, field: []})
+
+
+def test_a_two_terminal_part_with_both_leads_on_one_node_is_refused():
+    with pytest.raises(BuildError, match="R9: both leads are on a"):
+        parse_build(spec(parts=MINIMAL["parts"] + [
+            {"ref": "R9", "kind": "resistor", "value": "1k", "nodes": ["a", "a"]}]))
+
+
+def test_more_than_max_probes_is_refused():
+    from circuit_mcp.breadboard import MAX_PROBES
+    probes = [{"label": f"CH{i}", "node": "out"} for i in range(MAX_PROBES + 1)]
+    with pytest.raises(BuildError, match=f"at most {MAX_PROBES} probes"):
+        parse_build(spec(probes=probes))
+
+
+def test_a_pot_may_wire_two_of_its_pins_to_the_same_net():
+    """Exp 3 ties the wiper to the far end; that is a real knob, not a shorted part."""
+    layout = place(parse_build(lab1.EXP3_INVERTING))
+    pot = next(p for p in layout.placed if p["ref"] == "R2")
+    assert pot["nodes"] == ["inn", "out", "out"]
+    assert len(set(pot["ends"])) == 3
+
+
+def test_verify_refuses_a_part_with_two_leads_in_one_hole():
+    layout = place(parse_build(lab1.EXP1_NONINVERTING))
+    part = next(p for p in layout.placed if p["ref"] == "R1")
+    part["ends"] = [part["ends"][0], part["ends"][0]]
+    with pytest.raises(BuildError, match="R1 has two leads in one hole"):
+        verify(layout)
+
+
+def test_the_wire_list_says_where_to_set_each_pot():
+    wires = wire_list(place(parse_build(lab1.EXP1_NONINVERTING)))
+    step = next(w for w in wires if w.startswith("R3 10kΩ pot"))
+    assert "Set to 50% of travel from the first end." in step
