@@ -207,9 +207,25 @@ def test_verify_refuses_a_net_split_in_two():
         verify(layout)
 
 
+CROSSED_RAIL = {"top+": "top-", "bot-": "bot+"}   # the near rail a lead to the far rail passes over
+
+
 def _body(part):
     """Every hole a placed part's body lies over, not just its ends."""
     ends = part["ends"]
+    rails = [e for e in ends if e[0] == "rail"]
+    if len(rails) == 1 and len(ends) == 2:
+        rail = rails[0]
+        strip = ends[0] if ends[1] == rail else ends[1]
+        assert rail[2] == strip[1], f"{part['ref']} runs diagonally from {strip} to {rail}"
+        side, col, row = strip
+        rows = "abcde" if side == "top" else "fghij"
+        covered = rows[:rows.index(row) + 1] if side == "top" else rows[rows.index(row):]
+        body = {(side, col, r) for r in covered} | {rail}
+        crossed = CROSSED_RAIL.get(rail[1])
+        if crossed is not None:
+            body.add(("rail", crossed, col))
+        return body
     (s1, c1, r1), (s2, c2, r2) = ends[0], ends[-1]
     if s1 == s2 and r1 == r2:
         return {(s1, c, r1) for c in range(min(c1, c2), max(c1, c2) + 1)}
@@ -252,3 +268,22 @@ def test_the_board_runs_out_of_columns_loudly():
     parts = [{"ref": f"R{i}", "kind": "resistor", "value": "1k", "nodes": [f"a{i}", f"b{i}"]} for i in range(12)]
     with pytest.raises(BuildError, match="out of free columns"):
         place(parse_build({"supply": {"vplus": 5, "vminus": 0}, "parts": parts}))
+
+
+def test_a_strip_to_rail_part_runs_straight_or_is_rerouted():
+    for name in sorted(lab1.ALL):
+        layout = place(parse_build(lab1.ALL[name]))
+        for part in layout.placed:
+            ends = part["ends"]
+            rails = [e for e in ends if e[0] == "rail"]
+            strips = [e for e in ends if e[0] != "rail"]
+            if len(rails) == 1 and len(strips) == 1:
+                assert rails[0][2] == strips[0][1], f"{name} {part['ref']} runs diagonally: {ends}"
+                assert strips[0][2] in ("a", "j"), f"{name} {part['ref']} does not start at the outer row: {ends}"
+
+
+def test_free_hole_on_a_rail_prefers_the_column_nearest_its_other_end_then_the_lower_one_on_a_tie():
+    from circuit_mcp.breadboard import Layout, _free_hole
+    layout = Layout(parse_build(lab1.EXP1_NONINVERTING))
+    assert _free_hole(layout, ("rail", "bot+"), near=14) == ("rail", "bot+", 14)
+    assert _free_hole(layout, ("rail", "bot+"), near=14) == ("rail", "bot+", 13)
