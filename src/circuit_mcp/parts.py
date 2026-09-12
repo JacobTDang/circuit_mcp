@@ -66,7 +66,7 @@ def chip(part: str) -> Chip:
 
 
 TWO_TERMINAL = {"resistor": "R", "capacitor": "C", "inductor": "L"}
-UNITS = {"resistor": "Ω", "capacitor": "F", "inductor": "H"}
+UNITS = {"resistor": "Ω", "capacitor": "F", "inductor": "H", "pot": "Ω"}
 
 _SI = {"p": 1e-12, "n": 1e-9, "u": 1e-6, "µ": 1e-6, "m": 1e-3, "k": 1e3, "meg": 1e6, "M": 1e6, "g": 1e9}
 _VALUE = re.compile(r"^\s*([0-9]*\.?[0-9]+)\s*(meg|[pnuµmkMg])?\s*[FHΩ]?\s*$")
