@@ -8,6 +8,7 @@ the card module already built and verified.
 from __future__ import annotations
 
 import inspect
+import re
 
 from fastapi.testclient import TestClient
 
@@ -163,3 +164,34 @@ def test_app_js_keeps_agent_card_layout_across_reload(tmp_path, monkeypatch):
         read = app_script.split("function readCanvas()", 1)[1].split("function saveCanvas()", 1)[0]
         for kind in ("formula", "walkthrough", "vocabulary"):
             assert kind in read, f"readCanvas drops {kind}; layout resets on reload"
+
+
+def test_app_js_renders_and_keeps_the_breadboard_and_expected_cards(tmp_path, monkeypatch):
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        read = app_script.split("function readCanvas()", 1)[1].split("function saveCanvas()", 1)[0]
+        for kind in ("breadboard", "expected"):
+            assert kind in read, f"readCanvas drops {kind}; layout resets on reload"
+            assert f"'{kind}'" in app_script.split("const CARD_KINDS=", 1)[1].split(";", 1)[0]
+        assert "card.kind==='breadboard'" in app_script and "card.kind==='expected'" in app_script
+
+
+def test_app_js_keeps_the_layout_but_not_the_payload_of_a_server_card(tmp_path, monkeypatch):
+    """A breadboard payload is about 30 KB; the poll re-attaches it within a tick."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        save = app_script.split("function saveCanvas()", 1)[1].split("\n", 1)[0]
+        branch = re.search(r"server\s*\?\s*\(\{([^}]*)\}\)", save)
+        assert branch, "saveCanvas must persist a server card without its payload"
+        persisted = {field.strip() for field in branch.group(1).split(",")}
+        assert "card" not in persisted, f"saveCanvas stores the whole payload: {sorted(persisted)}"
+        assert persisted == {"id", "kind", "x", "y", "z", "w", "server"}
+
+
+def test_app_js_refuses_to_render_a_card_kind_it_does_not_know(tmp_path, monkeypatch):
+    """An unknown kind used to reach the canvas with no title and the activity body."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        poll = app_script.split("async function pollCanvasCards()", 1)[1].split("\n", 1)[0]
+        assert "CARD_KINDS.has" in poll, "pollCanvasCards pushes every server kind onto the canvas"
+        assert "unknown card kind" in poll, "an unknown kind must say so once, not render broken"
