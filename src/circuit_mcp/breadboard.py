@@ -256,3 +256,281 @@ def parse_build(content: Any) -> Build:
             positions.setdefault(part.ref, 0.5)
 
     return Build(vplus, vminus, chips, tuple(parts), tuple(opamps), tuple(sources), tuple(probes), positions)
+
+
+# --- placement ---------------------------------------------------------------
+
+@dataclass
+class Layout:
+    build: Build
+    homes: dict[str, tuple] = field(default_factory=dict)      # net -> ("top"|"bottom", col) | ("rail", name)
+    chip: dict | None = None
+    placed: list[dict] = field(default_factory=list)
+    jumpers: list[dict] = field(default_factory=list)
+    attachments: list[dict] = field(default_factory=list)
+    used: set = field(default_factory=set)
+    spans: dict = field(default_factory=dict)                  # (side, row) -> [(c1, c2)]
+    strip_net: dict = field(default_factory=dict)              # strip -> net (for verification)
+    left: list[int] = field(default_factory=lambda: list(LEFT_POOL))
+    right: list[int] = field(default_factory=lambda: list(RIGHT_POOL))
+
+
+def strip_of(hole: Hole) -> tuple:
+    return (hole[0], hole[1]) if hole[0] != "rail" else ("rail", hole[1])
+
+
+def _rail_side(name: str) -> str:
+    return "top" if name.startswith("top") else "bottom"
+
+
+def _rows(side: str) -> str:
+    return TOP_ROWS if side == "top" else BOTTOM_ROWS
+
+
+def _free_hole(layout: Layout, strip: tuple) -> Hole:
+    """A free hole in a column strip (outermost row first) or a rail. Loud when full."""
+    if strip[0] == "rail":
+        for col in range(1, COLUMNS + 1):
+            hole = ("rail", strip[1], col)
+            if hole not in layout.used:
+                layout.used.add(hole)
+                return hole
+        raise BuildError(f"rail {strip[1]} has no free holes")
+    side, col = strip
+    for row in (TOP_ROWS if side == "top" else BOTTOM_ROWS[::-1]):
+        hole = (side, col, row)
+        if hole not in layout.used:
+            layout.used.add(hole)
+            return hole
+    raise BuildError(f"column {col} on the {side} strip has no free holes")
+
+
+def _take_column(layout: Layout, pool: str, count: int = 1) -> list[int]:
+    cols = layout.left if pool == "left" else layout.right
+    if len(cols) < count:
+        raise BuildError("the board is out of free columns; simplify the build")
+    if count == 1:
+        return [cols.pop(0)]
+    # Adjacent columns for a multi-pin part: use the next pool slot and its neighbours.
+    base = cols.pop(0)
+    step = -1 if pool == "left" else 1
+    chosen = [base + step * i for i in range(count)]
+    # Drop pool columns the part now covers or sits next to.
+    covered = {c for c in chosen} | {c + step for c in chosen}
+    cols[:] = [c for c in cols if c not in covered]
+    if any(c < 1 or c > COLUMNS or c in CHIP_COLS for c in chosen):
+        raise BuildError("no room for a multi-pin part on this side")
+    return chosen
+
+
+def _assign_home(layout: Layout, net: str, home: tuple) -> None:
+    layout.homes[net] = home
+    layout.strip_net[home if home[0] == "rail" else (home[0], home[1])] = net
+
+
+def _jumper(layout: Layout, a: tuple, b: tuple, net: str) -> None:
+    """Connect two strips. Both ends take a free hole."""
+    if a == b:
+        return
+    ha, hb = _free_hole(layout, a), _free_hole(layout, b)
+    layout.jumpers.append({"net": net, "ends": [ha, hb]})
+
+
+def _place_horizontal(layout: Layout, part: Part, side: str, c1: int, c2: int) -> list[Hole]:
+    """Lay a part along one strip between two columns, outermost free row first.
+
+    Rows e and f are reserved for the chip and trench-crossing parts.
+    """
+    lo, hi = sorted((c1, c2))
+    order = TOP_ROWS[:-1] if side == "top" else BOTTOM_ROWS[1:][::-1]   # a b c d / j i h g
+    for row in order:
+        holes = [(side, lo, row), (side, hi, row)]
+        if any(h in layout.used for h in holes):
+            continue
+        if any(not (hi < s1 or lo > s2) for s1, s2 in layout.spans.get((side, row), [])):
+            continue
+        layout.used.update(holes)
+        layout.spans.setdefault((side, row), []).append((lo, hi))
+        return holes if c1 <= c2 else holes[::-1]
+    raise BuildError(f"{part.ref}: no free row between columns {lo} and {hi}")
+
+
+def _place_two_terminal(layout: Layout, part: Part) -> None:
+    home_a, home_b = layout.homes[part.nodes[0]], layout.homes[part.nodes[1]]
+    kinds = (home_a[0] == "rail", home_b[0] == "rail")
+    if kinds == (False, False):
+        (side_a, col_a), (side_b, col_b) = home_a, home_b
+        if side_a == side_b:
+            ends = _place_horizontal(layout, part, side_a, col_a, col_b)
+        else:
+            # Across the trench at one end's column; the other end then sits on the
+            # far strip at that column, one jumper from its home.
+            candidates = ((col_a, side_a, side_b, home_b, part.nodes[1]),
+                          (col_b, side_b, side_a, home_a, part.nodes[0]))
+            for col, near, far, far_home, far_net in candidates:
+                top, bottom = ("top", col, "e"), ("bottom", col, "f")
+                if col in CHIP_COLS or top in layout.used or bottom in layout.used:
+                    continue
+                layout.used.update((top, bottom))
+                near_hole, far_hole = (top, bottom) if near == "top" else (bottom, top)
+                ends = [near_hole, far_hole] if near == side_a else [far_hole, near_hole]
+                _jumper(layout, (far, col), far_home, far_net)
+                break
+            else:
+                col = _take_column(layout, "right")[0]
+                top, bottom = ("top", col, "e"), ("bottom", col, "f")
+                layout.used.update((top, bottom))
+                ends = [top, bottom] if side_a == "top" else [bottom, top]
+                _jumper(layout, (side_a, col), home_a, part.nodes[0])
+                _jumper(layout, (side_b, col), home_b, part.nodes[1])
+    elif kinds == (True, True):
+        # Both ends on rails: give the part a column and jumper each end to its rail.
+        col = _take_column(layout, "right")[0]
+        top, bottom = ("top", col, "a"), ("bottom", col, "j")
+        layout.used.update((top, bottom))
+        ends = [top, bottom]
+        _jumper(layout, ("top", col), home_a, part.nodes[0])
+        _jumper(layout, ("bottom", col), home_b, part.nodes[1])
+    else:
+        column_end, rail_end = (0, 1) if not kinds[0] else (1, 0)
+        side, col = layout.homes[part.nodes[column_end]]
+        rail = layout.homes[part.nodes[rail_end]][1]
+        if _rail_side(rail) == side:
+            outer = "a" if side == "top" else "j"
+            strip_hole, rail_hole = (side, col, outer), ("rail", rail, col)
+            if strip_hole in layout.used or rail_hole in layout.used:
+                strip_hole = _free_hole(layout, (side, col))
+                rail_hole = _free_hole(layout, ("rail", rail))
+            else:
+                layout.used.update((strip_hole, rail_hole))
+            ends = [strip_hole, rail_hole] if column_end == 0 else [rail_hole, strip_hole]
+        else:
+            # Rail is on the other side: run the part to a fresh column, jumper that to the rail.
+            fresh = _take_column(layout, "left" if col <= CHIP_COL0 else "right")[0]
+            holes = _place_horizontal(layout, part, side, col, fresh)
+            _jumper(layout, (side, fresh), ("rail", rail), part.nodes[rail_end])
+            ends = holes if column_end == 0 else holes[::-1]
+    layout.placed.append({"ref": part.ref, "kind": part.kind, "value": part.value,
+                          "nodes": list(part.nodes), "ends": ends})
+
+
+def _place_multi_pin(layout: Layout, part: Part) -> None:
+    """A pot or an LED sits in adjacent columns; each pin joins its net."""
+    homed = [layout.homes.get(n) for n in part.nodes]
+    sides = {h[0] for h in homed if h and h[0] != "rail"}
+    side = sides.pop() if len(sides) == 1 else "top"
+    touches_source = any(n in {s.node for s in layout.build.sources} for n in part.nodes)
+    cols = _take_column(layout, "left" if touches_source else "right", len(part.nodes))
+    row = "c" if side == "top" else "h"
+    ends: list[Hole] = []
+    for net, col in zip(part.nodes, cols):
+        hole = (side, col, row)
+        layout.used.add(hole)
+        ends.append(hole)
+        if net not in layout.homes:
+            _assign_home(layout, net, (side, col))
+        else:
+            _jumper(layout, (side, col), layout.homes[net], net)
+    layout.placed.append({"ref": part.ref, "kind": part.kind, "value": part.value,
+                          "nodes": list(part.nodes), "ends": ends})
+
+
+def place(build: Build) -> Layout:
+    layout = Layout(build)
+    # Rails: V+ on the bottom red rail, V- on the top red rail, ground on both blue rails.
+    _assign_home(layout, GROUND, ("rail", "bot-"))
+    layout.strip_net[("rail", "top-")] = GROUND
+    _assign_home(layout, "vplus", ("rail", "bot+"))
+    if build.dual_supply:
+        _assign_home(layout, "vminus", ("rail", "top+"))
+    layout.jumpers.append({"net": GROUND, "ends": [("rail", "top-", 1), ("rail", "bot-", 1)]})
+    layout.used.update({("rail", "top-", 1), ("rail", "bot-", 1)})
+
+    # The chip straddles the trench: pins 1-7 along row f, 8-14 along row e right to left.
+    extra_pins: list[tuple[str, tuple]] = []
+    for ref, chip in build.chips.items():
+        pins = {}
+        for pin in range(1, chip.pins + 1):
+            col = CHIP_COL0 + (pin - 1 if pin <= 7 else chip.pins - pin)
+            hole = ("bottom", col, "f") if pin <= 7 else ("top", col, "e")
+            pins[pin] = hole
+            layout.used.add(hole)
+        layout.chip = {"ref": ref, "part": chip.part, "col0": CHIP_COL0, "pins": pins}
+        for use in build.opamps:
+            section = chip.section(use.section)
+            for net, pin in ((use.inp, section.inp), (use.inn, section.inn), (use.out, section.out)):
+                strip = strip_of(pins[pin])
+                if net not in layout.homes:
+                    _assign_home(layout, net, strip)
+                elif layout.homes[net] != strip:
+                    extra_pins.append((net, strip))
+        power_minus = "vminus" if build.dual_supply else GROUND
+        extra_pins.append(("vplus", strip_of(pins[chip.vplus])))
+        extra_pins.append((power_minus, strip_of(pins[chip.vminus])))
+
+    for part in build.parts:
+        if part.kind in ("pot", "led"):
+            _place_multi_pin(layout, part)
+    source_nets = {s.node for s in build.sources}
+    for net in sorted(build.nets()):
+        if net not in layout.homes:
+            pool = "left" if net in source_nets else "right"
+            _assign_home(layout, net, ("top", _take_column(layout, pool)[0]))
+    for part in build.parts:
+        if part.kind not in ("pot", "led"):
+            _place_two_terminal(layout, part)
+    for net, strip in extra_pins:
+        _jumper(layout, strip, layout.homes[net], net)
+    for source in build.sources:
+        hole = _free_hole(layout, layout.homes[source.node])
+        layout.attachments.append({"kind": "source", "ref": source.ref, "label": f"{source.ref} +", "net": source.node, "hole": hole})
+    for probe in build.probes:
+        hole = _free_hole(layout, layout.homes[probe.node])
+        layout.attachments.append({"kind": "probe", "ref": probe.label, "label": probe.label, "net": probe.node, "hole": hole})
+    verify(layout)
+    return layout
+
+
+def verify(layout: Layout) -> None:
+    """Every net is one connected group of strips, and no two nets touch."""
+    parent: dict[tuple, tuple] = {}
+
+    def find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        parent[find(a)] = find(b)
+
+    claims: dict[tuple, str] = dict(layout.strip_net)
+    if layout.chip:
+        chip = layout.build.chips[layout.chip["ref"]]
+        for use in layout.build.opamps:
+            section = chip.section(use.section)
+            for net, pin in ((use.inp, section.inp), (use.inn, section.inn), (use.out, section.out)):
+                claims[strip_of(layout.chip["pins"][pin])] = net
+        claims[strip_of(layout.chip["pins"][chip.vplus])] = "vplus"
+        claims[strip_of(layout.chip["pins"][chip.vminus])] = "vminus" if layout.build.dual_supply else GROUND
+    for part in layout.placed:
+        for net, hole in zip(part["nodes"], part["ends"]):
+            claims.setdefault(strip_of(hole), net)
+            if claims[strip_of(hole)] != net:
+                raise BuildError(f"layout error: {part['ref']} end for {net} landed on a strip carrying {claims[strip_of(hole)]}")
+    for jumper in layout.jumpers:
+        union(strip_of(jumper["ends"][0]), strip_of(jumper["ends"][1]))
+    for item in layout.attachments:
+        claims.setdefault(strip_of(item["hole"]), item["net"])
+    component_net: dict[tuple, str] = {}
+    for strip, net in claims.items():
+        root = find(strip)
+        if component_net.setdefault(root, net) != net:
+            raise BuildError(f"layout error: nets {component_net[root]} and {net} are shorted")
+    roots: dict[str, set] = {}
+    for strip, net in claims.items():
+        roots.setdefault(net, set()).add(find(strip))
+    for net, found in roots.items():
+        if len(found) > 1:
+            raise BuildError(f"layout error: net {net} is split into {len(found)} groups")

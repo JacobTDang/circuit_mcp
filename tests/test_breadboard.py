@@ -136,3 +136,72 @@ def test_more_than_max_parts_is_refused():
     parts = [{"ref": f"R{i}", "kind": "resistor", "value": "1k", "nodes": [f"a{i}", f"b{i}"]} for i in range(MAX_PARTS + 1)]
     with pytest.raises(BuildError, match=f"at most {MAX_PARTS} parts"):
         parse_build(spec(parts=parts))
+
+
+# --- placement -----------------------------------------------------------------
+
+from circuit_mcp.breadboard import CHIP_COL0, place, strip_of, verify  # noqa: E402
+from tests.fixtures import lab1  # noqa: E402
+
+
+@pytest.mark.parametrize("name", sorted(lab1.ALL))
+def test_every_lab1_circuit_places_and_verifies(name):
+    layout = place(parse_build(lab1.ALL[name]))
+    verify(layout)
+    assert len(layout.placed) == len(lab1.ALL[name]["parts"])
+
+
+def test_the_chip_straddles_the_trench_with_pin_one_bottom_left():
+    layout = place(parse_build(lab1.EXP1_NONINVERTING))
+    pins = layout.chip["pins"]
+    assert pins[1] == ("bottom", CHIP_COL0, "f")
+    assert pins[7] == ("bottom", CHIP_COL0 + 6, "f")
+    assert pins[8] == ("top", CHIP_COL0 + 6, "e")
+    assert pins[14] == ("top", CHIP_COL0, "e")
+
+
+def test_opamp_nets_live_on_their_pin_strips():
+    layout = place(parse_build(lab1.EXP1_NONINVERTING))
+    assert layout.homes["out"] == ("bottom", CHIP_COL0)        # pin 1
+    assert layout.homes["fb"] == ("bottom", CHIP_COL0 + 1)     # pin 2
+    assert layout.homes["vi"] == ("bottom", CHIP_COL0 + 2)     # pin 3
+
+
+def test_rails_carry_the_supply_and_ground():
+    dual = place(parse_build(lab1.EXP1_NONINVERTING))
+    assert dual.homes[GROUND] == ("rail", "bot-")
+    assert dual.homes["vplus"] == ("rail", "bot+")
+    assert dual.homes["vminus"] == ("rail", "top+")
+    single = place(parse_build(lab1.EXP4B_BUFFERED))
+    assert "vminus" not in single.homes
+    chip = single.build.chips["U1"]
+    minus_strip = strip_of(single.chip["pins"][chip.vminus])
+    assert any(strip_of(j["ends"][0]) == minus_strip or strip_of(j["ends"][1]) == minus_strip for j in single.jumpers if j["net"] == GROUND)
+
+
+def test_every_two_terminal_part_touches_both_of_its_nets():
+    layout = place(parse_build(lab1.EXP6_DIFFERENCE))
+    for part in layout.placed:
+        assert len(part["ends"]) == len(part["nodes"])
+        for end in part["ends"]:
+            assert end in layout.used
+
+
+def test_verify_refuses_a_short_between_two_nets():
+    layout = place(parse_build(lab1.EXP1_NONINVERTING))
+    layout.jumpers.append({"net": "vi", "ends": [("bottom", CHIP_COL0 + 2, "j"), ("bottom", CHIP_COL0 + 1, "j")]})
+    with pytest.raises(BuildError, match="shorted"):
+        verify(layout)
+
+
+def test_verify_refuses_a_net_split_in_two():
+    layout = place(parse_build(lab1.EXP1_NONINVERTING))
+    layout.jumpers = [j for j in layout.jumpers if j["ends"][0] != ("rail", "top-", 1)]
+    with pytest.raises(BuildError, match="split"):
+        verify(layout)
+
+
+def test_the_board_runs_out_of_columns_loudly():
+    parts = [{"ref": f"R{i}", "kind": "resistor", "value": "1k", "nodes": [f"a{i}", f"b{i}"]} for i in range(12)]
+    with pytest.raises(BuildError, match="out of free columns"):
+        place(parse_build({"supply": {"vplus": 5, "vminus": 0}, "parts": parts}))
