@@ -10,6 +10,7 @@ import math
 
 import pytest
 
+from circuit_mcp import spice
 from circuit_mcp.breadboard import parse_build
 from circuit_mcp.expect import ExpectError, deck, expectations
 from tests.fixtures import lab1
@@ -115,3 +116,32 @@ def test_an_upper_case_node_name_is_read_back_from_ngspice():
     result = expectations(shouty)
     assert math.isclose(result["gains"][0]["gain"], 16.0, rel_tol=0.02)
     assert reading(result, "CH2 vo")["node"] == "Out"
+
+
+def test_a_settle_window_the_simulation_cannot_resolve_is_refused():
+    """A huge RC used to stretch the step until the capture window held two points."""
+    slow = copy.deepcopy(lab1.EXP5_INTEGRATOR)
+    slow["parts"][1]["value"] = "10meg"   # tau = 1 s, so a 5 s settle at 500 Hz
+    with pytest.raises(ExpectError, match="settle window"):
+        expectations(slow)
+
+
+def test_a_failed_simulation_is_reported_with_its_cause(monkeypatch):
+    def boom(netlist, analysis, outputs):
+        raise spice.SpiceError("boom")
+
+    monkeypatch.setattr("circuit_mcp.expect.spice.simulate_spice", boom)
+    with pytest.raises(ExpectError, match="simulation failed: boom") as raised:
+        expectations(lab1.EXP1_NONINVERTING)
+    assert isinstance(raised.value.__cause__, spice.SpiceError)
+
+
+def test_a_simulation_that_returns_nothing_is_refused(monkeypatch):
+    monkeypatch.setattr("circuit_mcp.expect.spice.simulate_spice",
+                        lambda netlist, analysis, outputs: {"ok": True, "analysis": "op", "points": []})
+    with pytest.raises(ExpectError, match="no points"):
+        expectations(lab1.EXP1_NONINVERTING)
+
+
+def test_the_result_carries_the_deck_that_was_simulated():
+    assert expectations(lab1.EXP1_NONINVERTING)["deck"] == deck(parse_build(lab1.EXP1_NONINVERTING))
