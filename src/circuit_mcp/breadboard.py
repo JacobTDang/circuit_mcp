@@ -276,15 +276,11 @@ class Layout:
 
 
 def strip_of(hole: Hole) -> tuple:
-    return (hole[0], hole[1]) if hole[0] != "rail" else ("rail", hole[1])
+    return (hole[0], hole[1])
 
 
 def _rail_side(name: str) -> str:
     return "top" if name.startswith("top") else "bottom"
-
-
-def _rows(side: str) -> str:
-    return TOP_ROWS if side == "top" else BOTTOM_ROWS
 
 
 def _free_hole(layout: Layout, strip: tuple) -> Hole:
@@ -345,11 +341,11 @@ def _place_horizontal(layout: Layout, part: Part, side: str, c1: int, c2: int) -
     order = TOP_ROWS[:-1] if side == "top" else BOTTOM_ROWS[1:][::-1]   # a b c d / j i h g
     for row in order:
         holes = [(side, lo, row), (side, hi, row)]
-        if any(h in layout.used for h in holes):
-            continue
+        if any((side, col, row) in layout.used for col in range(lo, hi + 1)):
+            continue   # the body would cover an occupied hole, not just its ends
         if any(not (hi < s1 or lo > s2) for s1, s2 in layout.spans.get((side, row), [])):
             continue
-        layout.used.update(holes)
+        layout.used.update((side, col, row) for col in range(lo, hi + 1))
         layout.spans.setdefault((side, row), []).append((lo, hi))
         return holes if c1 <= c2 else holes[::-1]
     raise BuildError(f"{part.ref}: no free row between columns {lo} and {hi}")
@@ -387,7 +383,8 @@ def _place_two_terminal(layout: Layout, part: Part) -> None:
         # Both ends on rails: give the part a column and jumper each end to its rail.
         col = _take_column(layout, "right")[0]
         top, bottom = ("top", col, "a"), ("bottom", col, "j")
-        layout.used.update((top, bottom))
+        layout.used.update(("top", col, r) for r in TOP_ROWS)
+        layout.used.update(("bottom", col, r) for r in BOTTOM_ROWS)
         ends = [top, bottom]
         _jumper(layout, ("top", col), home_a, part.nodes[0])
         _jumper(layout, ("bottom", col), home_b, part.nodes[1])
@@ -422,6 +419,9 @@ def _place_multi_pin(layout: Layout, part: Part) -> None:
     touches_source = any(n in {s.node for s in layout.build.sources} for n in part.nodes)
     cols = _take_column(layout, "left" if touches_source else "right", len(part.nodes))
     row = "c" if side == "top" else "h"
+    for col in cols:
+        if (side, col, row) in layout.used:
+            raise BuildError(f"{part.ref}: hole {row}{col} on the {side} strip is already occupied")
     ends: list[Hole] = []
     for net, col in zip(part.nodes, cols):
         hole = (side, col, row)
@@ -431,6 +431,8 @@ def _place_multi_pin(layout: Layout, part: Part) -> None:
             _assign_home(layout, net, (side, col))
         else:
             _jumper(layout, (side, col), layout.homes[net], net)
+    span = sorted(cols)
+    layout.spans.setdefault((side, row), []).append((span[0], span[-1]))
     layout.placed.append({"ref": part.ref, "kind": part.kind, "value": part.value,
                           "nodes": list(part.nodes), "ends": ends})
 
@@ -515,6 +517,8 @@ def verify(layout: Layout) -> None:
         claims[strip_of(layout.chip["pins"][chip.vplus])] = "vplus"
         claims[strip_of(layout.chip["pins"][chip.vminus])] = "vminus" if layout.build.dual_supply else GROUND
     for part in layout.placed:
+        if len(part["ends"]) != len(part["nodes"]):
+            raise BuildError(f"layout error: {part['ref']} has {len(part['ends'])} ends for {len(part['nodes'])} nodes")
         for net, hole in zip(part["nodes"], part["ends"]):
             claims.setdefault(strip_of(hole), net)
             if claims[strip_of(hole)] != net:

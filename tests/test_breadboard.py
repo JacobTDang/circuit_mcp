@@ -179,12 +179,18 @@ def test_rails_carry_the_supply_and_ground():
     assert any(strip_of(j["ends"][0]) == minus_strip or strip_of(j["ends"][1]) == minus_strip for j in single.jumpers if j["net"] == GROUND)
 
 
-def test_every_two_terminal_part_touches_both_of_its_nets():
+def test_every_two_terminal_part_lands_on_distinct_real_holes():
     layout = place(parse_build(lab1.EXP6_DIFFERENCE))
     for part in layout.placed:
         assert len(part["ends"]) == len(part["nodes"])
+        assert len(set(part["ends"])) == len(part["ends"])
         for end in part["ends"]:
-            assert end in layout.used
+            if end[0] == "rail":
+                assert 1 <= end[2] <= 30
+            else:
+                assert end[0] in ("top", "bottom")
+                assert 1 <= end[1] <= 30
+                assert end[2] in "abcdefghij"
 
 
 def test_verify_refuses_a_short_between_two_nets():
@@ -199,6 +205,47 @@ def test_verify_refuses_a_net_split_in_two():
     layout.jumpers = [j for j in layout.jumpers if j["ends"][0] != ("rail", "top-", 1)]
     with pytest.raises(BuildError, match="split"):
         verify(layout)
+
+
+def _body(part):
+    """Every hole a placed part's body lies over, not just its ends."""
+    ends = part["ends"]
+    (s1, c1, r1), (s2, c2, r2) = ends[0], ends[-1]
+    if s1 == s2 and r1 == r2:
+        return {(s1, c, r1) for c in range(min(c1, c2), max(c1, c2) + 1)}
+    if s1 != s2 and c1 == c2 and {r1, r2} == {"a", "j"}:
+        return {("top", c1, r) for r in "abcde"} | {("bottom", c1, r) for r in "fghij"}
+    return set(ends)
+
+
+@pytest.mark.parametrize("name", sorted(lab1.ALL))
+def test_nothing_is_placed_under_a_component_body(name):
+    layout = place(parse_build(lab1.ALL[name]))
+    bodies = {part["ref"]: _body(part) for part in layout.placed}
+    for ref, body in bodies.items():
+        for other, other_body in bodies.items():
+            if other != ref:
+                assert not (body & other_body), f"{ref} and {other} overlap at {body & other_body}"
+        for jumper in layout.jumpers:
+            for end in jumper["ends"]:
+                assert end not in body, f"jumper for {jumper['net']} at {end} is under {ref}"
+        for item in layout.attachments:
+            assert item["hole"] not in body, f"{item['label']} at {item['hole']} is under {ref}"
+
+
+def test_verify_refuses_a_part_missing_an_end():
+    layout = place(parse_build(lab1.EXP1_NONINVERTING))
+    layout.placed[0]["ends"] = layout.placed[0]["ends"][:-1]
+    with pytest.raises(BuildError, match="ends for"):
+        verify(layout)
+
+
+def test_a_multi_pin_part_refuses_an_occupied_hole():
+    from circuit_mcp.breadboard import Layout, Part, _place_multi_pin
+    layout = Layout(parse_build(lab1.EXP1_NONINVERTING))
+    layout.used.add(("top", 20, "c"))
+    with pytest.raises(BuildError, match="already occupied"):
+        _place_multi_pin(layout, Part("D9", "led", "", ("x", "y")))
 
 
 def test_the_board_runs_out_of_columns_loudly():
