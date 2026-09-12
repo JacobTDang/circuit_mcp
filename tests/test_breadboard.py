@@ -319,11 +319,13 @@ def test_single_supply_wire_list_has_no_negative_rail():
 
 
 def test_svg_escapes_every_label_the_agent_wrote():
+    from xml.etree import ElementTree
     hostile = copy.deepcopy(lab1.EXP1_NONINVERTING)
-    hostile["probes"] = [{"label": "<script>x</script>", "node": "out"}]
+    hostile["probes"] = [{"label": "<script>&\"'x", "node": "out"}]
     picture = svg(place(parse_build(hostile)))
     assert "<script>" not in picture
     assert "&lt;script&gt;" in picture
+    ElementTree.fromstring(picture)
 
 
 def test_svg_draws_the_chip_rails_and_probes():
@@ -339,3 +341,38 @@ def test_layout_payload_has_what_the_card_renders():
     assert set(payload) == {"svg", "wires", "holes", "probes"}
     assert all(re.match(r"^([a-j]\d+|(top|bot)[+-] rail \(col \d+\))$", h) for holes in payload["holes"].values() for h in holes)
     assert [p["label"] for p in payload["probes"]] == ["VA", "VB"]
+
+
+def test_chip_pin_numbers_are_drawn_on_the_chip_body():
+    picture = svg(place(parse_build(lab1.EXP1_NONINVERTING)))
+    body = re.search(r'<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)" rx="3" fill="#2b2b2b"/>', picture)
+    assert body, "chip body rect not found"
+    x1, y1, w, h = (float(v) for v in body.groups())
+    labels = re.findall(r'<text x="([\d.]+)" y="([\d.]+)" font-size="7"[^>]*>(\d+)</text>', picture)
+    assert sorted(int(n) for _, _, n in labels) == list(range(1, 15))
+    for x, y, n in labels:
+        assert x1 <= float(x) <= x1 + w and y1 + 6 <= float(y) <= y1 + h - 2, f"pin {n} label at ({x}, {y}) is off the body"
+
+
+@pytest.mark.parametrize("name", sorted(lab1.ALL))
+def test_every_lab1_svg_is_well_formed_xml(name):
+    from xml.etree import ElementTree
+    ElementTree.fromstring(svg(place(parse_build(lab1.ALL[name]))))
+
+
+def test_the_ground_rail_bridge_is_instructed_once():
+    wires = wire_list(place(parse_build(lab1.EXP1_NONINVERTING)))
+    assert sum("jumper the two blue rails together" in w for w in wires) == 1
+    assert not [w for w in wires if w.startswith("Jumper") and "top- rail" in w and "bot- rail" in w]
+
+
+def test_the_chip_step_names_the_chips_own_power_pins():
+    from circuit_mcp import parts as P
+    chip = P.chip("LM324")
+    step = next(w for w in wire_list(place(parse_build(lab1.EXP1_NONINVERTING))) if w.startswith("U1 LM324"))
+    assert f"pin {chip.vplus} (V+)" in step and f"pin {chip.vminus} (V-)" in step
+
+
+def test_the_drawing_labels_parts_with_the_same_unit_as_the_wire_list():
+    picture = svg(place(parse_build(lab1.EXP1_NONINVERTING)))
+    assert ">R1 1kΩ<" in picture

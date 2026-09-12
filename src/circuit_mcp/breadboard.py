@@ -575,7 +575,10 @@ def hole_name(hole: Hole) -> str:
     return f"{hole[2]}{hole[1]}"
 
 
-VALUE_UNITS = {**P.UNITS, "pot": "Ω"}   # P.UNITS covers the two-terminal kinds; a pot is in ohms too
+def _is_rail_bridge(jumper: dict) -> bool:
+    """The jumper that ties the two blue rails together, which the power step already asks for."""
+    ends = jumper["ends"]
+    return all(end[0] == "rail" for end in ends) and {end[1] for end in ends} == {"top-", "bot-"}
 
 
 def wire_list(layout: Layout) -> list[str]:
@@ -586,9 +589,9 @@ def wire_list(layout: Layout) -> list[str]:
     if layout.chip:
         chip = b.chips[layout.chip["ref"]]
         steps.append(f"{layout.chip['ref']} {chip.part}: straddle the trench with pin 1 at f{CHIP_COL0} "
-                     f"(notch to the left); pin 4 (V+) and pin 11 (V-) are wired below.")
+                     f"(notch to the left); pin {chip.vplus} (V+) and pin {chip.vminus} (V-) are wired below.")
     for part in layout.placed:
-        unit = VALUE_UNITS.get(part["kind"], "")
+        unit = P.UNITS.get(part["kind"], "")
         label = f"{part['ref']} {part['value']}{unit}".strip()
         if part["kind"] == "pot":
             a, w, c = part["ends"]
@@ -599,6 +602,8 @@ def wire_list(layout: Layout) -> list[str]:
         else:
             steps.append(f"{label}: {hole_name(part['ends'][0])} to {hole_name(part['ends'][1])}.")
     for jumper in layout.jumpers:
+        if _is_rail_bridge(jumper):
+            continue   # the power step already says to jumper the two blue rails together
         steps.append(f"Jumper ({jumper['net']}): {hole_name(jumper['ends'][0])} to {hole_name(jumper['ends'][1])}.")
     for item in layout.attachments:
         who = "Function generator / supply lead" if item["kind"] == "source" else "Scope or meter probe"
@@ -648,7 +653,8 @@ def svg(layout: Layout) -> str:
         out.append(f'<text x="{x1 + w / 2}" y="{y1 + h / 2 + 4}" font-size="11" text-anchor="middle" fill="#eee" font-family="ui-monospace,monospace">{escape(layout.chip["ref"])} {escape(layout.chip["part"])}</text>')
         for pin, hole in layout.chip["pins"].items():
             x, y = _xy(hole)
-            out.append(f'<text x="{x}" y="{y + (12 if hole[0] == "bottom" else -6)}" font-size="7" text-anchor="middle" fill="#ddd">{pin}</text>')
+            # Just in from the pin's own hole, so every number sits on the dark body.
+            out.append(f'<text x="{x}" y="{y + (-8 if hole[0] == "bottom" else 12)}" font-size="7" text-anchor="middle" fill="#eee">{pin}</text>')
     for jumper in layout.jumpers:
         (xa, ya), (xb, yb) = _xy(jumper["ends"][0]), _xy(jumper["ends"][1])
         out.append(f'<line x1="{xa}" y1="{ya}" x2="{xb}" y2="{yb}" stroke="#2e8b57" stroke-width="3" stroke-linecap="round" opacity=".85"/>')
@@ -659,7 +665,7 @@ def svg(layout: Layout) -> str:
             out.append(f'<line x1="{xa}" y1="{ya}" x2="{xb}" y2="{yb}" stroke="#555" stroke-width="2"/>')
         (xa, ya), (xb, yb) = pts[0], pts[-1]
         mx, my = (xa + xb) / 2, (ya + yb) / 2
-        text = f"{part['ref']} {part['value']}".strip()
+        text = f"{part['ref']} {part['value']}{P.UNITS.get(part['kind'], '')}".strip()
         out.append(f'<rect x="{mx - 24}" y="{my - 8}" width="48" height="16" rx="4" fill="{color}" stroke="#333"/>')
         out.append(f'<text x="{mx}" y="{my + 4}" font-size="8.5" text-anchor="middle" font-family="ui-monospace,monospace" fill="#111">{escape(text)}</text>')
     for item in layout.attachments:
