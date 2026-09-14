@@ -16,7 +16,8 @@ from typing import Any
 import sympy as sp
 from sympy.printing.mathml import MathMLPresentationPrinter
 
-from .breadboard import BuildError, layout_payload
+from .breadboard import BuildError
+from .breadboard_view import layout_payload
 from .expect import ExpectError, expectations
 from .parsing import ParseError, parse_as_written, parse_expression
 from .steps import check_steps

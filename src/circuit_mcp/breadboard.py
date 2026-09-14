@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from html import escape
 from typing import Any
 
 from . import parts as P
@@ -21,8 +20,14 @@ CHIP_COL0 = 12          # a DIP-14 occupies columns 12..18
 CHIP_COLS = range(CHIP_COL0, CHIP_COL0 + 7)
 LEFT_POOL = (10, 8, 6, 4, 2)
 RIGHT_POOL = (20, 22, 24, 26, 28)
+CHIPLESS_RIGHT_POOL = (12, 14, 16, 18, 20, 22, 24, 26, 28)   # with no chip, the middle is free
 GROUND = "gnd"
 CROSSED_RAIL = {"top+": "top-", "bot-": "bot+"}   # the near rail a lead to the far rail lies over
+# A wire between two strips starts one row in, leaving the outer row for leads that
+# run straight to a rail and for probes.
+JUMPER_ROWS = {"top": "bcdae", "bottom": "ihgjf"}
+PART_ROWS = {"top": "bcda", "bottom": "ihgj"}
+MAX_SPAN = 4   # columns a bent quarter-watt resistor lead reaches
 GROUND_ALIASES = {"0", "gnd", "ground"}
 NET_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 PART_KINDS = {"resistor": 2, "capacitor": 2, "inductor": 2, "led": 2, "pot": 3}
@@ -290,6 +295,11 @@ class Layout:
     right: list[int] = field(default_factory=lambda: list(RIGHT_POOL))
 
 
+def _chip_cols(layout: "Layout") -> range:
+    """The columns the chip occupies, or none when the build has no chip."""
+    return CHIP_COLS if layout.build.chips else range(0)
+
+
 def strip_of(hole: Hole) -> tuple:
     return (hole[0], hole[1])
 
@@ -298,8 +308,8 @@ def _rail_side(name: str) -> str:
     return "top" if name.startswith("top") else "bottom"
 
 
-def _free_hole(layout: Layout, strip: tuple, near: int | None = None) -> Hole:
-    """A free hole in a column strip (outermost row first) or a rail. Loud when full.
+def _free_hole(layout: Layout, strip: tuple, near: int | None = None, rows: str | None = None) -> Hole:
+    """A free hole in a column strip (in `rows` order, else outermost first) or a rail. Loud when full.
 
     On a rail, `near` is the column of whatever the hole connects to: the nearest
     free column to it wins, so the jumper is short. Ties go to the lower column.
@@ -315,7 +325,7 @@ def _free_hole(layout: Layout, strip: tuple, near: int | None = None) -> Hole:
                 return hole
         raise BuildError(f"rail {strip[1]} has no free holes")
     side, col = strip
-    for row in (TOP_ROWS if side == "top" else BOTTOM_ROWS[::-1]):
+    for row in rows or (TOP_ROWS if side == "top" else BOTTOM_ROWS[::-1]):
         hole = (side, col, row)
         if hole not in layout.used:
             layout.used.add(hole)
@@ -336,7 +346,7 @@ def _take_column(layout: Layout, pool: str, count: int = 1) -> list[int]:
     # Drop pool columns the part now covers or sits next to.
     covered = {c for c in chosen} | {c + step for c in chosen}
     cols[:] = [c for c in cols if c not in covered]
-    if any(c < 1 or c > COLUMNS or c in CHIP_COLS for c in chosen):
+    if any(c < 1 or c > COLUMNS or c in _chip_cols(layout) for c in chosen):
         raise BuildError("no room for a multi-pin part on this side")
     return chosen
 
@@ -346,45 +356,124 @@ def _assign_home(layout: Layout, net: str, home: tuple) -> None:
     layout.strip_net[home if home[0] == "rail" else (home[0], home[1])] = net
 
 
+def _home(layout: Layout, net: str, side: str) -> tuple:
+    """Where a connection from `side` of the board joins `net`.
+
+    Both blue rails carry ground, so ground joins the one on its own side and the
+    wire never crosses the board.
+    """
+    if net == GROUND:
+        return ("rail", "top-" if side == "top" else "bot-")
+    return layout.homes[net]
+
+
 def _jumper(layout: Layout, a: tuple, b: tuple, net: str) -> None:
-    """Connect two strips. Both ends take a free hole."""
+    """Connect two strips. Both ends take a free hole.
+
+    Between two column strips on one side, both ends take the same row when one is
+    free in both, so the wire lies along that row instead of bending around what
+    sits between its ends.
+    """
     if a == b:
         return
+    if a[0] == b[0] and a[0] != "rail":
+        shared = [row for row in JUMPER_ROWS[a[0]] if (a[0], a[1], row) not in layout.used and (b[0], b[1], row) not in layout.used]
+        if shared:
+            ends = [(a[0], a[1], shared[0]), (b[0], b[1], shared[0])]
+            layout.used.update(ends)
+            layout.jumpers.append({"net": net, "ends": ends})
+            return
     near_a = b[1] if b[0] != "rail" else None
     near_b = a[1] if a[0] != "rail" else None
-    ha, hb = _free_hole(layout, a, near_a), _free_hole(layout, b, near_b)
+    rows_a = None if b[0] == "rail" else JUMPER_ROWS.get(a[0])
+    rows_b = None if a[0] == "rail" else JUMPER_ROWS.get(b[0])
+    ha, hb = _free_hole(layout, a, near_a, rows_a), _free_hole(layout, b, near_b, rows_b)
     layout.jumpers.append({"net": net, "ends": [ha, hb]})
 
 
-def _place_horizontal(layout: Layout, part: Part, side: str, c1: int, c2: int) -> list[Hole]:
-    """Lay a part along one strip between two columns, outermost free row first.
+def _horizontal_row(layout: Layout, side: str, c1: int, c2: int) -> str | None:
+    """The row a part can lie along between two columns, if any.
 
-    Rows e and f are reserved for the chip and trench-crossing parts.
+    Like a wire, it starts one row in, so the outer row stays free for leads that run
+    straight to a rail. Rows e and f are reserved for the chip and trench-crossing parts.
     """
     lo, hi = sorted((c1, c2))
-    order = TOP_ROWS[:-1] if side == "top" else BOTTOM_ROWS[1:][::-1]   # a b c d / j i h g
-    for row in order:
-        holes = [(side, lo, row), (side, hi, row)]
+    for row in PART_ROWS[side]:
         if any((side, col, row) in layout.used for col in range(lo, hi + 1)):
             continue   # the body would cover an occupied hole, not just its ends
         if any(not (hi < s1 or lo > s2) for s1, s2 in layout.spans.get((side, row), [])):
             continue
-        layout.used.update((side, col, row) for col in range(lo, hi + 1))
-        layout.spans.setdefault((side, row), []).append((lo, hi))
-        return holes if c1 <= c2 else holes[::-1]
-    raise BuildError(f"{part.ref}: no free row between columns {lo} and {hi}")
+        return row
+    return None
 
 
-def _route_to_rail(layout: Layout, part: Part, side: str, col: int, rail: str, net: str) -> list[Hole]:
-    """Lay a part from `col` to a fresh column on the nearer side, and jumper that to the rail.
+def _place_horizontal(layout: Layout, part: Part, side: str, c1: int, c2: int) -> list[Hole]:
+    """Lay a part along one strip between two columns; the end at `c1` comes back first."""
+    lo, hi = sorted((c1, c2))
+    row = _horizontal_row(layout, side, lo, hi)
+    if row is None:
+        raise BuildError(f"{part.ref}: no free row between columns {lo} and {hi}")
+    layout.used.update((side, col, row) for col in range(lo, hi + 1))
+    layout.spans.setdefault((side, row), []).append((lo, hi))
+    return [(side, c1, row), (side, c2, row)]
+
+
+def _spare(layout: Layout, side: str, col: int) -> bool:
+    """A column strip nothing is plugged into and no net owns."""
+    rows = TOP_ROWS if side == "top" else BOTTOM_ROWS
+    return (1 <= col <= COLUMNS and col not in _chip_cols(layout) and (side, col) not in layout.strip_net
+            and not any((side, col, row) in layout.used for row in rows))
+
+
+def _claim(layout: Layout, side: str, col: int, net: str) -> None:
+    layout.strip_net[(side, col)] = net
+    for pool in (layout.left, layout.right):
+        if col in pool:
+            pool.remove(col)
+
+
+def _route_to_rail(layout: Layout, part: Part, side: str, col: int, net: str) -> list[Hole]:
+    """Lay a part from `col` to a spare column within reach, for a wire to the rail's net.
 
     The column end comes back first. This is the route for a part whose rail is on
     the other side of the board, and for one whose straight run at `col` is blocked.
     """
-    fresh = _take_column(layout, "left" if col <= CHIP_COL0 else "right")[0]
-    holes = _place_horizontal(layout, part, side, col, fresh)
-    _jumper(layout, (side, fresh), ("rail", rail), net)
-    return holes
+    reach = [c for c in range(col - MAX_SPAN, col + MAX_SPAN + 1)
+             if c != col and _spare(layout, side, c) and _horizontal_row(layout, side, col, c)]
+    if reach:
+        spare = min(reach, key=lambda c: (abs(abs(c - col) - 2), abs(c - col), c))
+    else:
+        spare = _take_column(layout, "left" if col <= CHIP_COL0 else "right")[0]
+    _claim(layout, side, spare, net)
+    return _place_horizontal(layout, part, side, col, spare)
+
+
+def _lay_between(layout: Layout, part: Part, side: str, col_a: int, col_b: int) -> list[Hole]:
+    """Join two columns on one side without stretching the part past MAX_SPAN.
+
+    Too far apart, the part runs from one column to a spare column as near the
+    other as it reaches, and the wiring covers the rest.
+    """
+    if abs(col_a - col_b) <= MAX_SPAN:
+        return _place_horizontal(layout, part, side, col_a, col_b)
+    options = [(abs(spare - other), -abs(spare - anchor), spare, anchor, net)
+               for anchor, other, net in ((col_a, col_b, part.nodes[1]), (col_b, col_a, part.nodes[0]))
+               for spare in range(anchor - MAX_SPAN, anchor + MAX_SPAN + 1)
+               if spare != anchor and _spare(layout, side, spare) and _horizontal_row(layout, side, anchor, spare)]
+    if not options:
+        return _place_horizontal(layout, part, side, col_a, col_b)
+    _, _, spare, anchor, net = min(options)
+    _claim(layout, side, spare, net)
+    holes = _place_horizontal(layout, part, side, anchor, spare)
+    return holes if anchor == col_a else holes[::-1]
+
+
+def _record(layout: Layout, part: Part, ends: list[Hole]) -> None:
+    """Add a placed part, claiming each strip a lead sits in for that lead's net."""
+    for net, hole in zip(part.nodes, ends):
+        layout.strip_net.setdefault(strip_of(hole), net)
+    layout.placed.append({"ref": part.ref, "kind": part.kind, "value": part.value,
+                          "nodes": list(part.nodes), "ends": ends})
 
 
 def _place_two_terminal(layout: Layout, part: Part) -> None:
@@ -393,28 +482,25 @@ def _place_two_terminal(layout: Layout, part: Part) -> None:
     if kinds == (False, False):
         (side_a, col_a), (side_b, col_b) = home_a, home_b
         if side_a == side_b:
-            ends = _place_horizontal(layout, part, side_a, col_a, col_b)
+            ends = _lay_between(layout, part, side_a, col_a, col_b)
         else:
             # Across the trench at one end's column; the other end then sits on the
             # far strip at that column, one jumper from its home.
-            candidates = ((col_a, side_a, side_b, home_b, part.nodes[1]),
-                          (col_b, side_b, side_a, home_a, part.nodes[0]))
-            for col, near, far, far_home, far_net in candidates:
+            for col, near, far_net in ((col_a, side_a, part.nodes[1]), (col_b, side_b, part.nodes[0])):
                 top, bottom = ("top", col, "e"), ("bottom", col, "f")
-                if col in CHIP_COLS or top in layout.used or bottom in layout.used:
-                    continue
+                far = "bottom" if near == "top" else "top"
+                if (col in _chip_cols(layout) or top in layout.used or bottom in layout.used
+                        or layout.strip_net.get((far, col), far_net) != far_net):
+                    continue   # the far strip already belongs to another net
                 layout.used.update((top, bottom))
                 near_hole, far_hole = (top, bottom) if near == "top" else (bottom, top)
                 ends = [near_hole, far_hole] if near == side_a else [far_hole, near_hole]
-                _jumper(layout, (far, col), far_home, far_net)
                 break
             else:
                 col = _take_column(layout, "right")[0]
                 top, bottom = ("top", col, "e"), ("bottom", col, "f")
                 layout.used.update((top, bottom))
                 ends = [top, bottom] if side_a == "top" else [bottom, top]
-                _jumper(layout, (side_a, col), home_a, part.nodes[0])
-                _jumper(layout, (side_b, col), home_b, part.nodes[1])
     elif kinds == (True, True):
         # Both ends on rails: give the part a column and jumper each end to its rail.
         col = _take_column(layout, "right")[0]
@@ -422,12 +508,10 @@ def _place_two_terminal(layout: Layout, part: Part) -> None:
         layout.used.update(("top", col, r) for r in TOP_ROWS)
         layout.used.update(("bottom", col, r) for r in BOTTOM_ROWS)
         ends = [top, bottom]
-        _jumper(layout, ("top", col), home_a, part.nodes[0])
-        _jumper(layout, ("bottom", col), home_b, part.nodes[1])
     else:
         column_end, rail_end = (0, 1) if not kinds[0] else (1, 0)
         side, col = layout.homes[part.nodes[column_end]]
-        rail = layout.homes[part.nodes[rail_end]][1]
+        rail = _home(layout, part.nodes[rail_end], side)[1]
         straight = None
         if _rail_side(rail) == side:
             # Straight out of the outer row to the rail at the same column. A lead to
@@ -446,10 +530,9 @@ def _place_two_terminal(layout: Layout, part: Part) -> None:
         else:
             # No straight run: lay the part along the strip to a fresh column and
             # jumper that column to the rail.
-            holes = _route_to_rail(layout, part, side, col, rail, part.nodes[rail_end])
+            holes = _route_to_rail(layout, part, side, col, part.nodes[rail_end])
             ends = holes if column_end == 0 else holes[::-1]
-    layout.placed.append({"ref": part.ref, "kind": part.kind, "value": part.value,
-                          "nodes": list(part.nodes), "ends": ends})
+    _record(layout, part, ends)
 
 
 def _place_multi_pin(layout: Layout, part: Part) -> None:
@@ -470,16 +553,67 @@ def _place_multi_pin(layout: Layout, part: Part) -> None:
         ends.append(hole)
         if net not in layout.homes:
             _assign_home(layout, net, (side, col))
-        else:
-            _jumper(layout, (side, col), layout.homes[net], net)
     span = sorted(cols)
     layout.spans.setdefault((side, row), []).append((span[0], span[-1]))
-    layout.placed.append({"ref": part.ref, "kind": part.kind, "value": part.value,
-                          "nodes": list(part.nodes), "ends": ends})
+    _record(layout, part, ends)
+
+
+def _chip_claims(layout: Layout) -> dict[tuple, str]:
+    """The net on each strip a chip pin sits in."""
+    if not layout.chip:
+        return {}
+    chip, pins = layout.build.chips[layout.chip["ref"]], layout.chip["pins"]
+    claims = {}
+    for use in layout.build.opamps:
+        section = chip.section(use.section)
+        for net, pin in ((use.inp, section.inp), (use.inn, section.inn), (use.out, section.out)):
+            claims[strip_of(pins[pin])] = net
+    claims[strip_of(pins[chip.vplus])] = "vplus"
+    claims[strip_of(pins[chip.vminus])] = "vminus" if layout.build.dual_supply else GROUND
+    return claims
+
+
+def _wire_cost(a: tuple, b: tuple) -> int:
+    """How much wire joining two strips takes, in columns."""
+    if a[0] == "rail" and b[0] == "rail":
+        return 0   # only ground has two rails, and the bridge already joins them
+    if b[0] == "rail":
+        a, b = b, a
+    if a[0] == "rail":
+        return 1 if _rail_side(a[1]) == b[0] else 12
+    return abs(a[1] - b[1]) + (0 if a[0] == b[0] else 8)
+
+
+def _wire_nets(layout: Layout) -> None:
+    """Join each net's strips with the least wire: each strip to the nearest one already joined.
+
+    Wiring every strip back to one home fans a net out into long parallel wires
+    that cross; a spanning tree chains them instead. Power nets are wired first.
+    """
+    owners: dict[str, set] = {}
+    for strip, net in (*layout.strip_net.items(), *_chip_claims(layout).items()):
+        owners.setdefault(net, set()).add(strip)
+    for part in layout.placed:
+        for net, hole in zip(part["nodes"], part["ends"]):
+            owners.setdefault(net, set()).add(strip_of(hole))
+    power = [net for net in ("vplus", "vminus", GROUND) if net in owners]
+    for net in power + sorted(set(owners) - set(power)):
+        strips = sorted(owners[net], key=str)
+        start = layout.homes.get(net, strips[0])
+        joined, waiting = [start], [strip for strip in strips if strip != start]
+        while waiting:
+            _, strip, anchor = min(((_wire_cost(s, j), str(s), str(j)), s, j) for s in waiting for j in joined)
+            waiting.remove(strip)
+            joined.append(strip)
+            if strip[0] == "rail" and anchor[0] == "rail":
+                continue
+            _jumper(layout, *((anchor, strip) if strip[0] == "rail" else (strip, anchor)), net)
 
 
 def place(build: Build) -> Layout:
     layout = Layout(build)
+    if not build.chips:
+        layout.right = list(CHIPLESS_RIGHT_POOL)
     # Rails: V+ on the bottom red rail, V- on the top red rail, ground on both blue rails.
     _assign_home(layout, GROUND, ("rail", "bot-"))
     layout.strip_net[("rail", "top-")] = GROUND
@@ -490,7 +624,6 @@ def place(build: Build) -> Layout:
     layout.used.update({("rail", "top-", 1), ("rail", "bot-", 1)})
 
     # The chip straddles the trench: pins 1-7 along row f, 8-14 along row e right to left.
-    extra_pins: list[tuple[str, tuple]] = []
     for ref, chip in build.chips.items():
         pins = {}
         for pin in range(1, chip.pins + 1):
@@ -505,11 +638,6 @@ def place(build: Build) -> Layout:
                 strip = strip_of(pins[pin])
                 if net not in layout.homes:
                     _assign_home(layout, net, strip)
-                elif layout.homes[net] != strip:
-                    extra_pins.append((net, strip))
-        power_minus = "vminus" if build.dual_supply else GROUND
-        extra_pins.append(("vplus", strip_of(pins[chip.vplus])))
-        extra_pins.append((power_minus, strip_of(pins[chip.vminus])))
 
     for part in build.parts:
         if part.kind in ("pot", "led"):
@@ -522,8 +650,7 @@ def place(build: Build) -> Layout:
     for part in build.parts:
         if part.kind not in ("pot", "led"):
             _place_two_terminal(layout, part)
-    for net, strip in extra_pins:
-        _jumper(layout, strip, layout.homes[net], net)
+    _wire_nets(layout)
     for source in build.sources:
         hole = _free_hole(layout, layout.homes[source.node])
         layout.attachments.append({"kind": "source", "ref": source.ref, "label": f"{source.ref} +", "net": source.node, "hole": hole})
@@ -548,15 +675,7 @@ def verify(layout: Layout) -> None:
     def union(a, b):
         parent[find(a)] = find(b)
 
-    claims: dict[tuple, str] = dict(layout.strip_net)
-    if layout.chip:
-        chip = layout.build.chips[layout.chip["ref"]]
-        for use in layout.build.opamps:
-            section = chip.section(use.section)
-            for net, pin in ((use.inp, section.inp), (use.inn, section.inn), (use.out, section.out)):
-                claims[strip_of(layout.chip["pins"][pin])] = net
-        claims[strip_of(layout.chip["pins"][chip.vplus])] = "vplus"
-        claims[strip_of(layout.chip["pins"][chip.vminus])] = "vminus" if layout.build.dual_supply else GROUND
+    claims: dict[tuple, str] = {**layout.strip_net, **_chip_claims(layout)}
     for part in layout.placed:
         if len(part["ends"]) != len(part["nodes"]):
             raise BuildError(f"layout error: {part['ref']} has {len(part['ends'])} ends for {len(part['nodes'])} nodes")
@@ -581,124 +700,3 @@ def verify(layout: Layout) -> None:
     for net, found in roots.items():
         if len(found) > 1:
             raise BuildError(f"layout error: net {net} is split into {len(found)} groups")
-
-
-# --- output: wire list and SVG ---------------------------------------------------
-
-def hole_name(hole: Hole) -> str:
-    if hole[0] == "rail":
-        return f"{hole[1]} rail (col {hole[2]})"
-    return f"{hole[2]}{hole[1]}"
-
-
-def _is_rail_bridge(jumper: dict) -> bool:
-    """The jumper that ties the two blue rails together, which the power step already asks for."""
-    ends = jumper["ends"]
-    return all(end[0] == "rail" for end in ends) and {end[1] for end in ends} == {"top-", "bot-"}
-
-
-def wire_list(layout: Layout) -> list[str]:
-    b = layout.build
-    steps = [f"Power: +{b.vplus:g} V to the bottom red rail (bot+); "
-             + (f"{b.vminus:g} V to the top red rail (top+); " if b.dual_supply else "")
-             + "supply COM/ground to both blue rails, and jumper the two blue rails together (col 1)."]
-    if layout.chip:
-        chip = b.chips[layout.chip["ref"]]
-        steps.append(f"{layout.chip['ref']} {chip.part}: straddle the trench with pin 1 at f{CHIP_COL0} "
-                     f"(notch to the left); pin {chip.vplus} (V+) and pin {chip.vminus} (V-) are wired below.")
-    for part in layout.placed:
-        unit = P.UNITS.get(part["kind"], "")
-        label = f"{part['ref']} {part['value']}{unit}".strip()
-        if part["kind"] == "pot":
-            a, w, c = part["ends"]
-            pos = b.pot_positions[part["ref"]]
-            steps.append(f"{label} pot: end at {hole_name(a)}, wiper at {hole_name(w)}, other end at {hole_name(c)}."
-                         f" Set to {pos:.0%} of travel from the first end.")
-        elif part["kind"] == "led":
-            a, k = part["ends"]
-            steps.append(f"{part['ref']} LED: anode (long leg) at {hole_name(a)}, cathode (flat side) at {hole_name(k)}.")
-        else:
-            steps.append(f"{label}: {hole_name(part['ends'][0])} to {hole_name(part['ends'][1])}.")
-    for jumper in layout.jumpers:
-        if _is_rail_bridge(jumper):
-            continue   # the power step already says to jumper the two blue rails together
-        steps.append(f"Jumper ({jumper['net']}): {hole_name(jumper['ends'][0])} to {hole_name(jumper['ends'][1])}.")
-    for item in layout.attachments:
-        who = "Function generator / supply lead" if item["kind"] == "source" else "Scope or meter probe"
-        steps.append(f"{who} {item['label']}: {hole_name(item['hole'])} (net {item['net']}); its ground clip to a blue rail.")
-    return steps
-
-
-PITCH = 20
-X0, Y0 = 48, 28
-ROW_Y = {"rail-top+": 0, "rail-top-": 1, "a": 3, "b": 4, "c": 5, "d": 6, "e": 7, "f": 9, "g": 10, "h": 11, "i": 12, "j": 13, "rail-bot+": 15, "rail-bot-": 16}
-COLORS = {"resistor": "#c8a04a", "capacitor": "#4a8fc8", "inductor": "#8a6ac8", "led": "#d9a33a", "pot": "#5aa86a"}
-
-
-def _xy(hole: Hole) -> tuple[float, float]:
-    if hole[0] == "rail":
-        return X0 + (hole[2] - 1) * PITCH, Y0 + ROW_Y[f"rail-{hole[1]}"] * PITCH
-    return X0 + (hole[1] - 1) * PITCH, Y0 + ROW_Y[hole[2]] * PITCH
-
-
-def svg(layout: Layout) -> str:
-    width, height = X0 * 2 + (COLUMNS - 1) * PITCH, Y0 * 2 + 16 * PITCH
-    out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="breadboard layout">',
-           # 420 identical dots, drawn once and placed by reference: repeats of
-           # these two circles used to be 70% of the drawing.
-           '<defs><circle id="h" r="2.6" fill="#bbb"/><circle id="r" r="2.2" fill="#bbb"/></defs>',
-           f'<rect x="0" y="0" width="{width}" height="{height}" rx="10" fill="#f2efe6"/>']
-    for name, color in (("top+", "#c0392b"), ("top-", "#2c5aa0"), ("bot+", "#c0392b"), ("bot-", "#2c5aa0")):
-        y = Y0 + ROW_Y[f"rail-{name}"] * PITCH
-        out.append(f'<line x1="{X0 - 14}" y1="{y}" x2="{X0 + (COLUMNS - 1) * PITCH + 14}" y2="{y}" stroke="{color}" stroke-width="1.5" opacity=".7"/>')
-        label = {"top+": ("V-" if layout.build.dual_supply else "unused"), "top-": "GND", "bot+": "V+", "bot-": "GND"}[name]
-        out.append(f'<text x="{X0 - 40}" y="{y + 4}" font-size="10" font-family="ui-monospace,monospace" fill="{color}">{label}</text>')
-    for col in range(1, COLUMNS + 1):
-        x = X0 + (col - 1) * PITCH
-        out.append(f'<text x="{x}" y="{Y0 + 2.2 * PITCH}" font-size="8" text-anchor="middle" fill="#888">{col}</text>')
-        for row in "abcdefghij":
-            out.append(f'<use href="#h" x="{x}" y="{Y0 + ROW_Y[row] * PITCH}"/>')
-        for rail in ("top+", "top-", "bot+", "bot-"):
-            out.append(f'<use href="#r" x="{x}" y="{Y0 + ROW_Y[f"rail-{rail}"] * PITCH}"/>')
-    for row in "abcdefghij":
-        out.append(f'<text x="{X0 - 16}" y="{Y0 + ROW_Y[row] * PITCH + 3}" font-size="9" fill="#666">{row}</text>')
-    if layout.chip:
-        x1 = X0 + (CHIP_COL0 - 1) * PITCH - 8
-        y1 = Y0 + ROW_Y["e"] * PITCH - 8
-        w = 6 * PITCH + 16
-        h = (ROW_Y["f"] - ROW_Y["e"]) * PITCH + 16
-        out.append(f'<rect x="{x1}" y="{y1}" width="{w}" height="{h}" rx="3" fill="#2b2b2b"/>')
-        out.append(f'<circle cx="{x1 + 8}" cy="{y1 + h - 8}" r="3" fill="#888"/>')
-        out.append(f'<text x="{x1 + w / 2}" y="{y1 + h / 2 + 4}" font-size="11" text-anchor="middle" fill="#eee" font-family="ui-monospace,monospace">{escape(layout.chip["ref"])} {escape(layout.chip["part"])}</text>')
-        for pin, hole in layout.chip["pins"].items():
-            x, y = _xy(hole)
-            # Just in from the pin's own hole, so every number sits on the dark body.
-            out.append(f'<text x="{x}" y="{y + (-8 if hole[0] == "bottom" else 12)}" font-size="7" text-anchor="middle" fill="#eee">{pin}</text>')
-    for jumper in layout.jumpers:
-        (xa, ya), (xb, yb) = _xy(jumper["ends"][0]), _xy(jumper["ends"][1])
-        out.append(f'<line x1="{xa}" y1="{ya}" x2="{xb}" y2="{yb}" stroke="#2e8b57" stroke-width="3" stroke-linecap="round" opacity=".85"/>')
-    for part in layout.placed:
-        color = COLORS[part["kind"]]
-        pts = [_xy(h) for h in part["ends"]]
-        for (xa, ya), (xb, yb) in zip(pts, pts[1:]):
-            out.append(f'<line x1="{xa}" y1="{ya}" x2="{xb}" y2="{yb}" stroke="#555" stroke-width="2"/>')
-        (xa, ya), (xb, yb) = pts[0], pts[-1]
-        mx, my = (xa + xb) / 2, (ya + yb) / 2
-        text = f"{part['ref']} {part['value']}{P.UNITS.get(part['kind'], '')}".strip()
-        out.append(f'<rect x="{mx - 24}" y="{my - 8}" width="48" height="16" rx="4" fill="{color}" stroke="#333"/>')
-        out.append(f'<text x="{mx}" y="{my + 4}" font-size="8.5" text-anchor="middle" font-family="ui-monospace,monospace" fill="#111">{escape(text)}</text>')
-    for item in layout.attachments:
-        x, y = _xy(item["hole"])
-        color = "#b0306a" if item["kind"] == "source" else "#1f6fb0"
-        out.append(f'<circle cx="{x}" cy="{y}" r="5" fill="none" stroke="{color}" stroke-width="2"/>')
-        out.append(f'<text x="{x + 8}" y="{y - 6}" font-size="9" fill="{color}" font-family="ui-monospace,monospace">{escape(item["label"])}</text>')
-    out.append("</svg>")
-    return "".join(out)
-
-
-def layout_payload(content: Any) -> dict[str, Any]:
-    build = parse_build(content)
-    layout = place(build)
-    return {"svg": svg(layout), "wires": wire_list(layout),
-            "holes": {p["ref"]: [hole_name(h) for h in p["ends"]] for p in layout.placed},
-            "probes": [{"label": a["label"], "hole": hole_name(a["hole"]), "net": a["net"]} for a in layout.attachments if a["kind"] == "probe"]}
