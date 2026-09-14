@@ -219,3 +219,18 @@ def test_app_js_shows_the_pot_positions_on_the_expected_card(tmp_path, monkeypat
         app_script = browser.get("/assets/app.js").text
         footer = app_script.split("card.kind==='expected'", 1)[1].split("card-verified", 1)[1].split("\n", 1)[0]
         assert "p.pots" in footer, "the expected card never names the pot settings the numbers assume"
+
+
+def test_app_js_draws_the_net_legend_and_links_each_step_to_the_board(tmp_path, monkeypatch):
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        branch = app_script.split("card.kind==='breadboard'", 1)[1].split("card.kind==='expected'", 1)[0]
+        assert 'class="card-nets"' in branch and 'data-nets="${escapeHtml(n.net)}"' in branch
+        assert 'data-step="${i+1}"' in branch
+        assert "escapeHtml(n.name)" in branch and "(n.members||[]).map(escapeHtml)" in branch
+        assert "/^#[0-9a-fA-F]{6}$/.test(n.color)" in branch, "a legend colour reaches a style attribute unchecked"
+        assert "function boardFocus(" in app_script
+        for event in ("pointerover", "pointerout", "focusin", "click"):
+            assert f"document.addEventListener('{event}',e=>{{const[card,t]=boardTarget(e)" in app_script, event
+        css = browser.get("/assets/canvas.css").text
+        assert ".card-board.is-focusing-step" in css and ".card-board.is-focusing-net" in css
