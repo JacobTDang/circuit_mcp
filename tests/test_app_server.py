@@ -11,6 +11,7 @@ import tempfile
 import threading
 import urllib.request
 from pathlib import Path
+from typing import TextIO
 
 import pytest
 
@@ -27,24 +28,30 @@ ENV = {
 }
 
 
-def _launch(data_dir: Path) -> tuple[subprocess.Popen, "queue.Queue[str]"]:
-    process = subprocess.Popen(
-        [sys.executable, "-m", "circuit_mcp.app_server", "--data-dir", str(data_dir)],
-        env=ENV, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-    )
+def _pump(stream: TextIO) -> "queue.Queue[str]":
+    """Read a stream in the background so its pipe can never fill and block the server."""
     lines: "queue.Queue[str]" = queue.Queue()
 
-    def pump() -> None:
-        for line in process.stdout:
+    def drain() -> None:
+        for line in stream:
             lines.put(line)
         lines.put("")
 
-    threading.Thread(target=pump, daemon=True).start()
-    return process, lines
+    threading.Thread(target=drain, daemon=True).start()
+    return lines
 
 
-def _protocol_line(lines: "queue.Queue[str]", timeout: float = 60.0) -> str:
-    seen: list[str] = []
+def _launch(data_dir: Path, stderr: int = subprocess.STDOUT) -> tuple[subprocess.Popen, "queue.Queue[str]"]:
+    """Spawn a server. Pass ``stderr=subprocess.PIPE`` to keep the streams apart, then pump stderr too."""
+    process = subprocess.Popen(
+        [sys.executable, "-m", "circuit_mcp.app_server", "--data-dir", str(data_dir)],
+        env=ENV, stdout=subprocess.PIPE, stderr=stderr, text=True,
+    )
+    return process, _pump(process.stdout)
+
+
+def _protocol_line(lines: "queue.Queue[str]", timeout: float = 60.0, seen: list[str] | None = None) -> str:
+    seen = [] if seen is None else seen
     while True:
         try:
             line = lines.get(timeout=timeout)
@@ -55,6 +62,19 @@ def _protocol_line(lines: "queue.Queue[str]", timeout: float = 60.0) -> str:
         seen.append(line)
         if line.startswith(("READY ", "LOCKED ")):
             return line.strip()
+
+
+def _rest_of(lines: "queue.Queue[str]", timeout: float = 20.0) -> list[str]:
+    """Everything still queued on a stream, up to the end-of-file marker its pump adds."""
+    rest: list[str] = []
+    while True:
+        try:
+            line = lines.get(timeout=timeout)
+        except queue.Empty:
+            raise AssertionError("stream still open %ss after the server exited; read:\n%s" % (timeout, "".join(rest))) from None
+        if line == "":
+            return rest
+        rest.append(line)
 
 
 def _stop(process: subprocess.Popen) -> int:
@@ -133,3 +153,23 @@ def test_run_ui_refuses_a_locked_data_folder(tmp_path):
         held.close()
     assert completed.returncode == EXIT_LOCKED
     assert "Another server is using" in completed.stderr
+
+
+def test_stdout_carries_only_the_protocol_line_while_requests_are_served(tmp_path):
+    """The app parses stdout, so served traffic must never add uvicorn access lines to it."""
+    process, out = _launch(tmp_path, stderr=subprocess.PIPE)
+    errors = _pump(process.stderr)
+    stdout_lines: list[str] = []
+    try:
+        line = _protocol_line(out, seen=stdout_lines)
+        assert line.startswith("READY ")
+        port = int(line.split()[1])
+        for _ in range(3):  # uvicorn logs one access line per request whenever access_log is on
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=30) as response:
+                assert json.load(response)["ok"] is True
+        assert _stop(process) == 0
+    finally:
+        _discard(process)
+    stdout_lines.extend(_rest_of(out))
+    assert stdout_lines == [f"READY {port}\n"]
+    assert _rest_of(errors), "uvicorn's own logging still belongs on stderr"
