@@ -178,3 +178,36 @@ Document how to install the Engine package matching the local MATLAB release.
   import/start failures clearly.
 - A long eval can block the main MCP process until timeout — mitigated by hard
   timeout and a call lock, not by the symbolic fork worker.
+
+## Revisions after review (2026-09-08)
+
+- **Timeout recovery.** MATLAB's pid is captured via `feature('getpid')` at start;
+  on timeout the future is cancelled, and if it is not cancelled within 2 s the
+  pid is killed and the engine dropped so the next call starts fresh. Reason:
+  `FutureResult.cancel()` cannot interrupt uninterruptible operations, and a
+  busy single session would block every later call, including any `clear`.
+- **Output via `evalc` with `background=True`** instead of stdout kwargs plus
+  reading `ans`. Reason: one call captures printed output and the `ans` display,
+  and `ans` marshalling fails for structs and objects.
+- **Engine start via `start_matlab(background=True)`** with its own 90 s bound,
+  separate from the eval timeout. Reason: a license stall fails cleanly instead
+  of consuming the first eval's budget. Measured cold start on this machine: 4.3 s.
+- **Figures invisible by default** via `set(groot,'defaultFigureVisible','off')`;
+  detection via `get(groot,'CurrentFigure')`, never `gcf`. Reason: an engine
+  session otherwise opens a desktop window per plot, and `gcf` creates a figure.
+- **A failed figure probe or a failed version probe is reported** (a note, or a
+  start failure), never silently ignored. Reason: a broken Engine must not look
+  like a successful text-only eval or a warm session.
+- **Enablement guidance.** Do not put `CIRCUIT_MCP_ENABLE_MATLAB=1` in
+  `.mcp.json`; set it only in the shell of a session that needs MATLAB. Reason:
+  this server ingests untrusted OCR and documents, an injected instruction
+  becomes `system()` through `matlab_eval`, and MCP tools get no per-call
+  approval.
+
+### Alternative considered
+
+The official MathWorks
+[matlab-mcp-core-server](https://github.com/matlab/matlab-mcp-core-server)
+covers the same job with no code in this repository. This in-house bridge is
+justified only if a `circuit_mcp` integration such as canvas cards or library
+figures follows.

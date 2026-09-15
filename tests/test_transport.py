@@ -69,6 +69,8 @@ async def _exercise_server(data_dir: Path) -> None:
                 "visual_list",
                 "visual_get",
                 "visual_preview",
+                "matlab_status",
+                "matlab_eval",
                 "canvas_card_add",
                 "canvas_card_list",
                 "canvas_card_remove",
