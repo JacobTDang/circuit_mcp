@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from circuit_mcp import web
+from circuit_mcp import paths, web
 
 
 def client(tmp_path, monkeypatch):
@@ -333,7 +333,7 @@ def test_the_canvas_reconciles_instead_of_rebuilding_every_card(tmp_path, monkey
 
 def test_the_suite_cannot_write_to_the_real_command_center_store(isolated_command_center):
     """A route that records data must never land rows in the developer's database."""
-    project_store = web.ROOT / ".local" / "command_center"
+    project_store = paths.REPO_ROOT / ".local" / "command_center"
 
     assert web.DATA == isolated_command_center
     assert web.DATA != project_store
@@ -342,7 +342,7 @@ def test_the_suite_cannot_write_to_the_real_command_center_store(isolated_comman
 
 def test_generate_records_the_visual_into_the_isolated_store(monkeypatch):
     """The route that persists a render must land it in the test's own store."""
-    project_store = web.ROOT / ".local" / "command_center"
+    project_store = paths.REPO_ROOT / ".local" / "command_center"
     before = _visual_count(project_store)
 
     monkeypatch.setattr(web.SHOWMAN, "start", lambda *a, **k: {"ok": True, "authoring": "openrouter"})
