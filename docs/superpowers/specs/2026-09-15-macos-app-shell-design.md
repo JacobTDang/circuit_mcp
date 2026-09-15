@@ -1,4 +1,4 @@
-# Circuit Lab macOS app: shell and core — design
+# Andrew's PrepPal macOS app: shell and core — design
 
 *2026-09-15 · tracks #46*
 
@@ -16,13 +16,14 @@ and gets its own spec, plan, and PR.
 
 | Topic | Choice |
 |---|---|
+| Name | `Andrew's PrepPal` for the `.app`, window, menus, and Dock; `PrepPal` for the bundle id, executable, and folders (no apostrophe in ids or paths) |
 | Audience | Shareable with other Macs, not just this one |
 | Features across the series | Core, circuit simulation, Showman visuals, handwriting OCR, iPad capture |
 | Approach | Native Swift app with the runtimes inside the bundle |
 | OCR packaging | Installed from a button on first use into Application Support, not shipped in the app |
 | Signing | Ad-hoc signed; notarization kept as a separate build step to add later |
-| Data | `~/Library/Application Support/Circuit Lab/` |
-| Logs | `~/Library/Logs/Circuit Lab/`, one file per launch, last 5 kept |
+| Data | `~/Library/Application Support/PrepPal/` |
+| Logs | `~/Library/Logs/PrepPal/`, one file per launch, last 5 kept |
 | Secrets | OpenRouter key and model in the macOS Keychain, not `.env` |
 | Port | Python binds a free port and reports it; not fixed at 2300 |
 | Failure | Error screen with the log tail and Restart / Quit; no automatic restart loop |
@@ -77,10 +78,10 @@ Taken on this Mac, 2026-09-15.
 ### Bundle layout
 
 ```text
-Circuit Lab.app/
+Andrew's PrepPal.app/
   Contents/
     Info.plist
-    MacOS/CircuitLab                     Swift executable
+    MacOS/PrepPal                        Swift executable
     Resources/
       python/                            standalone CPython 3.12
         bin/python3
@@ -94,13 +95,13 @@ Nothing inside the bundle is written to at run time.
 ### Writable locations
 
 ```text
-~/Library/Application Support/Circuit Lab/
+~/Library/Application Support/PrepPal/
   command_center/        database, uploaded files, trash   (CIRCUIT_MCP_DATA_DIR)
   showman/               rendered objects                   (sub-project 3)
   ocr/                   OCR environment and model          (sub-project 5)
   workspace.json
   server.lock
-~/Library/Logs/Circuit Lab/server-<timestamp>.log
+~/Library/Logs/PrepPal/server-<timestamp>.log
 ```
 
 ### Swift units
@@ -127,10 +128,10 @@ from a checkout does not change.
 
 | Path | Variable | Repo default (unchanged) | Value inside the app |
 |---|---|---|---|
-| Data folder | `CIRCUIT_MCP_DATA_DIR` (exists) | `.local/command_center` | `Application Support/Circuit Lab/command_center` |
-| Showman data | `CIRCUIT_MCP_SHOWMAN_DATA_DIR` (new) | `.local/showman` | `Application Support/Circuit Lab/showman` |
+| Data folder | `CIRCUIT_MCP_DATA_DIR` (exists) | `.local/command_center` | `Application Support/PrepPal/command_center` |
+| Showman data | `CIRCUIT_MCP_SHOWMAN_DATA_DIR` (new) | `.local/showman` | `Application Support/PrepPal/showman` |
 | Runtime tools | `CIRCUIT_MCP_RUNTIME_DIR` (new) | `.local/runtime` | `Resources/runtime` (sub-projects 2–4) |
-| Workspace config | `CIRCUIT_MCP_WORKSPACE_CONFIG` (exists) | `.local/workspace.json` | `Application Support/Circuit Lab/workspace.json` |
+| Workspace config | `CIRCUIT_MCP_WORKSPACE_CONFIG` (exists) | `.local/workspace.json` | `Application Support/PrepPal/workspace.json` |
 | OCR Python | `CIRCUIT_MCP_OCR_PYTHON` (exists) | `.venv-ocr.nosync/bin/python` | set by sub-project 5 |
 | OCR model | `CIRCUIT_MCP_OCR_MODEL` (exists) | `models/unimernet_small` | set by sub-project 5 |
 
@@ -168,7 +169,7 @@ the lock; they already share the store with the web server safely.
 ### Data flow at launch
 
 ```text
-CircuitLab (Swift)
+PrepPal (Swift)
   ├─ single-instance check ── another copy running? → activate it and exit
   ├─ create Application Support + Logs folders, rotate logs
   ├─ read OpenRouter key and model from the Keychain
@@ -215,15 +216,15 @@ or skipped.
 
 | Condition | What the user sees | Log |
 |---|---|---|
-| Bundled Python missing or not executable | Error screen: "Circuit Lab is damaged. Reinstall it." | Path that failed |
-| `LOCKED <pid>` | Error screen: "Another Circuit Lab server is using this data folder (process <pid>)." | Lock path and pid |
+| Bundled Python missing or not executable | Error screen: "Andrew's PrepPal is damaged. Reinstall it." | Path that failed |
+| `LOCKED <pid>` | Error screen: "Another Andrew's PrepPal server is using this data folder (process <pid>)." | Lock path and pid |
 | No `READY` within 60 s | Error screen with the last 40 log lines | Timeout |
 | `/api/status` not ok within 30 s | Error screen with the last 40 log lines | Last status response |
 | Server exits while running | Error screen with exit status and the last 40 log lines | Exit status |
 | Stop needed `SIGKILL` | Nothing extra; the app quits | "Server did not stop within 10 s; killed process group" |
 | Keychain read fails | Settings window with the Keychain error; the server still starts without a key | Keychain status code |
 | Import target not empty | Alert: import refused, the folder already has data | Both paths |
-| App running from a translocated path | Alert: move Circuit Lab to Applications before copying the MCP command | Detected path |
+| App running from a translocated path | Alert: move Andrew's PrepPal to Applications before copying the MCP command | Detected path |
 
 ## Claude Code hookup
 
@@ -234,9 +235,9 @@ location:
 {
   "mcpServers": {
     "circuit": {
-      "command": "/Applications/Circuit Lab.app/Contents/Resources/python/bin/python3",
+      "command": "/Applications/Andrew's PrepPal.app/Contents/Resources/python/bin/python3",
       "args": ["-m", "circuit_mcp.server"],
-      "env": { "CIRCUIT_MCP_DATA_DIR": "/Users/<user>/Library/Application Support/Circuit Lab/command_center" }
+      "env": { "CIRCUIT_MCP_DATA_DIR": "/Users/<user>/Library/Application Support/PrepPal/command_center" }
     }
   }
 }
@@ -247,8 +248,8 @@ stored.
 
 ## Build and packaging
 
-`macos/build_app.sh` produces `dist/Circuit Lab.app` and
-`dist/Circuit-Lab-<version>.dmg`, taking the version from `pyproject.toml`.
+`macos/build_app.sh` produces `dist/Andrew's PrepPal.app` and
+`dist/PrepPal-<version>.dmg`, taking the version from `pyproject.toml`.
 
 1. `uv lock --check` fails the build if `uv.lock` is out of date.
 2. Copy uv's standalone CPython 3.12 into `Resources/python`.
@@ -257,7 +258,7 @@ stored.
 4. Delete every `tests` and `__pycache__` folder under `site-packages`, then
    precompile the remaining packages with `python -m compileall -q`.
 5. `swift build -c release` for the `macos/` package; copy the executable and
-   `Info.plist` (bundle id `io.github.jacobtdang.circuitlab`,
+   `Info.plist` (bundle id `io.github.jacobtdang.preppal`,
    `LSMinimumSystemVersion` 14.0).
 6. Sign step: `codesign --force --deep --sign -`. Notarization is a later
    replacement for this one step.
