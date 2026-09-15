@@ -8,6 +8,7 @@ the card module already built and verified.
 from __future__ import annotations
 
 import inspect
+import re
 
 from fastapi.testclient import TestClient
 
@@ -163,3 +164,73 @@ def test_app_js_keeps_agent_card_layout_across_reload(tmp_path, monkeypatch):
         read = app_script.split("function readCanvas()", 1)[1].split("function saveCanvas()", 1)[0]
         for kind in ("formula", "walkthrough", "vocabulary"):
             assert kind in read, f"readCanvas drops {kind}; layout resets on reload"
+
+
+def test_app_js_renders_and_keeps_the_breadboard_and_expected_cards(tmp_path, monkeypatch):
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        read = app_script.split("function readCanvas()", 1)[1].split("function saveCanvas()", 1)[0]
+        for kind in ("breadboard", "expected"):
+            assert kind in read, f"readCanvas drops {kind}; layout resets on reload"
+            assert f"'{kind}'" in app_script.split("const CARD_KINDS=", 1)[1].split(";", 1)[0]
+        assert "card.kind==='breadboard'" in app_script and "card.kind==='expected'" in app_script
+
+
+def test_app_js_keeps_the_layout_but_not_the_payload_of_a_server_card(tmp_path, monkeypatch):
+    """A breadboard payload is about 30 KB; the poll re-attaches it within a tick."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        save = app_script.split("function saveCanvas()", 1)[1].split("\n", 1)[0]
+        branch = re.search(r"server\s*\?\s*\(\{([^}]*)\}\)", save)
+        assert branch, "saveCanvas must persist a server card without its payload"
+        persisted = {field.strip() for field in branch.group(1).split(",")}
+        assert "card" not in persisted, f"saveCanvas stores the whole payload: {sorted(persisted)}"
+        assert persisted == {"id", "kind", "x", "y", "z", "w", "server"}
+
+
+def test_app_js_refuses_to_render_a_card_kind_it_does_not_know(tmp_path, monkeypatch):
+    """An unknown kind used to reach the canvas with no title and the activity body."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        poll = app_script.split("async function pollCanvasCards()", 1)[1].split("\n", 1)[0]
+        assert "CARD_KINDS.has" in poll, "pollCanvasCards pushes every server kind onto the canvas"
+        assert "unknown card kind" in poll, "an unknown kind must say so once, not render broken"
+
+
+# --- the drawing stays on the canvas ------------------------------------------
+
+from tests.fixtures import lab1  # noqa: E402
+
+
+def test_a_breadboard_card_returns_the_wire_list_not_the_drawing(tmp_path, monkeypatch):
+    """The SVG is 7 KB of holes the agent cannot act on; the canvas already has it."""
+    database = _mcp(tmp_path, monkeypatch)
+    result = server.canvas_card_add("breadboard", "Exp 1 build", lab1.EXP1_NONINVERTING)
+    assert result["ok"] is True
+    payload = result["card"]["payload"]
+    assert payload["svg"] == "(rendered on the canvas)"
+    assert payload["wires"][0].startswith("Power:")
+    assert payload["holes"]["R1"] and payload["probes"]
+    assert database.get_card(result["card"]["id"])["payload"]["svg"].startswith("<svg")
+
+
+def test_app_js_shows_the_pot_positions_on_the_expected_card(tmp_path, monkeypatch):
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        footer = app_script.split("card.kind==='expected'", 1)[1].split("card-verified", 1)[1].split("\n", 1)[0]
+        assert "p.pots" in footer, "the expected card never names the pot settings the numbers assume"
+
+
+def test_app_js_draws_the_net_legend_and_links_each_step_to_the_board(tmp_path, monkeypatch):
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        branch = app_script.split("card.kind==='breadboard'", 1)[1].split("card.kind==='expected'", 1)[0]
+        assert 'class="card-nets"' in branch and 'data-nets="${escapeHtml(n.net)}"' in branch
+        assert 'data-step="${i+1}"' in branch
+        assert "escapeHtml(n.name)" in branch and "(n.members||[]).map(escapeHtml)" in branch
+        assert "/^#[0-9a-fA-F]{6}$/.test(n.color)" in branch, "a legend colour reaches a style attribute unchecked"
+        assert "function boardFocus(" in app_script
+        for event in ("pointerover", "pointerout", "focusin", "click"):
+            assert f"document.addEventListener('{event}',e=>{{const[card,t]=boardTarget(e)" in app_script, event
+        css = browser.get("/assets/canvas.css").text
+        assert ".card-board.is-focusing-step" in css and ".card-board.is-focusing-net" in css

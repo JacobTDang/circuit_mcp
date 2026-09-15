@@ -16,11 +16,14 @@ from typing import Any
 import sympy as sp
 from sympy.printing.mathml import MathMLPresentationPrinter
 
+from .breadboard import BuildError
+from .breadboard_view import layout_payload
+from .expect import ExpectError, expectations
 from .parsing import ParseError, parse_as_written, parse_expression
 from .steps import check_steps
 from .symbols import bind
 
-KINDS = ("formula", "walkthrough", "vocabulary")
+KINDS = ("formula", "walkthrough", "vocabulary", "breadboard", "expected")
 MAX_ITEMS = 24
 MAX_TITLE = 120
 MAX_TEXT = 600
@@ -159,7 +162,24 @@ def _vocabulary(content: dict[str, Any]) -> dict[str, Any]:
     return {"terms": terms}
 
 
-_BUILDERS = {"formula": _formula, "walkthrough": _walkthrough, "vocabulary": _vocabulary}
+def _breadboard(content: dict[str, Any]) -> dict[str, Any]:
+    """A verified layout. The build is the agent's, drawn only after the student confirmed it."""
+    try:
+        return layout_payload(content)
+    except BuildError as exc:
+        raise CardError(f"breadboard refused: {exc}") from exc
+
+
+def _expected(content: dict[str, Any]) -> dict[str, Any]:
+    """What the bench should read, from ngspice, for the same build."""
+    try:
+        return expectations(content)
+    except (BuildError, ExpectError) as exc:
+        raise CardError(f"expectation refused: {exc}") from exc
+
+
+_BUILDERS = {"formula": _formula, "walkthrough": _walkthrough, "vocabulary": _vocabulary,
+             "breadboard": _breadboard, "expected": _expected}
 
 
 def build_card(kind: str, title: str, content: Any) -> dict[str, Any]:
