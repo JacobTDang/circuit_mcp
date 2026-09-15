@@ -4,9 +4,12 @@
 
 Prints exactly one protocol line on stdout: ``READY <port>`` once the server is
 listening, or ``LOCKED <pid>`` when another web server holds the folder (exit
-status 3). The process leads its own process group so the app can stop it and
-every child it started together. SIGTERM shuts down gracefully, which runs the
-web lifespan that stops UxPlay and Showman.
+status 3). Exit status 3 means a locked folder only when that ``LOCKED`` line
+was printed: uvicorn exits 3 on a startup failure of its own, so a bare 3 with
+no protocol line is the server failing to start. The process leads its own
+process group so the app can stop it and every child it started together.
+SIGTERM shuts down gracefully, which runs the web lifespan that stops UxPlay
+and Showman.
 """
 from __future__ import annotations
 
