@@ -23,3 +23,6 @@ output/playwright/
 
 # subagent-driven-development scratch (ledger, briefs, review packages)
 .superpowers/
+
+# linkC multi-agent coordination state
+.linkc/
