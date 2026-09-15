@@ -88,6 +88,7 @@ from .instruments import instrument_query as _instrument_query
 from .instruments import instrument_status as _instrument_status
 from .ipad_capture import IPAD_CAPTURE, IPadCaptureError
 from .lab import LabDataError, import_waveform_csv as _import_waveform_csv
+from . import matlab_bridge
 from .mna import CircuitError, SetupInputError
 from .mna import check_setup as _mna_check_setup
 from .mna import circuit_equations as _mna_circuit_equations
@@ -1573,6 +1574,56 @@ def _tool_failure(kind: str, message: str) -> CallToolResult:
     failure = _failure(kind, message)
     return CallToolResult(content=[TextContent(type="text", text=json.dumps(failure))],
                           structured_content=failure)
+
+
+# ---------------------------------------------------------------------------
+# MATLAB bridge (opt-in Engine session)
+#
+# These deliberately do NOT go through ``_guarded``. That wrapper forks a child
+# for every lcapy/SymPy call; the MATLAB Engine must live in the main MCP
+# process as one persistent session, and Engine + fork is unsafe.
+# ---------------------------------------------------------------------------
+
+
+@server.tool()
+def matlab_status() -> dict[str, Any]:
+    """Report whether MATLAB is enabled and whether a session is already warm.
+
+    Does not start MATLAB. Refuses nothing at the tool layer: when the bridge is
+    disabled or ``matlab.engine`` is missing, the returned fields say so.
+    """
+    return matlab_bridge.status()
+
+
+@server.tool()
+def matlab_eval(code: str, timeout_s: float | None = None) -> CallToolResult:
+    """Evaluate MATLAB code in the persistent Engine session.
+
+    Requires ``CIRCUIT_MCP_ENABLE_MATLAB=1``. Returns captured text output, and
+    when a figure is present after the call, the current figure as a PNG image.
+    Refuses when disabled, when the Engine cannot be imported or started, on
+    evaluation errors, and when the wall-clock timeout is exceeded.
+    """
+    try:
+        result = matlab_bridge.evaluate(code, timeout_s=timeout_s)
+    except matlab_bridge.MatlabError as exc:
+        return _tool_failure(exc.kind, str(exc))
+    summary = {
+        "ok": result.ok,
+        "output": result.output,
+        "truncated": result.truncated,
+        "notes": result.notes,
+    }
+    content: list[Any] = [TextContent(type="text", text=json.dumps(summary))]
+    if result.figure_png is not None:
+        content.append(
+            ImageContent(
+                type="image",
+                data=base64.b64encode(result.figure_png).decode("ascii"),
+                mime_type="image/png",
+            )
+        )
+    return CallToolResult(content=content, structured_content=summary)
 
 
 # Canvas cards put the agent's explanation on the board beside the student's
