@@ -151,6 +151,21 @@ as native MathML -- no library, no CDN -- laid out in the order it was written
 rather than SymPy's canonical order. Cards are draggable and resizable like
 everything else on the desk; closing one in the browser removes it for the agent.
 
+Two more kinds turn a confirmed circuit into a bench session. `breadboard` draws
+the build on the columns of a 30-column board it uses: the chip across the
+trench with each pin's number and job, each part between named holes, the supply
+rails, and where the generator and probes connect, plus a wire list in build
+order. Every net wears one colour on its wires, its strips, and a legend that
+says what it joins; every piece carries its wire-list step number, and hovering
+or tapping a step or a net lights only its pieces. Parts reach no further than a
+bent lead, and each net's wires chain to the nearest strip already on it. The layout is
+verified before it is drawn, so every net comes out as one connected group and
+no two nets touch. `expected` runs the same build through ngspice with a
+rail-limited op amp and reports what each probe should read: DC volts, or peak
+and rms with a waveform, whether the output is clipping, and the gain and phase
+between input and output probes. The eight Lab 1 circuits are the test
+fixtures for both.
+
 Authoring a lesson from a brief needs an OpenRouter key and a model that can
 emit a valid scene specification. Copy [`.env.example`](.env.example) to `.env`
 and fill it in; `run_ui.py` loads it and the render worker inherits it at spawn.
