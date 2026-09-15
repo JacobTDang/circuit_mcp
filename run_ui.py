@@ -31,4 +31,12 @@ import uvicorn  # noqa: E402
 
 
 if __name__ == "__main__":
+    from circuit_mcp import paths
+    from circuit_mcp.app_server import EXIT_LOCKED, DataFolderLocked, acquire_data_lock
+
+    try:
+        data_lock = acquire_data_lock(paths.data_dir())  # held until this process exits
+    except DataFolderLocked as refused:
+        print(refused, file=sys.stderr)
+        sys.exit(EXIT_LOCKED)
     uvicorn.run("circuit_mcp.web:app", host="127.0.0.1", port=2300, reload=False)
