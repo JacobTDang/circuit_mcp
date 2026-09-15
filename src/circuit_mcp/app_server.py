@@ -11,9 +11,9 @@ web lifespan that stops UxPlay and Showman.
 from __future__ import annotations
 
 import argparse
-import contextlib
 import fcntl
 import os
+import signal
 import socket
 import sys
 from pathlib import Path
@@ -64,21 +64,23 @@ def _serve(listener: socket.socket) -> None:
             if self.started:
                 print(f"READY {port}", flush=True)
 
-        @contextlib.contextmanager
-        def capture_signals(self):
+        def handle_exit(self, sig, frame):
             """Exit 0 on a graceful stop instead of dying from the signal.
 
-            uvicorn restores the original handlers after it shuts down and then
-            re-raises the signal that stopped it, which would leave this process
-            killed by SIGTERM. The app reads the exit status to tell a clean
-            stop from a crash, so discard the record it re-raises from once the
-            server has shut down of its own accord.
+            uvicorn records each signal it handles and, once it has restored the
+            original handlers, re-raises them -- which would leave this process
+            killed by SIGTERM rather than exiting 0. Not recording the signal
+            here is what stops that re-raise. The app reads the exit status to
+            tell a clean stop from a crash.
             """
-            with super().capture_signals():
-                yield
-                self._captured_signals.clear()
+            if self.should_exit and sig == signal.SIGINT:
+                self.force_exit = True
+            self.should_exit = True
 
-    ReadyServer(uvicorn.Config(web.app, lifespan="on", log_level="info")).run(sockets=[listener])
+    # access_log=False keeps stdout carrying only the protocol lines: uvicorn's access
+    # handler streams to stdout, while everything else it logs goes to stderr, which the
+    # app captures into the same log file.
+    ReadyServer(uvicorn.Config(web.app, lifespan="on", log_level="info", access_log=False)).run(sockets=[listener])
 
 
 def main(argv: list[str] | None = None) -> int:

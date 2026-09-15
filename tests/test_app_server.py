@@ -7,6 +7,7 @@ import queue
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import urllib.request
 from pathlib import Path
@@ -16,7 +17,14 @@ import pytest
 from circuit_mcp import paths
 from circuit_mcp.app_server import EXIT_LOCKED, LOCK_NAME, DataFolderLocked, acquire_data_lock
 
-ENV = {**os.environ, "PYTHONPATH": str(paths.REPO_ROOT / "src")}
+# The spawned servers run the web lifespan, whose shutdown stops Showman. Point
+# them at a throwaway folder so they never touch a developer's .local/showman.
+_SHOWMAN_DATA = tempfile.TemporaryDirectory(prefix="preppal-showman-")
+ENV = {
+    **os.environ,
+    "PYTHONPATH": str(paths.REPO_ROOT / "src"),
+    "CIRCUIT_MCP_SHOWMAN_DATA_DIR": _SHOWMAN_DATA.name,
+}
 
 
 def _launch(data_dir: Path) -> tuple[subprocess.Popen, "queue.Queue[str]"]:
@@ -51,7 +59,18 @@ def _protocol_line(lines: "queue.Queue[str]", timeout: float = 60.0) -> str:
 
 def _stop(process: subprocess.Popen) -> int:
     process.send_signal(signal.SIGTERM)
-    return process.wait(timeout=20)
+    try:
+        return process.wait(timeout=20)
+    except subprocess.TimeoutExpired:
+        _discard(process)
+        raise
+
+
+def _discard(process: subprocess.Popen) -> None:
+    """Leave no live server behind: it leads its own process group, so nothing else reaps it."""
+    if process.poll() is None:
+        process.kill()
+    process.wait(timeout=10)
 
 
 def test_ready_reports_a_port_that_serves_the_status_endpoint(tmp_path):
@@ -70,17 +89,23 @@ def test_ready_reports_a_port_that_serves_the_status_endpoint(tmp_path):
 
 def test_a_graceful_stop_releases_the_lock(tmp_path):
     process, lines = _launch(tmp_path)
-    assert _protocol_line(lines).startswith("READY ")
-    assert _stop(process) == 0
-    acquire_data_lock(tmp_path).close()
+    try:
+        assert _protocol_line(lines).startswith("READY ")
+        assert _stop(process) == 0
+        acquire_data_lock(tmp_path).close()
+    finally:
+        _discard(process)
 
 
 def test_a_second_server_on_a_locked_folder_says_locked_and_exits_3(tmp_path):
     held = acquire_data_lock(tmp_path)
     try:
         process, lines = _launch(tmp_path)
-        assert _protocol_line(lines) == f"LOCKED {os.getpid()}"
-        assert process.wait(timeout=30) == EXIT_LOCKED
+        try:
+            assert _protocol_line(lines) == f"LOCKED {os.getpid()}"
+            assert process.wait(timeout=30) == EXIT_LOCKED
+        finally:
+            _discard(process)
     finally:
         held.close()
 
