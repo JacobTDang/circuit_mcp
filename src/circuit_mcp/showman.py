@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from . import paths
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WORKER_SCRIPT = Path("dist") / "service" / "worker.js"
 OBJECT_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,240}")
@@ -73,7 +75,7 @@ class ShowmanManager:
                  data_dir: Path | None = None):
         self.root = Path(root) if root else PROJECT_ROOT / "vendor" / "showman"
         self.port = port
-        self.data_dir = Path(data_dir) if data_dir else PROJECT_ROOT / ".local" / "showman"
+        self.data_dir = Path(data_dir) if data_dir else paths.showman_data_dir()
         self.process: subprocess.Popen[bytes] | None = None
         self._lock = threading.RLock()
         self._last_error = ""

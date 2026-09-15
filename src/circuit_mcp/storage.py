@@ -18,6 +18,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from . import paths
+
 
 class StorageError(ValueError):
     """A bounded repository operation could not be completed."""
@@ -35,8 +37,7 @@ CARD_KINDS = ("formula", "walkthrough", "vocabulary", "breadboard", "expected")
 
 
 def default_data_dir() -> Path:
-    root = Path(__file__).resolve().parents[2]
-    return Path(os.environ.get("CIRCUIT_MCP_DATA_DIR", root / ".local" / "command_center")).expanduser().resolve()
+    return paths.data_dir()
 
 
 def _number(value: Any) -> float | None:
