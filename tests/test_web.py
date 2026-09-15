@@ -58,11 +58,12 @@ def test_page_title_block_is_removed_and_refresh_stays_reachable(tmp_path, monke
         assert "app.js?v=canvas-15" not in page.text
         aside = page.text.split("<aside>", 1)[1].split("</aside>", 1)[0]
         assert 'id="refresh"' in aside
-        assert "LOCAL · PORT 2300" in aside
+        assert 'LOCAL · PORT <span id="localPort">' in aside
         app_script = browser.get("/assets/app.js").text
         assert "$('#title').textContent=names[view]" not in app_script
         assert "const t=$('#title');if(t)t.textContent=names[view]" in app_script
         assert "$('#refresh').onclick=refresh" in app_script
+        assert "localPort.textContent=location.port" in app_script
 
 
 def test_workspace_canvas_grows_to_contain_its_cards_instead_of_clipping(tmp_path, monkeypatch):
