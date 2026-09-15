@@ -1647,6 +1647,22 @@ def canvas_card_add(
       ``I = C*dV_C`` is not an identity -- a walkthrough is the algebra *after*
       setup, so start a new card at the substituted form.
     * ``vocabulary`` -- ``{"terms": [{"term", "definition", "expression"?}, ...]}``
+    * ``breadboard`` -- a *build*: ``{"supply": {"vplus", "vminus"}, "chips": [{"ref", "part"}],
+      "parts": [{"ref", "kind", "value", "nodes"}], "opamps": [{"ref", "chip", "section",
+      "inp", "inn", "out"}], "sources": [...], "probes": [{"label", "node", "role"}],
+      "pot_positions": {ref: 0..1}}``. Kinds: resistor, capacitor, inductor, led
+      (``[anode, cathode]``), pot (``[end, wiper, end]``). Chips: LM324, LMC660.
+      Ground is ``gnd``; ``vminus: 0`` is single supply. The card is the wiring
+      picture plus a build-order wire list; a layout that does not realise every
+      net is refused. The drawing goes to the canvas, so the result carries the
+      wire list, the holes, and the probe points rather than the SVG. Send a
+      build only after the student has confirmed the netlist, never from an
+      unconfirmed image.
+    * ``expected`` -- the same build; returns what a meter and scope should show at
+      each probe (DC volts, or peak/rms, waveform, clipping) plus gain and phase
+      between ``input`` and ``output`` probes, from ngspice with a rail-limited
+      op amp. Sources: ``dc`` (``volts``), ``sine`` (``vrms``, ``freq``),
+      ``square`` (``vpp``, ``freq``).
 
     Expressions use the same restricted syntax as ``check_derivation`` and are
     rendered to MathML by the server; the browser escapes every text field.
@@ -1661,6 +1677,10 @@ def canvas_card_add(
         return _failure("storage_error", str(exc))
     database.record_event("canvas_card_add", f"{card['kind']}: {card['title'][:60]}", True,
                           "canvas_card", card["id"], {"actor": "mcp", "kind": card["kind"]})
+    if card["kind"] == "breadboard":
+        # The stored card keeps the drawing for the canvas to render; the agent
+        # gets the wire list instead of 20 KB of holes it cannot act on.
+        card = {**card, "payload": {**card["payload"], "svg": "(rendered on the canvas)"}}
     return {"ok": True, "card": card}
 
 
