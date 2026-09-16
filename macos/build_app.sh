@@ -9,7 +9,10 @@ APP="$ROOT/dist/$APP_NAME.app"
 RESOURCES="$APP/Contents/Resources"
 WORK="$ROOT/build/macos"
 SITE="$RESOURCES/python/lib/python3.12/site-packages"
-VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$ROOT/pyproject.toml" | head -1)"
+# Quitting at the first match rather than piping into head: under 'set -o pipefail' a second
+# top-level 'version = ' line closes the pipe on sed, and the script would abort on that EPIPE
+# (141) with nothing said about which line it read.
+VERSION="$(sed -n '/^version = "/{s/^version = "\(.*\)"$/\1/p;q;}' "$ROOT/pyproject.toml")"
 
 fail() { echo "build_app: $*" >&2; exit 1; }
 
