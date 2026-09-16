@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build Andrew's PrepPal.app.
-# Usage: macos/build_app.sh --stage python|app
+# Usage: macos/build_app.sh [--stage python|app|sign|dmg|all]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -86,11 +86,76 @@ stage_app() {
   plutil -lint "$APP/Contents/Info.plist" >/dev/null || fail "the generated Info.plist is invalid"
 }
 
-stage="${2:-}"
-[ "${1:-}" = "--stage" ] || fail "usage: macos/build_app.sh --stage python|app"
+# codesign refuses to sign or verify a bundle whose root carries a Finder info or resource fork
+# attribute: "resource fork, Finder information, or similar detritus not allowed". This checkout
+# sits under a Desktop synced by iCloud, and that file provider stamps every .app directory with
+# the com.apple.FinderInfo package flag within a second or two of one appearing -- and puts it
+# straight back when it is removed. Removing it and signing in place is therefore a race with a
+# daemon, lost often enough to measure. So every codesign call here runs on a copy in a temporary
+# directory, where nothing puts the flag back and the answer is decided by the signature alone.
+# The flag is not part of a signature: a signed bundle stays signed when the provider stamps it.
+clear_detritus() {
+  local path="$1" name present
+  present=" $(xattr "$path" | tr '\n' ' ') "
+  for name in com.apple.FinderInfo com.apple.ResourceFork; do
+    case "$present" in
+      *" $name "*) xattr -d "$name" "$path" || fail "could not remove $name from $path" ;;
+    esac
+  done
+}
+
+# Copies the bundle out of the checkout and leaves the copy's path in `unsynced`. The caller
+# removes `unsynced_work` when it is done with it.
+copy_out_of_tree() {
+  unsynced_work="$(mktemp -d)"
+  unsynced="$unsynced_work/$APP_NAME.app"
+  ditto "$1" "$unsynced"       # ditto copies the source's attributes along with its files
+  clear_detritus "$unsynced"
+}
+
+stage_sign() {
+  [ -x "$APP/Contents/MacOS/PrepPal" ] || fail "run 'macos/build_app.sh --stage app' first"
+  local unsynced unsynced_work
+  copy_out_of_tree "$APP"
+  # Ad-hoc signature. Notarization with a Developer ID replaces exactly this step.
+  codesign --force --deep --sign - "$unsynced" || fail "codesign could not sign the app"
+  codesign --verify --deep --strict "$unsynced" || fail "codesign could not verify the signature"
+  rm -rf "$APP"
+  ditto "$unsynced" "$APP" \
+    || fail "the signed app is still in $unsynced_work but could not be copied back to dist"
+  rm -rf "$unsynced_work"
+}
+
+stage_dmg() {
+  local dmg="$ROOT/dist/PrepPal-$VERSION.dmg"
+  local unsynced unsynced_work
+  # The staged copy is both the signature check and what the disk image is built from, so what
+  # users open is the bundle that verified, without the sync flag on it.
+  copy_out_of_tree "$APP"
+  codesign --verify --deep --strict "$unsynced" \
+    || fail "the app is not signed; run 'macos/build_app.sh --stage sign' first"
+  ln -s /Applications "$unsynced_work/Applications"
+  rm -f "$dmg"
+  hdiutil create -volname "$APP_NAME" -srcfolder "$unsynced_work" -ov -format UDZO "$dmg" >/dev/null
+  rm -rf "$unsynced_work"
+  hdiutil verify "$dmg" >/dev/null || fail "hdiutil could not verify $dmg"
+  echo "build_app: disk image -> $dmg"
+}
+
+if [ "$#" -eq 0 ]; then
+  stage=all
+elif [ "${1:-}" = "--stage" ] && [ -n "${2:-}" ]; then
+  stage="$2"
+else
+  fail "usage: macos/build_app.sh [--stage python|app|sign|dmg|all]"
+fi
+
 case "$stage" in
   python) stage_python ;;
   app)    stage_app ;;
-  *) fail "unknown stage '$stage'; expected: python or app" ;;
+  sign)   stage_sign ;;
+  dmg)    stage_dmg ;;
+  all)    stage_python; stage_app; stage_sign; stage_dmg ;;
+  *) fail "unknown stage '$stage'; expected python, app, sign, dmg, or all" ;;
 esac
 echo "build_app: stage '$stage' done -> $APP"
