@@ -9,7 +9,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let status = StatusView()
     private let secrets = SecretsStore()
     private var locations: AppLocations?
-    private var server: ServerController?
+    /// All of the app's server bookkeeping: which controller it holds, what work is in flight,
+    /// and whether a quit is waiting on it. Keeping none of it here is what keeps the rules in
+    /// one testable place -- see `ServerLifecycle`.
+    private let lifecycle = ServerLifecycle()
     private var logURL: URL?
 
     // MARK: Launch
@@ -21,14 +24,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         buildMenu()
         buildWindow()
-        do {
-            let found = try AppLocations.current()
-            try found.createDirectories()
-            locations = found
-        } catch {
-            status.showError(title: "\(Self.displayName) cannot create its folders.", detail: "\(error)", logTail: nil)
-            return
-        }
         startServer()
     }
 
@@ -72,7 +67,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.onRestart = { [weak self] in self?.restartServer() }
         status.onQuit = { NSApp.terminate(nil) }
         web.onLoadFailure = { [weak self] error in
-            self?.showFailure("The desk could not be loaded.", detail: error.localizedDescription)
+            // Restarting the server for a page that failed to load costs the whole stop window,
+            // so the cheap retry is named here: Reload Page leaves the server alone.
+            self?.showFailure("The desk could not be loaded.", detail: """
+                \(error.localizedDescription)
+
+                Press Command-R to load the page again, or Restart to start the server again.
+                """)
         }
 
         window.center()
@@ -80,10 +81,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate()
     }
 
+    /// The folders, creating them if this is the first time they are needed.
+    ///
+    /// Every path that needs them goes through here rather than returning when there are none:
+    /// the error screen's own Restart button leads back into this code, and a silent return left
+    /// the user on a spinner with no buttons, no message, and no way out but Command-Q -- on the
+    /// one screen whose whole purpose is recovery. Retrying is also what makes that button worth
+    /// pressing: a folder that has become writable since launch is picked up here.
+    private func requireLocations() -> AppLocations? {
+        if let locations { return locations }
+        do {
+            let found = try AppLocations.current()
+            try found.createDirectories()
+            locations = found
+            return found
+        } catch {
+            status.showError(title: "\(Self.displayName) cannot create its folders.", detail: "\(error)", logTail: nil)
+            return nil
+        }
+    }
+
     // MARK: Server
 
     private func startServer() {
-        guard let locations else { return }
+        guard let locations = requireLocations() else { return }
+        if let refusal = lifecycle.refusalToStart {
+            // Nothing the user can do reaches this. It is the last guard against a second server
+            // that no reference would hold: one of those keeps running after the app is gone.
+            NSLog("PrepPal did not start a server: %@", refusal)
+            return
+        }
         status.showLoading("Starting the server…")
 
         let python = AppLocations.bundledPython(in: Bundle.main.bundleURL)
@@ -114,7 +141,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logURL = log
 
         // The environment below carries the OpenRouter key. Neither it nor any value in it is
-        // ever printed, logged, or written to the server log: only names would be.
+        // ever printed, logged, or written to the server log: only names would be, and
+        // `ServerConfiguration` redacts the values even if one is interpolated by accident.
         let controller = ServerController(configuration: ServerConfiguration(
             executable: python,
             arguments: ["-m", "circuit_mcp.app_server", "--data-dir", locations.commandCenterDirectory.path],
@@ -122,10 +150,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             logFile: log
         ))
         controller.onExit = { [weak self] exitStatus in
-            guard self?.server === controller else { return }
+            guard self?.lifecycle.liveServer === controller else { return }
             self?.showFailure("The server stopped unexpectedly (exit status \(exitStatus)).", detail: "Restart to start it again.")
         }
-        server = controller
+        if let refusal = lifecycle.adopt(controller) {
+            NSLog("PrepPal did not start a server: %@", refusal)
+            return
+        }
         controller.start { [weak self] event in self?.handle(event, from: controller) }
 
         if let keychainProblem { showSettings(reason: keychainProblem) }
@@ -134,18 +165,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handle(_ event: ServerEvent, from controller: ServerController) {
         // A restart or an import replaces the controller; a late event from the old one would
         // otherwise put its failure screen over the server that is running now.
-        guard server === controller else { return }
+        guard lifecycle.liveServer === controller else { return }
         switch event {
         case .ready(let port):
             status.showLoading("Waiting for the server to answer…")
             Task { @MainActor [weak self] in
                 do {
                     try await HealthCheck().waitUntilHealthy(port: port)
-                    guard let self, self.server === controller else { return }
+                    guard let self, self.lifecycle.liveServer === controller else { return }
                     self.web.load(port: port)
                     self.status.hide()
                 } catch {
-                    guard let self, self.server === controller else { return }
+                    guard let self, self.lifecycle.liveServer === controller else { return }
                     self.showFailure("The server did not answer on port \(port).", detail: "\(error)")
                 }
             }
@@ -178,17 +209,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Stops the server off the main thread, then runs `then` on the main thread.
-    private func stopServer(then: @escaping (StopOutcome) -> Void) {
-        guard let running = server else { return then(.notRunning) }
-        let log = logURL
-        DispatchQueue.global().async {
-            let outcome = running.stop()
-            if let note = Self.logNote(for: outcome), let log {
-                Self.appendToLog(log, note)
-            }
-            DispatchQueue.main.async { [weak self] in
-                if self?.server === running { self?.server = nil }
-                then(outcome)
+    ///
+    /// The cover only goes up once the stop is really happening: showing it first and then
+    /// refusing would leave the spinner over a screen whose buttons it had just hidden.
+    ///
+    /// - Parameter pendingWork: what `then` would have done, named for the log if a quit arrives
+    ///   while the stop runs and cancels it. `nil` for the quit's own stop, which has none.
+    private func stopServer(_ loadingMessage: String, pendingWork: String?, then: @escaping (StopOutcome) -> Void) {
+        switch lifecycle.beginStop() {
+        case .refused(let reason):
+            presentAlert(reason, "Try again once it has finished.")
+        case .nothingToStop:
+            status.showLoading(loadingMessage)
+            then(.notRunning)
+        case .stop(let running):
+            status.showLoading(loadingMessage)
+            let log = logURL
+            DispatchQueue.global().async {
+                let outcome = running.stop()
+                if let note = Self.logNote(for: outcome), let log {
+                    Self.appendToLog(log, note)
+                }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    let completion = self.lifecycle.finishStop(running)
+                    self.reportIfStopFailed(outcome)
+                    switch completion {
+                    case .resume:
+                        then(outcome)
+                    case .quitPending:
+                        // Command-Q arrived while this stop ran. Starting the replacement now
+                        // would hand the quit a server it has already decided not to stop.
+                        if let pendingWork {
+                            NSLog("PrepPal: %@ did not run because the app is quitting.", pendingWork)
+                        }
+                        NSApp.reply(toApplicationShouldTerminate: true)
+                    }
+                }
             }
         }
     }
@@ -230,21 +287,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func restartServer() {
-        status.showLoading("Restarting the server…")
-        stopServer { [weak self] outcome in
-            self?.reportIfStopFailed(outcome)
+        stopServer("Restarting the server…", pendingWork: "the restart") { [weak self] _ in
             self?.startServer()
         }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let running = server else { return .terminateNow }
-        status.showLoading("Stopping the server… (up to \(Int(running.worstCaseStopSeconds)) seconds if it does not answer)")
-        stopServer { [weak self] outcome in
-            self?.reportIfStopFailed(outcome)
-            sender.reply(toApplicationShouldTerminate: true)
+        switch lifecycle.beginQuit() {
+        case .terminateNow:
+            return .terminateNow
+        case .waitForWorkInFlight(let work):
+            // A restart or an import is already stopping the server, or copying over its data
+            // folder. Its completion starts nothing now that the quit has begun and answers the
+            // quit instead, so waiting for it is what keeps this from becoming a second stop --
+            // and the app from exiting over a server it has stopped holding.
+            status.showLoading(Self.waitingMessage(for: work))
+            return .terminateLater
+        case .stopTheServer(let running):
+            // Whichever branch of the stop's completion runs answers the quit exactly once.
+            stopServer(Self.stoppingMessage(for: running), pendingWork: nil) { _ in
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+            return .terminateLater
         }
-        return .terminateLater
+    }
+
+    /// Truncating this understates the very bound the number exists to communicate.
+    private static func stoppingMessage(for running: ServerController) -> String {
+        "Stopping the server… (up to \(Int(ceil(running.worstCaseStopSeconds))) seconds if it does not answer)"
+    }
+
+    private static func waitingMessage(for work: ServerLifecycle.Work) -> String {
+        switch work {
+        case .stoppingServer(let running): return stoppingMessage(for: running)
+        case .importingData: return "Finishing the import before quitting…"
+        }
     }
 
     // MARK: Menus
@@ -275,7 +352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         main.addItem(submenu: edit, title: "Edit")
 
         let view = NSMenu(title: "View")
-        view.addItem(withTitle: "Reload", action: #selector(reloadDesk), keyEquivalent: "r").target = self
+        view.addItem(withTitle: "Reload Page", action: #selector(reloadDesk), keyEquivalent: "r").target = self
         main.addItem(submenu: view, title: "View")
 
         let windowMenu = NSMenu(title: "Window")
@@ -288,7 +365,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func reloadDesk() {
-        web.reload()
+        // Reloading is also the way out of a navigation failure that covered the desk, so the
+        // cover comes off with it. `reload` refuses when there is no page to go back to, and
+        // uncovering an empty web view would be the same dead end from the other side.
+        guard web.reload() else { return }
+        status.hide()
     }
 
     @objc private func openLogsMenu() {
@@ -348,7 +429,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func copyMCPCommand() {
-        guard let locations else { return }
+        guard let locations = requireLocations() else { return }
         do {
             let json = try MCPCommand.configJSON(appBundle: Bundle.main.bundleURL, locations: locations)
             NSPasteboard.general.clearContents()
@@ -363,7 +444,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func importExistingData() {
-        guard let locations else { return }
+        guard let locations = requireLocations() else { return }
         let panel = NSOpenPanel()
         panel.message = "Choose an existing command_center folder to copy into \(Self.displayName)."
         panel.canChooseDirectories = true
@@ -378,21 +459,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         confirm.addButton(withTitle: "Cancel")
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
 
-        status.showLoading("Importing data…")
-        stopServer { [weak self] outcome in
+        stopServer("Importing data…", pendingWork: "the import") { [weak self] _ in
             guard let self else { return }
-            self.reportIfStopFailed(outcome)
+            if let refusal = self.lifecycle.beginImportCopy() {
+                presentAlert("Nothing was imported.", refusal)
+                self.startServer()
+                return
+            }
             let importer = DataImporter()
             let destination = locations.commandCenterDirectory
-            do {
-                let result = try importer.importCommandCenter(from: source, to: destination)
-                let backupNote = result.backup.map { "The previous app data is in \($0.path)." } ?? "There was no previous app data."
-                self.presentAlert("Data imported.", backupNote)
-            } catch {
-                self.presentAlert("Nothing was imported.",
-                                  Self.importFailureDetail(error, importer: importer, destination: destination))
+            // The copy is unbounded -- it is the user's whole notebook -- and on the main thread
+            // it freezes the window that is asking them to wait for it, spinner included.
+            DispatchQueue.global().async {
+                let report: (title: String, detail: String)
+                do {
+                    let result = try importer.importCommandCenter(from: source, to: destination)
+                    report = ("Data imported.",
+                              result.backup.map { "The previous app data is in \($0.path)." } ?? "There was no previous app data.")
+                } catch {
+                    report = ("Nothing was imported.",
+                              Self.importFailureDetail(error, importer: importer, destination: destination))
+                }
+                DispatchQueue.main.async {
+                    self.presentAlert(report.title, report.detail)
+                    switch self.lifecycle.finishImportCopy() {
+                    case .resume:
+                        self.startServer()
+                    case .quitPending:
+                        NSApp.reply(toApplicationShouldTerminate: true)
+                    }
+                }
             }
-            self.startServer()
         }
     }
 
@@ -412,20 +509,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 \(readTheLog)
                 """
         }
-        let folders = state.backupsLeftBehind.map { "  \($0.path)" }.joined(separator: "\n")
         guard state.dataFolderPresent else {
+            // `backupsLeftBehind` is oldest first and includes folders earlier imports left
+            // around. Only the newest one can be what this import moved aside, and sending the
+            // student to a list of candidates is sending them to the wrong folder.
+            guard let movedAside = state.backupsLeftBehind.last else {
+                return """
+                    \(failure)
+
+                    There was no data to move aside and the half-copied folder was removed, so \
+                    nothing of yours was lost. \(destination.path) does not exist; the server \
+                    creates it empty the next time it starts.
+                    \(readTheLog)
+                    """
+            }
             return """
                 \(failure)
 
-                \(destination.path) is missing, so putting your data back did not finish. It was \
-                moved aside to:
-                \(folders.isEmpty ? "  (nothing was moved aside)" : folders)
+                \(destination.path) is missing, so putting your data back did not finish. Your \
+                data is in:
+                  \(movedAside.path)
                 \(readTheLog)
                 """
         }
         if state.backupsLeftBehind.isEmpty {
             return "\(failure)\n\nYour data is back the way it was."
         }
+        let folders = state.backupsLeftBehind.map { "  \($0.path)" }.joined(separator: "\n")
         return """
             \(failure)
 
@@ -439,6 +549,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.messageText = title
         alert.informativeText = detail
         alert.runModal()
+    }
+}
+
+extension AppDelegate: NSMenuItemValidation {
+    /// Settings and Import both stop the server, and a second stop inside the first one's window
+    /// is refused. Closing them for the length of a stop is what keeps the user from choosing a
+    /// folder, or retyping a key, only to be told afterwards that it could not be used.
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(openSettings), #selector(importExistingData):
+            return !lifecycle.isBusy
+        case #selector(reloadDesk):
+            return web.canReload
+        default:
+            return true
+        }
     }
 }
 
