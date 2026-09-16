@@ -10,6 +10,10 @@ final class ServerLineTests: XCTestCase {
         XCTAssertEqual(ServerLine.parse("LOCKED 812"), .locked(pid: "812"))
     }
 
+    func testAnUnknownHolderIsStillALockNotAMalformedLine() {
+        XCTAssertEqual(ServerLine.parse("LOCKED unknown"), .locked(pid: "unknown"))
+    }
+
     func testOrdinaryLogOutputIsNotAProtocolLine() {
         XCTAssertNil(ServerLine.parse("INFO:     Started server process [1234]"))
         XCTAssertNil(ServerLine.parse(""))
