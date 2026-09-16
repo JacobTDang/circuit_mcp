@@ -44,13 +44,13 @@ if [ "${line%% *}" != "READY" ]; then
 fi
 port="${line#READY }"
 
-if ! curl -fsS "http://127.0.0.1:$port/api/status" | grep -q '"ok":true'; then
-  kill -TERM "$pid"
+if ! body="$(curl -fsS "http://127.0.0.1:$port/api/status")" || ! grep -q '"ok":true' <<<"$body"; then
+  kill -TERM "$pid" 2>/dev/null || true
   cat "$log" >&2
   fail "/api/status on port $port is not ok"
 fi
 
-kill -TERM "$pid"
+kill -TERM "$pid" 2>/dev/null || { cat "$log" >&2; fail "server was already gone before shutdown"; }
 if wait "$pid"; then status=0; else status=$?; fi
 [ "$status" -eq 0 ] || { cat "$log" >&2; fail "server exited $status after SIGTERM"; }
 
