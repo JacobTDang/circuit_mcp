@@ -6,6 +6,6 @@ let package = Package(
     platforms: [.macOS(.v14)],
     targets: [
         .target(name: "PrepPalCore"),
-        .testTarget(name: "PrepPalCoreTests", dependencies: ["PrepPalCore"]),
+        .testTarget(name: "PrepPalCoreTests", dependencies: ["PrepPalCore"], resources: [.copy("Fixtures")]),
     ]
 )
