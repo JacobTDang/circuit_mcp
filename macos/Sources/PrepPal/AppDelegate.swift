@@ -164,19 +164,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handle(_ event: ServerEvent, from controller: ServerController) {
         // A restart or an import replaces the controller; a late event from the old one would
-        // otherwise put its failure screen over the server that is running now.
-        guard lifecycle.liveServer === controller else { return }
+        // otherwise put its failure screen over the server that is running now. The screen
+        // belongs to the server running now, but the reason the superseded one failed is not
+        // dropped with it: nothing else would ever say why that server died.
+        guard lifecycle.liveServer === controller else {
+            if case .failed(let failure) = event {
+                NSLog("PrepPal ignored a failure from a superseded server: %@", "\(failure)")
+            }
+            return
+        }
         switch event {
         case .ready(let port):
             status.showLoading("Waiting for the server to answer…")
             Task { @MainActor [weak self] in
                 do {
                     try await HealthCheck().waitUntilHealthy(port: port)
+                    // A superseded success carries no reason to lose -- the desk is simply not
+                    // loaded for a server that is no longer the app's -- so this one is silent.
                     guard let self, self.lifecycle.liveServer === controller else { return }
                     self.web.load(port: port)
                     self.status.hide()
                 } catch {
-                    guard let self, self.lifecycle.liveServer === controller else { return }
+                    guard let self, self.lifecycle.liveServer === controller else {
+                        // Same rule as above, and the same reason for logging it: this health
+                        // check belongs to a server that has already been replaced, so its
+                        // failure must not take the screen, but it still has to be sayable.
+                        NSLog("PrepPal ignored a health check failure from a superseded server on port %@: %@",
+                              "\(port)", "\(error)")
+                        return
+                    }
                     self.showFailure("The server did not answer on port \(port).", detail: "\(error)")
                 }
             }
@@ -416,7 +432,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             presentAlert("The settings were not saved.", "\(error)")
             return
         }
-        if locations != nil { restartServer() }
+        // The sheet has just promised that saving restarts the server, so it restarts
+        // unconditionally: `restartServer` goes through `requireLocations`, which either creates
+        // the folders this time or puts the reason back on screen with its buttons. Skipping the
+        // restart when there are no folders yet saved the key and then said nothing at all.
+        restartServer()
     }
 
     private func saveOrClear(_ value: String, _ account: String) throws {
