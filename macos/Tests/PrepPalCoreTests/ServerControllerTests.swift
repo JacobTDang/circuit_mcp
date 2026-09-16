@@ -182,4 +182,23 @@ final class ServerControllerTests: XCTestCase {
         XCTAssertEqual(firstEvent(of: server), .failed(.launchFailed("server already started")))
         XCTAssertEqual(server.stop(), .stoppedGracefully)
     }
+
+    /// `applicationShouldTerminate` blocks the quit for as long as this takes and the app tells
+    /// the user how long that is, so the bound has to be derived from the escalation `stop()`
+    /// really runs rather than restated in the app.
+    func testStopNeverBlocksLongerThanTheWorstCaseBound() throws {
+        let server = try controller("stubborn", grace: 1)
+        XCTAssertEqual(firstEvent(of: server), .ready(port: 45680))
+        XCTAssertEqual(server.worstCaseStopSeconds, 8, "1s grace, then 5s for the exit, then 2s for the group")
+        let started = Date()
+        XCTAssertEqual(server.stop(), .killed)
+        let elapsed = Date().timeIntervalSince(started)
+        XCTAssertGreaterThanOrEqual(elapsed, 1, "SIGTERM was ignored, so the whole grace period ran out")
+        XCTAssertLessThanOrEqual(elapsed, server.worstCaseStopSeconds)
+    }
+
+    func testTheWorstCaseStopBoundFollowsTheConfiguredGracePeriod() throws {
+        XCTAssertEqual(try controller("ready", grace: 10).worstCaseStopSeconds, 17,
+                       "the default grace period is what the app's quit message quotes")
+    }
 }

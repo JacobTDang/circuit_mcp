@@ -138,4 +138,30 @@ final class DataImporterTests: XCTestCase {
         XCTAssertEqual(leftovers, [], "the data is back at the destination, so no backup may be left behind")
         XCTAssertEqual(try String(contentsOf: source.appendingPathComponent("circuit_mcp.sqlite3")), "repo-db")
     }
+
+    /// A rollback that fails reports only to the unified log, and the error the caller is handed
+    /// is the copy's, so this is the app's only way to tell a clean rollback from one that left
+    /// the student's data in a folder named after a timestamp no error mentions.
+    func testRecoveryAfterACleanRollbackShowsNothingLeftBehind() throws {
+        let destination = try commandCenter("command_center", marker: "app-db")
+        let state = try DataImporter().recovery(at: destination)
+        XCTAssertTrue(state.dataFolderPresent)
+        XCTAssertEqual(state.backupsLeftBehind, [])
+    }
+
+    func testRecoveryNamesTheFoldersAnImportMovedAside() throws {
+        let destination = root.appendingPathComponent("command_center", isDirectory: true)
+        let older = try commandCenter("command_center.before-import-20270115T080000Z", marker: "older")
+        let newer = try commandCenter("command_center.before-import-20270116T080000Z", marker: "newer")
+        _ = try commandCenter("unrelated", marker: "not a backup")
+        let state = try DataImporter().recovery(at: destination)
+        XCTAssertFalse(state.dataFolderPresent, "a rollback that did not finish leaves no data folder")
+        XCTAssertEqual(state.backupsLeftBehind.map(\.path), [older.path, newer.path],
+                       "oldest first, so the newest is the one holding the data that was moved aside")
+    }
+
+    func testRecoveryOfAFolderWhoseParentIsGoneSaysWhyRatherThanReportingNothing() throws {
+        let destination = root.appendingPathComponent("gone/command_center", isDirectory: true)
+        XCTAssertThrowsError(try DataImporter().recovery(at: destination))
+    }
 }
