@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     targets: [
         .target(name: "PrepPalCore"),
+        .executableTarget(name: "PrepPal", dependencies: ["PrepPalCore"]),
         .testTarget(name: "PrepPalCoreTests", dependencies: ["PrepPalCore"], resources: [.copy("Fixtures")]),
     ]
 )

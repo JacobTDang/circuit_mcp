@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build Andrew's PrepPal.app.
-# Usage: macos/build_app.sh --stage python
+# Usage: macos/build_app.sh --stage python|app
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -9,6 +9,7 @@ APP="$ROOT/dist/$APP_NAME.app"
 RESOURCES="$APP/Contents/Resources"
 WORK="$ROOT/build/macos"
 SITE="$RESOURCES/python/lib/python3.12/site-packages"
+VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$ROOT/pyproject.toml" | head -1)"
 
 fail() { echo "build_app: $*" >&2; exit 1; }
 
@@ -41,10 +42,23 @@ stage_python() {
     || { cat "$WORK/compileall.log" >&2; fail "compileall reported errors (listed above)"; }
 }
 
+stage_app() {
+  [ -x "$RESOURCES/python/bin/python3" ] || fail "run 'macos/build_app.sh --stage python' first"
+  [ -n "$VERSION" ] || fail "could not read the version from pyproject.toml"
+  (cd "$ROOT/macos" && swift build -c release --product PrepPal)
+  local bin
+  bin="$(cd "$ROOT/macos" && swift build -c release --show-bin-path)/PrepPal"
+  mkdir -p "$APP/Contents/MacOS"
+  cp "$bin" "$APP/Contents/MacOS/PrepPal"
+  sed "s/__VERSION__/$VERSION/g" "$ROOT/macos/Resources/Info.plist" >"$APP/Contents/Info.plist"
+  plutil -lint "$APP/Contents/Info.plist" >/dev/null || fail "the generated Info.plist is invalid"
+}
+
 stage="${2:-}"
-[ "${1:-}" = "--stage" ] || fail "usage: macos/build_app.sh --stage python"
+[ "${1:-}" = "--stage" ] || fail "usage: macos/build_app.sh --stage python|app"
 case "$stage" in
   python) stage_python ;;
-  *) fail "unknown stage '$stage'; expected: python" ;;
+  app)    stage_app ;;
+  *) fail "unknown stage '$stage'; expected: python or app" ;;
 esac
 echo "build_app: stage '$stage' done -> $APP"
