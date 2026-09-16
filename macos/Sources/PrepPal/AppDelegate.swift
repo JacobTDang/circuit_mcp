@@ -516,7 +516,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `DataImporter` puts the data back when a copy fails, but a rollback that could not finish
     /// says so only in the unified log and the error handed back here is the copy's. Reading what
     /// is actually on disk is what keeps a failed import recoverable rather than silent.
+    ///
+    /// A refusal never gets that far, so it is answered first and on its own terms. The refusals
+    /// used to arrive here as Swift source -- the alert really did read `sourceInUse("41273")` at
+    /// a student who had only forgotten to quit `run_ui.py`.
     static func importFailureDetail(_ failure: Error, importer: DataImporter, destination: URL) -> String {
+        // A refusal is raised by the checks that run before the destination is moved or a byte is
+        // copied, so there is no recovery to report and nothing on disk to read: every sentence
+        // below about data being moved aside or put back would be untrue of it. `DataImportError`
+        // carries its own written reason, which is what the student is told instead.
+        if let refusal = failure as? DataImportError, refusal.refusedBeforeTouchingDisk {
+            return "\(refusal)\n\nNothing was changed."
+        }
         let readTheLog = "Open Console.app and search for PrepPal to see what the import reported."
         let state: ImportRecovery
         do {

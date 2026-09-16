@@ -164,4 +164,113 @@ final class DataImporterTests: XCTestCase {
         let destination = root.appendingPathComponent("gone/command_center", isDirectory: true)
         XCTAssertThrowsError(try DataImporter().recovery(at: destination))
     }
+
+    // MARK: - What a refused import tells the student
+
+    /// Every case of this enum reached the student as its Swift form -- the alert really did
+    /// read `sourceInUse("41273")` -- because `AppDelegate` interpolated the error into it.
+    /// These are the sentences that replaced it, so each one is checked for the thing it tells
+    /// them to do rather than for being non-empty.
+    private static let everyRefusal: [DataImportError] = [
+        .sourceMissing("/Users/andrew/Documents/gone"),
+        .notACommandCenter("/Users/andrew/Documents"),
+        .sameFolder,
+        .sourceInUse("41273"),
+        .backupExists("/Users/andrew/Library/Application Support/PrepPal/command_center.before-import-20270115T080000Z"),
+    ]
+
+    /// The list above is hand-kept, so a case added without a sentence would simply not be
+    /// checked. The switch is exhaustive and the count is pinned: a new case stops compiling
+    /// here until it is written and added.
+    func testEveryRefusalIsCovered() {
+        for refusal in Self.everyRefusal {
+            switch refusal {
+            case .sourceMissing, .notACommandCenter, .sameFolder, .sourceInUse, .backupExists: break
+            }
+        }
+        XCTAssertEqual(Self.everyRefusal.count, 5, "a new DataImportError case needs a sentence and an entry above")
+    }
+
+    func testAMissingSourceSaysToChooseTheFolderAgain() {
+        let message = "\(DataImportError.sourceMissing("/Users/andrew/Documents/gone"))"
+        XCTAssertTrue(message.contains("/Users/andrew/Documents/gone"), "the folder they chose: \(message)")
+        XCTAssertTrue(message.contains("Choose the folder again"), "the action to take: \(message)")
+    }
+
+    func testAFolderWithoutADatabaseSaysWhatMakesAFolderImportable() {
+        let message = "\(DataImportError.notACommandCenter("/Users/andrew/Documents"))"
+        XCTAssertTrue(message.contains("/Users/andrew/Documents"), "the folder they chose: \(message)")
+        XCTAssertTrue(message.contains("circuit_mcp.sqlite3"), "what was looked for and not found: \(message)")
+        XCTAssertTrue(message.contains("command_center"), "the folder to choose instead: \(message)")
+    }
+
+    func testImportingAFolderIntoItselfSaysWhichFolderToPickInstead() {
+        let message = "\(DataImportError.sameFolder)"
+        XCTAssertTrue(message.contains(".local/command_center"), "where a checkout keeps its data: \(message)")
+        XCTAssertTrue(message.contains("inside the other"), "nesting is the other half of this refusal: \(message)")
+    }
+
+    /// The README tells the student to stop `run_ui.py` before importing, so this is the refusal
+    /// they are most likely to see. It has to name the thing to quit.
+    func testASourceInUseNamesTheProcessAndWhatToQuit() {
+        let message = "\(DataImportError.sourceInUse("41273"))"
+        XCTAssertTrue(message.contains("41273"), "the process holding the lock: \(message)")
+        XCTAssertTrue(message.contains("run_ui.py"), "what the README told them to stop: \(message)")
+        XCTAssertTrue(message.contains("try the import again"), "the action to take: \(message)")
+    }
+
+    func testAnExistingBackupNamesTheFolderInTheWay() {
+        let aside = "/Users/andrew/Library/Application Support/PrepPal/command_center.before-import-20270115T080000Z"
+        let message = "\(DataImportError.backupExists(aside))"
+        XCTAssertTrue(message.contains(aside), "the folder in the way: \(message)")
+        XCTAssertTrue(message.lowercased().contains("rename"), "the action to take: \(message)")
+    }
+
+    /// The defect this replaces was not that the text was terse but that it was Swift source.
+    func testNoRefusalShowsItsSwiftCaseName() {
+        let caseNames = ["sourceMissing", "notACommandCenter", "sameFolder", "sourceInUse", "backupExists"]
+        for refusal in Self.everyRefusal {
+            let message = "\(refusal)"
+            for name in caseNames {
+                XCTAssertFalse(message.contains(name), "\(name) is developer text and reached the alert: \(message)")
+            }
+            XCTAssertFalse(message.contains("(\""), "a rendered associated value reached the alert: \(message)")
+            XCTAssertTrue(message.hasSuffix("."), "the alert shows sentences: \(message)")
+        }
+    }
+
+    /// `"\(error)"` is what the alert interpolates and `localizedDescription` is what any future
+    /// caller reaches for. Neither may be the one that says "DataImportError error 3".
+    func testBothRenderingsOfARefusalAreTheSameSentence() {
+        for refusal in Self.everyRefusal {
+            XCTAssertEqual(refusal.localizedDescription, "\(refusal)")
+            XCTAssertFalse(refusal.localizedDescription.contains("DataImportError"), refusal.localizedDescription)
+        }
+    }
+
+    /// Every one of these is thrown before the destination is moved or a byte is copied, which is
+    /// what lets the alert close with "Nothing was changed." rather than "Your data is back the
+    /// way it was" -- a sentence that implies a move on a path where none ever happened.
+    func testEveryRefusalIsRaisedBeforeAnythingOnDiskIsTouched() {
+        for refusal in Self.everyRefusal {
+            XCTAssertTrue(refusal.refusedBeforeTouchingDisk, "\(refusal)")
+        }
+    }
+
+    /// The claim above is only as good as the disk it is checked against: a refusal that had
+    /// moved the data aside would leave a backup folder behind and make the sentence untrue.
+    func testARefusedImportLeavesTheDestinationAndItsParentUntouched() throws {
+        let source = try commandCenter("repo", marker: "repo-db")
+        let destination = try commandCenter("command_center", marker: "app-db")
+        let lockPath = source.appendingPathComponent("server.lock").path
+        try Data("777".utf8).write(to: URL(fileURLWithPath: lockPath))
+        let held = open(lockPath, O_RDWR)
+        XCTAssertEqual(flock(held, LOCK_EX | LOCK_NB), 0)
+        defer { close(held) }
+
+        let before = try fileManager.contentsOfDirectory(atPath: root.path).sorted()
+        XCTAssertThrowsError(try DataImporter().importCommandCenter(from: source, to: destination, now: now))
+        XCTAssertEqual(try fileManager.contentsOfDirectory(atPath: root.path).sorted(), before)
+        XCTAssertEqual(try String(contentsOf: destination.appendingPathComponent("circuit_mcp.sqlite3")), "app-db")
+    }
 }

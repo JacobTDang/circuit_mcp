@@ -10,6 +10,42 @@ public enum DataImportError: Error, Equatable {
     case backupExists(String)
 }
 
+/// Every one of these is shown to the student in an alert, and the alert used to interpolate the
+/// case itself: a forgotten `run_ui.py` -- the one failure the README all but schedules -- read
+/// `sourceInUse("41273")`. The sentence a refusal is worth lives here rather than in the app so
+/// that it is in the same target as the code that throws it, and can be tested.
+extension DataImportError: CustomStringConvertible, LocalizedError {
+    public var description: String {
+        switch self {
+        case .sourceMissing(let path):
+            return "There is no folder at \(path). It may have been renamed or moved since you chose it. Choose the folder again."
+        case .notACommandCenter(let path):
+            return "\(path) has no circuit_mcp.sqlite3 in it, so it is not a command center folder. Choose the command_center folder itself, not the folder it sits in."
+        case .sameFolder:
+            return "That folder is the app's own data folder, or one of the two is inside the other. Choose a command center folder from outside the app's data folder, such as a checkout's .local/command_center."
+        case .sourceInUse(let holder):
+            return "Another server is using that folder (process \(holder)). Quit run_ui.py, or whatever else is using that folder, and try the import again."
+        case .backupExists(let path):
+            return "PrepPal moves your current data aside before it imports, and \(path) is already there. Rename or move that folder, then try the import again."
+        }
+    }
+
+    /// `"\(error)"` is what the alert interpolates; `localizedDescription` is what the next caller
+    /// will reach for. Without this conformance that one would read "DataImportError error 3".
+    public var errorDescription: String? { description }
+
+    /// True when the import gave up before it moved the destination aside or copied a byte, which
+    /// is every case here: all five are thrown by the checks that run before anything on disk is
+    /// touched. That is what lets the app close the alert with "Nothing was changed." instead of
+    /// "Your data is back the way it was", which implies a move that never happened. The switch is
+    /// exhaustive so that a case added after the first `moveItem` has to answer this question.
+    public var refusedBeforeTouchingDisk: Bool {
+        switch self {
+        case .sourceMissing, .notACommandCenter, .sameFolder, .sourceInUse, .backupExists: return true
+        }
+    }
+}
+
 public struct ImportResult: Equatable {
     public let backup: URL?
 }
