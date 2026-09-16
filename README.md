@@ -275,9 +275,10 @@ launch needs your say-so.
    That changes this one app. Leave Gatekeeper itself alone: turning it off
    system-wide to install one tutoring app is a bad trade.
 
-Signing the app with a Developer ID certificate and notarizing it would remove
-all of this. Nothing else about the build would change: notarization replaces
-exactly the `sign` stage of `macos/build_app.sh`.
+Signing and notarizing it requires Developer ID signing (with the hardened
+runtime and a timestamp), submission to Apple's
+notary service, and stapling the result; those steps would expand the `sign` and
+packaging stages of `macos/build_app.sh`.
 
 ## Development
 

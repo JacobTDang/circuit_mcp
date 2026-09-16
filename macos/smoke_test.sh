@@ -9,7 +9,41 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # default is assigned on its own line -- the same shape check_python_runtime.sh uses.
 APP="${1:-}"
 [ -n "$APP" ] || APP="$ROOT/dist/Andrew's PrepPal.app"
+check=""
+home=""
+launched=no
 fail() { echo "smoke_test: $*" >&2; exit 1; }
+
+cleanup() {
+  local process
+  trap - EXIT
+  if [ "$launched" = yes ]; then
+    osascript -e 'tell application id "io.github.jacobtdang.preppal" to quit' >/dev/null 2>&1 || true
+    for _ in $(seq 1 20); do
+      pgrep -f "$APP/Contents/" >/dev/null || break
+      sleep 0.1
+    done
+    while IFS= read -r process; do
+      [ -n "$process" ] && kill -TERM "$process" 2>/dev/null || true
+    done < <(pgrep -f "$APP/Contents/" || true)
+    for _ in $(seq 1 20); do
+      pgrep -f "$APP/Contents/" >/dev/null || break
+      sleep 0.1
+    done
+    while IFS= read -r process; do
+      [ -n "$process" ] && kill -KILL "$process" 2>/dev/null || true
+    done < <(pgrep -f "$APP/Contents/" || true)
+    for _ in $(seq 1 20); do
+      pgrep -f "$APP/Contents/" >/dev/null || break
+      sleep 0.1
+    done
+  fi
+  [ -n "$check" ] && [ -d "$check" ] && rm -rf -- "$check"
+  [ -n "$home" ] && [ -d "$home" ] && rm -rf -- "$home"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 [ -x "$APP/Contents/MacOS/PrepPal" ] || fail "no built app at $APP; run macos/build_app.sh"
 # codesign refuses to look at a bundle whose root carries a com.apple.FinderInfo attribute, and a
@@ -26,15 +60,19 @@ esac
 signed=0
 codesign --verify --deep --strict "$check/app" || signed=$?
 rm -rf "$check"
+check=""
 [ "$signed" -eq 0 ] || fail "the app is not signed; run macos/build_app.sh"
 if pgrep -f "$APP/Contents/" >/dev/null; then fail "the app is already running; quit it first"; fi
 
 home="$(mktemp -d)"
 logs="$home/Logs/PrepPal"
-open --env "PREPPAL_HOME=$home" "$APP"
+open --env "PREPPAL_HOME=$home" "$APP" || fail "could not launch $APP"
+launched=yes
 
 port=""
 for _ in $(seq 1 120); do
+  # These app-created names cannot contain whitespace or newlines.
+  # shellcheck disable=SC2012
   log="$(ls -t "$logs"/server-*.log 2>/dev/null | head -1 || true)"
   if [ -n "$log" ]; then
     line="$(grep -m1 -E '^(READY|LOCKED) ' "$log" || true)"
@@ -64,6 +102,8 @@ for _ in $(seq 1 40); do
   sleep 0.5
 done
 if pgrep -fl "$APP/Contents/"; then fail "processes from the app are still running 20 s after quit"; fi
+launched=no
 
 rm -rf "$home"
+home=""
 echo "smoke_test: the app served port $port, quit cleanly, and left nothing running"

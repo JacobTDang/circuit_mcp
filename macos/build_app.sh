@@ -13,8 +13,17 @@ SITE="$RESOURCES/python/lib/python3.12/site-packages"
 # top-level 'version = ' line closes the pipe on sed, and the script would abort on that EPIPE
 # (141) with nothing said about which line it read.
 VERSION="$(sed -n '/^version = "/{s/^version = "\(.*\)"$/\1/p;q;}' "$ROOT/pyproject.toml")"
+temporary_dirs=("")
 
 fail() { echo "build_app: $*" >&2; exit 1; }
+
+cleanup_build_temps() {
+  local path
+  for path in "${temporary_dirs[@]}"; do
+    [ -n "$path" ] && rm -rf -- "$path"
+  done
+}
+trap cleanup_build_temps EXIT
 
 stage_python() {
   command -v uv >/dev/null 2>&1 || fail "uv is required: https://docs.astral.sh/uv/"
@@ -33,12 +42,27 @@ stage_python() {
 
   bundled="$RESOURCES/python/bin/python3"
   [ -x "$bundled" ] || fail "the copied Python has no bin/python3"
+  case " $(lipo -archs "$bundled") " in
+    *" arm64 "*) ;;
+    *) fail "bundled Python is $(lipo -archs "$bundled"), expected arm64" ;;
+  esac
 
   (cd "$ROOT" && uv export --frozen --no-dev --no-hashes --no-emit-project \
       --format requirements-txt -o "$WORK/requirements.txt")
   (cd "$ROOT" && uv build --wheel --out-dir "$WORK/wheel")
   uv pip install --python "$bundled" --no-deps -r "$WORK/requirements.txt"
   uv pip install --python "$bundled" --no-deps "$WORK"/wheel/circuit_mcp-*.whl
+
+  local native arches
+  while IFS= read -r native; do
+    if file "$native" | grep -q 'Mach-O'; then
+      arches="$(lipo -archs "$native")"
+      case " $arches " in
+        *" arm64 "*) ;;
+        *) fail "bundled native library $native is $arches, expected arm64" ;;
+      esac
+    fi
+  done < <(find "$RESOURCES/python" -type f \( -name '*.so' -o -name '*.dylib' \) -print)
 
   find "$SITE" -type d \( -name tests -o -name __pycache__ \) -prune -exec rm -rf {} +
   "$bundled" -m compileall -q "$SITE" >"$WORK/compileall.log" \
@@ -108,6 +132,7 @@ clear_detritus() {
 # removes `unsynced_work` when it is done with it.
 copy_out_of_tree() {
   unsynced_work="$(mktemp -d)"
+  temporary_dirs+=("$unsynced_work")
   unsynced="$unsynced_work/$APP_NAME.app"
   ditto "$1" "$unsynced"       # ditto copies the source's attributes along with its files
   clear_detritus "$unsynced"
@@ -115,36 +140,50 @@ copy_out_of_tree() {
 
 stage_sign() {
   [ -x "$APP/Contents/MacOS/PrepPal" ] || fail "run 'macos/build_app.sh --stage app' first"
-  local unsynced unsynced_work
+  local unsynced unsynced_work signed_candidate backup
   copy_out_of_tree "$APP"
-  # Ad-hoc signature. Notarization with a Developer ID replaces exactly this step.
+  # Ad-hoc signature. A release build would add Developer ID signing, notarization, and stapling.
   codesign --force --deep --sign - "$unsynced" || fail "codesign could not sign the app"
   codesign --verify --deep --strict "$unsynced" || fail "codesign could not verify the signature"
-  rm -rf "$APP"
-  ditto "$unsynced" "$APP" \
-    || fail "the signed app is still in $unsynced_work but could not be copied back to dist"
+  signed_candidate="$ROOT/dist/.$APP_NAME.signed.$$.app"
+  backup="$ROOT/dist/.$APP_NAME.previous.$$.app"
+  temporary_dirs+=("$signed_candidate" "$backup")
+  ditto "$unsynced" "$signed_candidate" || fail "could not stage the signed app in dist"
+  mv "$APP" "$backup" || fail "could not stage the unsigned app for replacement"
+  if mv "$signed_candidate" "$APP"; then
+    rm -rf "$backup"
+  else
+    if ! mv "$backup" "$APP"; then
+      temporary_dirs=("")
+      fail "could not install the signed app or restore it; recovery files remain in $ROOT/dist"
+    fi
+    fail "could not install the signed app; restored the unsigned app"
+  fi
   rm -rf "$unsynced_work"
 }
 
 stage_dmg() {
   local dmg="$ROOT/dist/PrepPal-$VERSION.dmg"
-  local unsynced unsynced_work
+  local unsynced unsynced_work dmg_work candidate
   # The staged copy is both the signature check and what the disk image is built from, so what
   # users open is the bundle that verified, without the sync flag on it.
   copy_out_of_tree "$APP"
   codesign --verify --deep --strict "$unsynced" \
     || fail "the app is not signed; run 'macos/build_app.sh --stage sign' first"
   ln -s /Applications "$unsynced_work/Applications"
-  rm -f "$dmg"
-  hdiutil create -volname "$APP_NAME" -srcfolder "$unsynced_work" -ov -format UDZO "$dmg" >/dev/null
+  dmg_work="$(mktemp -d "$ROOT/dist/.preppal-dmg.XXXXXX")"
+  temporary_dirs+=("$dmg_work")
+  candidate="$dmg_work/PrepPal-$VERSION.dmg"
+  hdiutil create -volname "$APP_NAME" -srcfolder "$unsynced_work" -ov -format UDZO "$candidate" >/dev/null
+  hdiutil verify "$candidate" >/dev/null || fail "hdiutil could not verify $candidate"
+  mv -f "$candidate" "$dmg"
   rm -rf "$unsynced_work"
-  hdiutil verify "$dmg" >/dev/null || fail "hdiutil could not verify $dmg"
   echo "build_app: disk image -> $dmg"
 }
 
 if [ "$#" -eq 0 ]; then
   stage=all
-elif [ "${1:-}" = "--stage" ] && [ -n "${2:-}" ]; then
+elif [ "$#" -eq 2 ] && [ "${1:-}" = "--stage" ] && [ -n "${2:-}" ]; then
   stage="$2"
 else
   fail "usage: macos/build_app.sh [--stage python|app|sign|dmg|all]"
