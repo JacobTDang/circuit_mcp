@@ -201,4 +201,22 @@ final class ServerControllerTests: XCTestCase {
         XCTAssertEqual(try controller("ready", grace: 10).worstCaseStopSeconds, 17,
                        "the default grace period is what the app's quit message quotes")
     }
+
+    /// The environment carries the OpenRouter key, and "never print this" was a comment at one
+    /// call site. Interpolating a configuration anywhere -- an error message, a log line, a print
+    /// left behind while debugging -- must not be able to put the key on disk.
+    func testAConfigurationNeverRendersItsEnvironmentValues() throws {
+        let configuration = ServerConfiguration(
+            executable: URL(fileURLWithPath: "/usr/bin/true"),
+            arguments: ["-m", "circuit_mcp.app_server"],
+            environment: ["OPENROUTER_API_KEY": "sk-or-v1-NEVERPRINTME", "PATH": "/usr/bin:/bin"],
+            logFile: logDirectory.appendingPathComponent("server-redaction.log"))
+
+        for rendered in ["\(configuration)", String(reflecting: configuration), "\([configuration])"] {
+            XCTAssertFalse(rendered.contains("NEVERPRINTME"), "a secret reached a rendered configuration: \(rendered)")
+            XCTAssertFalse(rendered.contains("/usr/bin:/bin"), "environment values are redacted as a whole, not by name")
+            XCTAssertTrue(rendered.contains("OPENROUTER_API_KEY"), "the names are what makes a redacted configuration useful")
+            XCTAssertTrue(rendered.contains("circuit_mcp.app_server"), "everything that is not the environment still prints")
+        }
+    }
 }

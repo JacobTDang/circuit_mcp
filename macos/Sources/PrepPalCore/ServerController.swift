@@ -20,6 +20,23 @@ public struct ServerConfiguration {
     }
 }
 
+/// The environment carries the OpenRouter key. "Never print this" was a comment at the one call
+/// site that builds it, which nothing enforced: an `NSLog("\(configuration)")` left behind while
+/// debugging would have written the key into the log the app offers to open. Rendering a
+/// configuration therefore names its environment and never shows a value of it.
+extension ServerConfiguration: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        let names = environment.keys.sorted().joined(separator: ", ")
+        return """
+            ServerConfiguration(executable: \(executable.path), arguments: \(arguments), \
+            environment: [\(names)] (values redacted), logFile: \(logFile.path), \
+            readyTimeout: \(readyTimeout), stopGracePeriod: \(stopGracePeriod))
+            """
+    }
+
+    public var debugDescription: String { description }
+}
+
 public enum ServerFailure: Error, Equatable {
     case launchFailed(String)
     case locked(pid: String)
