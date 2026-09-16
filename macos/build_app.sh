@@ -147,15 +147,21 @@ stage_sign() {
   codesign --verify --deep --strict "$unsynced" || fail "codesign could not verify the signature"
   signed_candidate="$ROOT/dist/.$APP_NAME.signed.$$.app"
   backup="$ROOT/dist/.$APP_NAME.previous.$$.app"
-  temporary_dirs+=("$signed_candidate" "$backup")
+  # $backup is deliberately not registered for cleanup. Between the two mv calls below it is the
+  # only copy of the app, and an interrupt there would run the EXIT trap over it. It is removed
+  # explicitly when the install succeeds and moved back when it fails, so the worst this leaves is
+  # a stale folder in a gitignored dist/ -- a better failure than deleting the app that was built.
+  temporary_dirs+=("$signed_candidate")
   ditto "$unsynced" "$signed_candidate" || fail "could not stage the signed app in dist"
   mv "$APP" "$backup" || fail "could not stage the unsigned app for replacement"
   if mv "$signed_candidate" "$APP"; then
     rm -rf "$backup"
   else
     if ! mv "$backup" "$APP"; then
+      # Both copies of the app are now recovery files, so nothing may be cleaned up -- including
+      # the staged copy, which is ~418 MB and has to be named or it is simply lost track of.
       temporary_dirs=("")
-      fail "could not install the signed app or restore it; recovery files remain in $ROOT/dist"
+      fail "could not install the signed app or restore it; recovery files remain in $ROOT/dist and in $unsynced_work"
     fi
     fail "could not install the signed app; restored the unsigned app"
   fi
