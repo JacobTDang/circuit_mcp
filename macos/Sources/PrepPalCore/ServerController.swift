@@ -125,8 +125,21 @@ public final class ServerController {
 
         kill(target, SIGTERM)
         if exitSignal.wait(timeout: .now() + configuration.stopGracePeriod) == .success {
-            guard killpg(target, 0) == 0 else { return .stoppedGracefully }
+            // Only ESRCH means the group is empty. Any other errno is a check that did not
+            // happen, and reporting that as a clean stop would hide a still-running group.
+            if killpg(target, 0) != 0 {
+                let failure = errno
+                guard failure == ESRCH else {
+                    return .killFailed(reason: "killpg(\(target), 0) after SIGTERM: \(String(cString: strerror(failure)))")
+                }
+                return .stoppedGracefully
+            }
             killpg(target, SIGKILL)  // the server exited but left children in its group
+            // The children were force-killed, so this branch owes the same confirmation the
+            // escalation branch does: a group that did not empty is not a successful stop.
+            if let survivor = groupSurvivor(target, within: 2) {
+                return .killFailed(reason: survivor)
+            }
             return .killed
         }
         killpg(target, SIGKILL)
