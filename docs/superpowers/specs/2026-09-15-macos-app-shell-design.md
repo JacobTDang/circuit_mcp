@@ -96,11 +96,10 @@ Nothing inside the bundle is written to at run time.
 
 ```text
 ~/Library/Application Support/PrepPal/
-  command_center/        database, uploaded files, trash   (CIRCUIT_MCP_DATA_DIR)
-  showman/               rendered objects                   (sub-project 3)
-  ocr/                   OCR environment and model          (sub-project 5)
+  command_center/        database, uploaded files, trash, server.lock   (CIRCUIT_MCP_DATA_DIR)
+  showman/               rendered objects                               (sub-project 3)
+  ocr/                   OCR environment and model                      (sub-project 5)
   workspace.json
-  server.lock
 ~/Library/Logs/PrepPal/server-<timestamp>.log
 ```
 
@@ -223,7 +222,8 @@ or skipped.
 | Server exits while running | Error screen with exit status and the last 40 log lines | Exit status |
 | Stop needed `SIGKILL` | Nothing extra; the app quits | "Server did not stop within 10 s; killed process group" |
 | Keychain read fails | Settings window with the Keychain error; the server still starts without a key | Keychain status code |
-| Import target not empty | Alert: import refused, the folder already has data | Both paths |
+| Import source is in use by another server | Alert: close the other server first; nothing is copied | Source path and lock holder |
+| App data already exists when importing | Nothing extra: it is moved to `command_center.before-import-<timestamp>` and the alert names that folder | Both paths |
 | App running from a translocated path | Alert: move Andrew's PrepPal to Applications before copying the MCP command | Detected path |
 
 ## Claude Code hookup
