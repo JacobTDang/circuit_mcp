@@ -38,6 +38,8 @@ public enum StopOutcome: Equatable {
     case notRunning
     case stoppedGracefully
     case killed
+    /// SIGKILL was sent but the process group could not be confirmed gone, and why.
+    case killFailed(reason: String)
 }
 
 /// Starts the command-center server as its own process-group leader, reads its protocol
@@ -50,7 +52,8 @@ public final class ServerController {
     private var childPID: pid_t?
     private var started = false
     private var resolved = false
-    private var becameReady = false
+    /// Readable by the tests that pin the startup race; only `resolveReady` may set it.
+    private(set) var becameReady = false
     private var stopping = false
     private var exited = false
     private let exitSignal = DispatchSemaphore(value: 0)
@@ -127,7 +130,14 @@ public final class ServerController {
             return .killed
         }
         killpg(target, SIGKILL)
-        _ = exitSignal.wait(timeout: .now() + 5)
+        // A SIGKILL that did not take is the orphan this class exists to prevent, so neither
+        // the wait nor the group's survival may be reported to the caller as success.
+        guard exitSignal.wait(timeout: .now() + 5) == .success else {
+            return .killFailed(reason: "process \(target) did not report its exit within 5s of SIGKILL")
+        }
+        if let survivor = groupSurvivor(target, within: 2) {
+            return .killFailed(reason: survivor)
+        }
         return .killed
     }
 
@@ -135,17 +145,23 @@ public final class ServerController {
 
     private func spawnGroupLeader(outputFD: Int32) throws -> pid_t {
         var actions: posix_spawn_file_actions_t?
-        posix_spawn_file_actions_init(&actions)
+        try require("posix_spawn_file_actions_init", posix_spawn_file_actions_init(&actions))
         defer { posix_spawn_file_actions_destroy(&actions) }
-        posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
-        posix_spawn_file_actions_adddup2(&actions, outputFD, 1)
-        posix_spawn_file_actions_adddup2(&actions, outputFD, 2)
+        try require("posix_spawn_file_actions_addopen(/dev/null)",
+                    posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0))
+        try require("posix_spawn_file_actions_adddup2(stdout)",
+                    posix_spawn_file_actions_adddup2(&actions, outputFD, 1))
+        try require("posix_spawn_file_actions_adddup2(stderr)",
+                    posix_spawn_file_actions_adddup2(&actions, outputFD, 2))
 
         var attributes: posix_spawnattr_t?
-        posix_spawnattr_init(&attributes)
+        try require("posix_spawnattr_init", posix_spawnattr_init(&attributes))
         defer { posix_spawnattr_destroy(&attributes) }
-        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT))
-        posix_spawnattr_setpgroup(&attributes, 0)
+        // Without SETPGROUP the child joins this process's group, and every killpg here would
+        // aim at a group id that does not exist: a server that can never be force-killed.
+        try require("posix_spawnattr_setflags",
+                    posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT)))
+        try require("posix_spawnattr_setpgroup", posix_spawnattr_setpgroup(&attributes, 0))
 
         let path = configuration.executable.path
         let argv: [UnsafeMutablePointer<CChar>?] = ([path] + configuration.arguments).map { strdup($0) } + [nil]
@@ -159,6 +175,31 @@ public final class ServerController {
         let result = posix_spawn(&spawned, path, &actions, &attributes, argv, envp)
         guard result == 0 else { throw ServerFailure.launchFailed("\(path): \(String(cString: strerror(result)))") }
         return spawned
+    }
+
+    /// posix_spawn setup calls return an errno rather than setting one. A failure leaves the
+    /// child misconfigured in a way nothing downstream can detect, so it fails the launch.
+    private func require(_ call: String, _ result: Int32) throws {
+        guard result == 0 else {
+            throw ServerFailure.launchFailed("\(call): \(String(cString: strerror(result)))")
+        }
+    }
+
+    /// Waits for the process group to empty after a SIGKILL: nil once it has, otherwise why it
+    /// could not be confirmed gone. Members reaped by launchd stay in the group as zombies for
+    /// a moment, so a single probe would name a survivor that is already dead.
+    private func groupSurvivor(_ target: pid_t, within seconds: TimeInterval) -> String? {
+        let deadline = Date().addingTimeInterval(seconds)
+        while true {
+            guard killpg(target, 0) == 0 else {
+                guard errno != ESRCH else { return nil }
+                return "killpg(\(target), 0) after SIGKILL: \(String(cString: strerror(errno)))"
+            }
+            guard Date() < deadline else {
+                return "process group \(target) still had members \(seconds)s after SIGKILL"
+            }
+            usleep(5_000)
+        }
     }
 
     private func readOutput(from fd: Int32, into log: FileHandle, completion: @escaping (ServerEvent) -> Void) {
@@ -221,7 +262,7 @@ public final class ServerController {
 
     /// Delivers the first event only. Returns true if this call delivered it.
     @discardableResult
-    private func resolve(_ event: ServerEvent, _ completion: @escaping (ServerEvent) -> Void) -> Bool {
+    func resolve(_ event: ServerEvent, _ completion: @escaping (ServerEvent) -> Void) -> Bool {
         lock.lock()
         guard !resolved else { lock.unlock(); return false }
         resolved = true
@@ -230,8 +271,11 @@ public final class ServerController {
         return true
     }
 
-    /// Atomically records readiness only when READY wins the startup race.
-    private func resolveReady(port: Int, _ completion: @escaping (ServerEvent) -> Void) {
+    /// Atomically records readiness only when READY wins the startup race. Setting
+    /// `becameReady` outside the same critical section would let a READY that lost to the
+    /// deadline still mark the server ready, and `waitForExit` would then report an `onExit`
+    /// for a server the caller was already told never started.
+    func resolveReady(port: Int, _ completion: @escaping (ServerEvent) -> Void) {
         lock.lock()
         guard !resolved else { lock.unlock(); return }
         resolved = true
