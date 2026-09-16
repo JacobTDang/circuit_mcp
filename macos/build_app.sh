@@ -43,14 +43,43 @@ stage_python() {
   find "$SITE" -type d \( -name tests -o -name __pycache__ \) -prune -exec rm -rf {} +
   "$bundled" -m compileall -q "$SITE" >"$WORK/compileall.log" \
     || { cat "$WORK/compileall.log" >&2; fail "compileall reported errors (listed above)"; }
+  strip_console_scripts
+}
+
+# 'uv pip install' writes each console script (uvicorn, fastapi, ipython, ...) with this build
+# machine's absolute path to the interpreter in its exec line, so every one of them stops working
+# the moment the .app is dragged to /Applications -- which is exactly what the disk image invites.
+# Nothing in the app runs them: the server starts as 'python3 -m circuit_mcp.app_server'. Rather
+# than ship them broken they are removed here. The scripts the Python distribution itself ships
+# (pip, pydoc, 2to3, idle, python3-config) exec through "$(dirname -- "$(realpath -- "$0")")"
+# instead, so they move with the bundle and stay.
+strip_console_scripts() {
+  local script removed=0
+  for script in "$RESOURCES"/python/bin/*; do
+    if [ -L "$script" ] || [ ! -f "$script" ]; then continue; fi
+    if [ "$(head -c 2 "$script")" != '#!' ]; then continue; fi
+    case "$(LC_ALL=C sed -n 2p "$script")" in
+      "'''exec' '"*) rm -f "$script"; removed=$((removed + 1)) ;;
+    esac
+  done
+  # The build path has no apostrophe to quote, so it greps literally even though the path the
+  # scripts embedded did not. Text files only: the interpreter next to them is a Mach-O binary.
+  if grep -rIlF "$ROOT/" "$RESOURCES/python/bin" >/dev/null 2>&1; then
+    fail "bin/ still names the build machine's path after removing $removed console script(s)"
+  fi
+  echo "build_app: removed $removed console script(s) that hardcoded the build path"
 }
 
 stage_app() {
   [ -x "$RESOURCES/python/bin/python3" ] || fail "run 'macos/build_app.sh --stage python' first"
   [ -n "$VERSION" ] || fail "could not read the version from pyproject.toml"
-  (cd "$ROOT/macos" && swift build -c release --product PrepPal)
+  # --arch arm64 on purpose: without it the slice is whatever the build host happens to be, so
+  # the disk image would only be Apple silicon by accident. The bundled Python is an
+  # aarch64 build, so arm64 is the only slice the app could run with anyway.
+  (cd "$ROOT/macos" && swift build -c release --arch arm64 --product PrepPal)
   local bin
-  bin="$(cd "$ROOT/macos" && swift build -c release --show-bin-path)/PrepPal"
+  bin="$(cd "$ROOT/macos" && swift build -c release --arch arm64 --show-bin-path)/PrepPal"
+  [ "$(lipo -archs "$bin")" = "arm64" ] || fail "built $(lipo -archs "$bin"), expected arm64"
   mkdir -p "$APP/Contents/MacOS"
   cp "$bin" "$APP/Contents/MacOS/PrepPal"
   sed "s/__VERSION__/$VERSION/g" "$ROOT/macos/Resources/Info.plist" >"$APP/Contents/Info.plist"
