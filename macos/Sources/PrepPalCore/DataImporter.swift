@@ -14,6 +14,19 @@ public struct ImportResult: Equatable {
     public let backup: URL?
 }
 
+/// What an import left on disk, so a failure can be explained in terms the student can act on.
+public struct ImportRecovery: Equatable {
+    /// False when no data folder is in place, which is what a rollback that did not finish leaves.
+    public let dataFolderPresent: Bool
+    /// Folders an import moved aside and did not put back, oldest first.
+    public let backupsLeftBehind: [URL]
+
+    public init(dataFolderPresent: Bool, backupsLeftBehind: [URL]) {
+        self.dataFolderPresent = dataFolderPresent
+        self.backupsLeftBehind = backupsLeftBehind
+    }
+}
+
 /// One-time copy of an existing command-center folder into the app's data folder.
 /// Nothing is ever deleted: existing app data is moved aside first.
 public struct DataImporter {
@@ -67,6 +80,22 @@ public struct DataImporter {
             throw error
         }
         return ImportResult(backup: backup)
+    }
+
+    /// Where the data stands after an import. `undo` reports a rollback it could not finish only
+    /// to the unified log, and the error the caller is handed is the copy's, so a caller that
+    /// wants to tell a clean rollback from one that left the data in a timestamped folder has to
+    /// look at the disk. Reading the folder is allowed to fail, and the reason goes to the caller
+    /// rather than being reported as nothing left behind.
+    public func recovery(at destination: URL) throws -> ImportRecovery {
+        let parent = destination.deletingLastPathComponent()
+        let prefix = "\(destination.lastPathComponent).before-import-"
+        let names = try fileManager.contentsOfDirectory(atPath: parent.path)
+        return ImportRecovery(
+            dataFolderPresent: fileManager.fileExists(atPath: destination.path),
+            backupsLeftBehind: names.filter { $0.hasPrefix(prefix) }.sorted()
+                .map { parent.appendingPathComponent($0, isDirectory: true) }
+        )
     }
 
     /// Puts a failed import back the way it found it. Without this the app looks for data that is

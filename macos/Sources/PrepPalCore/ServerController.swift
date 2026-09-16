@@ -45,6 +45,11 @@ public enum StopOutcome: Equatable {
 /// Starts the command-center server as its own process-group leader, reads its protocol
 /// line, writes all of its output to the launch log, and stops it with escalation.
 public final class ServerController {
+    /// How long `stop()` waits for a force-killed process to report its exit.
+    private static let killExitWait: TimeInterval = 5
+    /// How long `stop()` then waits for that process's group to empty.
+    private static let groupEmptyWait: TimeInterval = 2
+
     public var onExit: ((Int32) -> Void)?
 
     private let configuration: ServerConfiguration
@@ -61,6 +66,13 @@ public final class ServerController {
 
     public init(configuration: ServerConfiguration) {
         self.configuration = configuration
+    }
+
+    /// The longest `stop()` can block: the grace period, then the wait for the killed process to
+    /// report its exit, then the wait for its group to empty. The app quotes this while it waits
+    /// for a quit, so it is derived from the escalation below rather than restated there.
+    public var worstCaseStopSeconds: TimeInterval {
+        configuration.stopGracePeriod + Self.killExitWait + Self.groupEmptyWait
     }
 
     public var pid: pid_t? {
@@ -137,7 +149,7 @@ public final class ServerController {
             killpg(target, SIGKILL)  // the server exited but left children in its group
             // The children were force-killed, so this branch owes the same confirmation the
             // escalation branch does: a group that did not empty is not a successful stop.
-            if let survivor = groupSurvivor(target, within: 2) {
+            if let survivor = groupSurvivor(target, within: Self.groupEmptyWait) {
                 return .killFailed(reason: survivor)
             }
             return .killed
@@ -145,10 +157,10 @@ public final class ServerController {
         killpg(target, SIGKILL)
         // A SIGKILL that did not take is the orphan this class exists to prevent, so neither
         // the wait nor the group's survival may be reported to the caller as success.
-        guard exitSignal.wait(timeout: .now() + 5) == .success else {
-            return .killFailed(reason: "process \(target) did not report its exit within 5s of SIGKILL")
+        guard exitSignal.wait(timeout: .now() + Self.killExitWait) == .success else {
+            return .killFailed(reason: "process \(target) did not report its exit within \(Self.killExitWait)s of SIGKILL")
         }
-        if let survivor = groupSurvivor(target, within: 2) {
+        if let survivor = groupSurvivor(target, within: Self.groupEmptyWait) {
             return .killFailed(reason: survivor)
         }
         return .killed
