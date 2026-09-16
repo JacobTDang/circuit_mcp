@@ -26,3 +26,7 @@ output/playwright/
 
 # linkC multi-agent coordination state
 .linkc/
+
+# Swift package build output for the macOS app
+macos/.build/
+macos/.swiftpm/
