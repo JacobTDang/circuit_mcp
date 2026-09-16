@@ -219,4 +219,74 @@ final class ServerControllerTests: XCTestCase {
             XCTAssertTrue(rendered.contains("circuit_mcp.app_server"), "everything that is not the environment still prints")
         }
     }
+
+    // MARK: - A log the reader cannot write to
+
+    /// A handle whose `write(contentsOf:)` fails the way a write to a full disk does. A real
+    /// ENOSPC cannot be produced from a unit test without process-global state (an RLIMIT_FSIZE
+    /// the whole test binary would then run under) or a scratch filesystem to fill; a descriptor
+    /// that is not open for writing fails at the same call with the same thrown error, which is
+    /// what the reader has to survive.
+    private func unwritableLog(_ name: String) throws -> FileHandle {
+        let path = logDirectory.appendingPathComponent(name)
+        XCTAssertTrue(FileManager.default.createFile(atPath: path.path, contents: nil))
+        let handle = try FileHandle(forReadingFrom: path)
+        XCTAssertThrowsError(try handle.write(contentsOf: Data("probe".utf8)),
+                             "the fixture must fail the very write the reader is being tested on")
+        return handle
+    }
+
+    /// A pipe already holding `text`, so the reader's first `read` returns without blocking.
+    private func primedPipe(_ text: String) throws -> (read: Int32, write: Int32) {
+        var fds: [Int32] = [0, 0]
+        XCTAssertEqual(pipe(&fds), 0)
+        let bytes = Array(text.utf8)
+        XCTAssertEqual(write(fds[1], bytes, bytes.count), bytes.count)
+        return (fds[0], fds[1])
+    }
+
+    /// `log.write(chunk)` was Objective-C `-writeData:`, which raises `NSFileHandleOperationException`
+    /// on a write failure. Swift cannot catch that, so a full disk terminated the app -- and the
+    /// server, spawned into its own process group so that it outlives its parent, kept running and
+    /// kept its flock on the data folder. The next launch's server then printed LOCKED and exited 3,
+    /// and the Restart button on the error screen hit the same lock every time.
+    ///
+    /// The reader is driven directly here, as `resolve` and `resolveReady` are above: the failure
+    /// is in the handle, and the handle is the one thing `start()` does not take from the caller.
+    func testALogWriteFailureStopsTheReaderInsteadOfKillingTheApp() throws {
+        let server = try controller("ready")
+        let pipe = try primedPipe("READY 45678\n")
+        defer { close(pipe.write) }
+        let noEvent = expectation(description: "a chunk that was never logged delivers no event")
+        noEvent.isInverted = true
+
+        // Returning from this call at all is the fix: -writeData: would have taken the test
+        // process down with it, exactly as it took the app down.
+        server.readOutput(from: pipe.read, into: try unwritableLog("unwritable.log")) { _ in noEvent.fulfill() }
+
+        // `close(fd)` and `outputDrained.signal()` are the two statements after the loop, so a
+        // reader that returned ran both -- and the stop path waits on that semaphore.
+        XCTAssertEqual(fcntl(pipe.read, F_GETFD), -1, "the reader must close its end of the pipe on the way out")
+        XCTAssertEqual(errno, EBADF)
+        // The chunk is logged before it is parsed, so giving up on the log also gives up on the
+        // protocol line inside it. The startup then fails on its ready timeout rather than
+        // running on with a log nothing can be diagnosed from.
+        wait(for: [noEvent], timeout: 0.2)
+    }
+
+    /// The whole point of catching the write instead of dying on it: the app stays up, so the
+    /// server it spawned is still its to stop. Driven on a live controller, with a real server in
+    /// a real process group, because an orphaned server is what the old crash actually left behind.
+    func testAServerWhoseLogCouldNotBeWrittenCanStillBeStopped() throws {
+        let server = try controller("ready")
+        XCTAssertEqual(firstEvent(of: server), .ready(port: 45678))
+        let pid = try XCTUnwrap(server.pid)
+
+        let pipe = try primedPipe("INFO: more output\n")
+        defer { close(pipe.write) }
+        server.readOutput(from: pipe.read, into: try unwritableLog("unwritable-live.log")) { _ in }
+
+        XCTAssertEqual(server.stop(), .stoppedGracefully)
+        XCTAssertFalse(isAlive(pid), "the server must not outlive the app that could not write its log")
+    }
 }

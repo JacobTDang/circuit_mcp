@@ -234,8 +234,11 @@ public final class ServerController {
         let deadline = Date().addingTimeInterval(seconds)
         while true {
             guard killpg(target, 0) == 0 else {
-                guard errno != ESRCH else { return nil }
-                return "killpg(\(target), 0) after SIGKILL: \(String(cString: strerror(errno)))"
+                // Captured once, as `stop()` does above: the interpolation between two reads of
+                // errno can allocate, and an allocation is free to leave a different errno behind.
+                let failure = errno
+                guard failure != ESRCH else { return nil }
+                return "killpg(\(target), 0) after SIGKILL: \(String(cString: strerror(failure)))"
             }
             guard Date() < deadline else {
                 return "process group \(target) still had members \(seconds)s after SIGKILL"
@@ -244,7 +247,10 @@ public final class ServerController {
         }
     }
 
-    private func readOutput(from fd: Int32, into log: FileHandle, completion: @escaping (ServerEvent) -> Void) {
+    /// Reads the server's output until the pipe closes, logging every chunk and acting on the
+    /// protocol lines in it. Internal rather than private so its give-up path can be driven with
+    /// a log handle that fails, which is the one thing `start()` does not take from the caller.
+    func readOutput(from fd: Int32, into log: FileHandle, completion: @escaping (ServerEvent) -> Void) {
         var pending = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
         while true {
@@ -252,7 +258,18 @@ public final class ServerController {
             if count < 0 && errno == EINTR { continue }
             guard count > 0 else { break }
             let chunk = Data(buffer[0..<count])
-            log.write(chunk)
+            // The throwing variant on purpose: `write(_:)` is Objective-C `-writeData:`, which
+            // raises `NSFileHandleOperationException` on a failed write. Swift cannot catch that,
+            // so a full disk killed the app -- and the server, spawned into its own process group
+            // so that it outlives its parent, stayed up holding the data folder's lock, which the
+            // next launch could then never take. Giving up on the read loop leaves the pipe to the
+            // `close(fd)` and `outputDrained.signal()` below, so the stop path stays intact.
+            do {
+                try log.write(contentsOf: chunk)
+            } catch {
+                NSLog("PrepPal could not write the server log %@: %@", configuration.logFile.path, "\(error)")
+                break
+            }
             pending.append(chunk)
             while let newline = pending.firstIndex(of: 0x0A) {
                 let line = String(decoding: pending[pending.startIndex..<newline], as: UTF8.self)
