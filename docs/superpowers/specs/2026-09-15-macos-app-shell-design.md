@@ -86,7 +86,6 @@ Andrew's PrepPal.app/
       python/                            standalone CPython 3.12
         bin/python3
         lib/python3.12/site-packages/    circuit_mcp + locked packages, precompiled
-      AppIcon.icns
 ```
 
 Later sub-projects add `Resources/runtime/` (ngspice, Node, Showman, UxPlay).
