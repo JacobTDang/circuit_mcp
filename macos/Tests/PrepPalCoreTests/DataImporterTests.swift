@@ -85,4 +85,57 @@ final class DataImporterTests: XCTestCase {
         let destination = root.appendingPathComponent("app/command_center", isDirectory: true)
         XCTAssertNoThrow(try DataImporter().importCommandCenter(from: source, to: destination, now: now))
     }
+
+    /// The backup name carries a whole-second timestamp, so a second import in the same second
+    /// wants the name the first import's backup already has. Refusing is the only option that
+    /// keeps the promise that nothing is deleted.
+    func testASecondImportInTheSameSecondWillNotOverwriteTheFirstBackup() throws {
+        let source = try commandCenter("repo", marker: "repo-db")
+        let destination = try commandCenter("command_center", marker: "fresh-app-db")
+        _ = try DataImporter().importCommandCenter(from: source, to: destination, now: now)
+        let backup = root.appendingPathComponent("command_center.before-import-20270115T080000Z", isDirectory: true)
+        XCTAssertThrowsError(try DataImporter().importCommandCenter(from: source, to: destination, now: now)) {
+            XCTAssertEqual($0 as? DataImportError, .backupExists(backup.path))
+        }
+        XCTAssertEqual(try String(contentsOf: backup.appendingPathComponent("circuit_mcp.sqlite3")), "fresh-app-db")
+    }
+
+    /// Importing a folder that lives inside the destination moves the destination -- and the
+    /// source with it -- out from under the copy. It has to be refused up front, like the
+    /// same-folder case it is a variant of.
+    func testImportingAFolderFromInsideTheDestinationIsRefused() throws {
+        let destination = try commandCenter("command_center", marker: "app-db")
+        let source = try commandCenter("command_center/old", marker: "old-db")
+        XCTAssertThrowsError(try DataImporter().importCommandCenter(from: source, to: destination, now: now)) {
+            XCTAssertEqual($0 as? DataImportError, .sameFolder)
+        }
+        XCTAssertEqual(try String(contentsOf: destination.appendingPathComponent("circuit_mcp.sqlite3")), "app-db")
+    }
+
+    /// A copy that fails partway must leave the student looking at their own data, not at an
+    /// empty app and a folder named after a timestamp that no error mentions. The partial copy
+    /// holds only what this call just wrote, so it goes; the moved-aside data comes back; and the
+    /// copy's own failure is what reaches the caller, because that is the reason to report.
+    func testAFailedCopyPutsTheDataBackAndLeavesNoOrphanedBackup() throws {
+        let source = try commandCenter("repo", marker: "repo-db")
+        let unreadable = source.appendingPathComponent("files/uploaded.bin")
+        try Data("an upload".utf8).write(to: unreadable)
+        try fileManager.setAttributes([.posixPermissions: 0o000], ofItemAtPath: unreadable.path)
+        defer { try? fileManager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: unreadable.path) }
+        let destination = try commandCenter("command_center", marker: "fresh-app-db")
+
+        XCTAssertThrowsError(try DataImporter().importCommandCenter(from: source, to: destination, now: now)) { error in
+            XCTAssertNil(error as? DataImportError, "the copy's own failure is the reason the user needs")
+            XCTAssertEqual((error as NSError).domain, NSCocoaErrorDomain)
+            XCTAssertEqual((error as NSError).code, NSFileWriteNoPermissionError)
+            XCTAssertEqual((error as NSError).userInfo[NSFilePathErrorKey] as? String, unreadable.path,
+                           "the error names the file the copy tripped on, not a rollback step")
+        }
+        XCTAssertEqual(try String(contentsOf: destination.appendingPathComponent("circuit_mcp.sqlite3")), "fresh-app-db")
+        XCTAssertTrue(fileManager.fileExists(atPath: destination.appendingPathComponent("files").path))
+        let leftovers = try fileManager.contentsOfDirectory(atPath: root.path)
+            .filter { $0.hasPrefix("command_center.before-import-") }
+        XCTAssertEqual(leftovers, [], "the data is back at the destination, so no backup may be left behind")
+        XCTAssertEqual(try String(contentsOf: source.appendingPathComponent("circuit_mcp.sqlite3")), "repo-db")
+    }
 }

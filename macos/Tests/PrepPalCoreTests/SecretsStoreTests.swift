@@ -45,4 +45,10 @@ final class SecretsStoreTests: XCTestCase {
         XCTAssertNil(try other.read(SecretsStore.apiKeyAccount))
         XCTAssertEqual(try other.serverSecrets(), [:])
     }
+
+    /// Every other test here injects its own service name, so nothing else would catch a typo in
+    /// the default -- and a typo writes the key to a service the running app never reads.
+    func testTheDefaultServiceIsTheAppsBundleIdentifier() {
+        XCTAssertEqual(SecretsStore().service, "io.github.jacobtdang.preppal")
+    }
 }

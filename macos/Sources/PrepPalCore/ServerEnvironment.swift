@@ -8,10 +8,18 @@ public enum ServerEnvironment {
          "CIRCUIT_MCP_WORKSPACE_CONFIG": locations.workspaceConfig.path]
     }
 
+    /// Every folder the server reads or writes and nothing secret: the whole environment an MCP
+    /// client started from the generated config needs. The app's own server adds the process
+    /// settings and the keys on top of it. A client given any less answers for the same install
+    /// with bundle-internal paths the app never uses.
+    static func clientVariables(locations: AppLocations) -> [String: String] {
+        dataVariables(locations: locations)
+            .merging(writableFolderVariables(locations: locations)) { existing, _ in existing }
+    }
+
     public static func variables(locations: AppLocations, secrets: [String: String],
                                  home: String = NSHomeDirectory()) -> [String: String] {
-        var variables = dataVariables(locations: locations)
-        variables.merge(ocrVariables(locations: locations)) { existing, _ in existing }
+        var variables = clientVariables(locations: locations)
         variables["HOME"] = home
         variables["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
         variables["LANG"] = "en_US.UTF-8"
@@ -20,19 +28,24 @@ public enum ServerEnvironment {
         return variables
     }
 
-    /// Where sub-project 5 will install the OCR environment and model. Neither path exists yet,
-    /// and this task does not create them: OCR stays unavailable until that sub-project lands.
+    /// Where sub-projects 2-5 will install the runtime tools and the OCR environment and model.
+    /// None of these paths exists yet, and this task does not create them: both features stay
+    /// unavailable until those sub-projects land.
     ///
-    /// Leaving the two variables unset would not leave it *honestly* unavailable. Unset,
-    /// `paths.ocr_python()` and `paths.ocr_model()` fall back to `REPO_ROOT`, which inside the
-    /// bundle resolves to `Resources/python/lib/python3.12` -- read-only paths no installer can
-    /// ever fill, reported by `ocr_status` as the files the user should go and create. Naming the
-    /// writable folder instead keeps that report true: `ocr_status` answers `ok: false` naming
-    /// these paths, and a transcription call comes back reporting the same reason rather than
-    /// failing somewhere deeper.
-    private static func ocrVariables(locations: AppLocations) -> [String: String] {
+    /// Leaving the variables unset would not leave them *honestly* unavailable. Unset,
+    /// `paths.ocr_python()`, `paths.ocr_model()` and `paths.runtime_dir()` fall back to
+    /// `REPO_ROOT`, which inside the bundle resolves to `Resources/python/lib/python3.12` --
+    /// read-only paths no installer can ever fill, reported by `ocr_status` as the files the user
+    /// should go and create. The runtime folder is worse than a false report: `ipad_capture`
+    /// *writes* `RUNTIME/ipad`, so unset it aims a write at the read-only bundle. Naming the
+    /// writable folder instead keeps the report true: the status tools answer `ok: false` naming
+    /// these paths, and a call comes back reporting the same reason rather than failing somewhere
+    /// deeper.
+    private static func writableFolderVariables(locations: AppLocations) -> [String: String] {
         let ocr = locations.supportDirectory.appendingPathComponent("ocr", isDirectory: true)
         return ["CIRCUIT_MCP_OCR_PYTHON": ocr.appendingPathComponent("venv/bin/python").path,
-                "CIRCUIT_MCP_OCR_MODEL": ocr.appendingPathComponent("models/unimernet_small").path]
+                "CIRCUIT_MCP_OCR_MODEL": ocr.appendingPathComponent("models/unimernet_small").path,
+                "CIRCUIT_MCP_RUNTIME_DIR": locations.supportDirectory
+                    .appendingPathComponent("runtime", isDirectory: true).path]
     }
 }

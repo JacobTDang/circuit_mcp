@@ -129,7 +129,7 @@ from a checkout does not change.
 |---|---|---|---|
 | Data folder | `CIRCUIT_MCP_DATA_DIR` (exists) | `.local/command_center` | `Application Support/PrepPal/command_center` |
 | Showman data | `CIRCUIT_MCP_SHOWMAN_DATA_DIR` (new) | `.local/showman` | `Application Support/PrepPal/showman` |
-| Runtime tools | `CIRCUIT_MCP_RUNTIME_DIR` (new) | `.local/runtime` | `Resources/runtime` (sub-projects 2–4) |
+| Runtime tools | `CIRCUIT_MCP_RUNTIME_DIR` (new) | `.local/runtime` | `Application Support/PrepPal/runtime` (sub-projects 2–4 install here; `ipad_capture` writes under it, so it cannot be in the read-only bundle) |
 | Workspace config | `CIRCUIT_MCP_WORKSPACE_CONFIG` (exists) | `.local/workspace.json` | `Application Support/PrepPal/workspace.json` |
 | OCR Python | `CIRCUIT_MCP_OCR_PYTHON` (exists) | `.venv-ocr.nosync/bin/python` | set by sub-project 5 |
 | OCR model | `CIRCUIT_MCP_OCR_MODEL` (exists) | `models/unimernet_small` | set by sub-project 5 |
@@ -237,14 +237,22 @@ location:
     "circuit": {
       "command": "/Applications/Andrew's PrepPal.app/Contents/Resources/python/bin/python3",
       "args": ["-m", "circuit_mcp.server"],
-      "env": { "CIRCUIT_MCP_DATA_DIR": "/Users/<user>/Library/Application Support/PrepPal/command_center" }
+      "env": {
+        "CIRCUIT_MCP_DATA_DIR": "/Users/<user>/Library/Application Support/PrepPal/command_center",
+        "CIRCUIT_MCP_SHOWMAN_DATA_DIR": "/Users/<user>/Library/Application Support/PrepPal/showman",
+        "CIRCUIT_MCP_WORKSPACE_CONFIG": "/Users/<user>/Library/Application Support/PrepPal/workspace.json",
+        "CIRCUIT_MCP_RUNTIME_DIR": "/Users/<user>/Library/Application Support/PrepPal/runtime",
+        "CIRCUIT_MCP_OCR_PYTHON": "/Users/<user>/Library/Application Support/PrepPal/ocr/venv/bin/python",
+        "CIRCUIT_MCP_OCR_MODEL": "/Users/<user>/Library/Application Support/PrepPal/ocr/models/unimernet_small"
+      }
     }
   }
 }
 ```
 
 The path changes if the app moves, so the command is always generated, never
-stored.
+stored. The client gets the same folders the app's own server runs with, minus
+the secrets, so a server started from this config reports what the app reports.
 
 ## Build and packaging
 

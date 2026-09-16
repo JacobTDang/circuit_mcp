@@ -43,4 +43,12 @@ final class ServerEnvironmentTests: XCTestCase {
             XCTAssertFalse(value.trimmingCharacters(in: .whitespaces).isEmpty, "\(name) is blank")
         }
     }
+
+    /// Unset, `paths.runtime_dir()` falls back to `REPO_ROOT/.local/runtime`, which inside the
+    /// bundle is under `Resources/python/lib/python3.12`. `ipad_capture` *writes* `RUNTIME/ipad`,
+    /// so leaving it unset aims a write at a read-only folder instead of reporting a reason.
+    func testTheRuntimeFolderIsWritableAndNotInsideTheBundle() {
+        let variables = ServerEnvironment.variables(locations: locations, secrets: [:], home: "/Users/someone")
+        XCTAssertEqual(variables["CIRCUIT_MCP_RUNTIME_DIR"], "/tmp/pp/Application Support/PrepPal/runtime")
+    }
 }
