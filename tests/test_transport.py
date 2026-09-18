@@ -55,6 +55,7 @@ async def _exercise_server(data_dir: Path) -> None:
                 "capture_ipad_screen",
                 "ocr_status",
                 "transcribe_image",
+                "transcribe_page",
                 "transcribe_workspace",
                 "configure_workspace",
                 "workspace_configuration",
