@@ -1,0 +1,98 @@
+"""Finding handwritten expressions on a page, on synthetic pages with known layout."""
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from circuit_mcp.page_segment import PAD, expression_boxes
+
+
+def page(height=300, width=400):
+    return np.full((height, width), 255, np.uint8)
+
+
+def ink(image, x0, y0, x1, y1):
+    image[y0:y1, x0:x1] = 0
+
+
+def contains(box, x0, y0, x1, y1):
+    bx0, by0, bx1, by1 = box
+    return bx0 <= x0 and by0 <= y0 and bx1 >= x1 and by1 >= y1
+
+
+def test_a_blank_page_has_no_expressions():
+    assert expression_boxes(page()) == []
+
+
+def test_two_separate_lines_are_two_boxes_top_first():
+    image = page()
+    ink(image, 50, 40, 150, 70)
+    ink(image, 60, 130, 200, 160)
+    boxes = expression_boxes(image)
+    assert len(boxes) == 2
+    assert contains(boxes[0], 50, 40, 150, 70)
+    assert contains(boxes[1], 60, 130, 200, 160)
+    assert boxes[0] == (50 - PAD, 40 - PAD, 150 + PAD, 70 + PAD)
+
+
+def test_a_fraction_stays_one_expression():
+    image = page()
+    ink(image, 100, 50, 200, 70)    # numerator
+    ink(image, 90, 75, 210, 78)     # fraction bar
+    ink(image, 100, 82, 200, 102)   # denominator
+    boxes = expression_boxes(image)
+    assert len(boxes) == 1
+    assert contains(boxes[0], 90, 50, 210, 102)
+
+
+def test_gaps_between_words_do_not_split_a_line():
+    image = page()
+    for x0, x1 in ((20, 80), (100, 160), (185, 260)):
+        ink(image, x0, 40, x1, 70)
+    assert len(expression_boxes(image)) == 1
+
+
+def test_a_wide_gap_splits_a_side_column_left_first():
+    image = page()
+    ink(image, 20, 40, 120, 70)
+    ink(image, 300, 40, 380, 70)
+    boxes = expression_boxes(image)
+    assert len(boxes) == 2
+    assert contains(boxes[0], 20, 40, 120, 70)
+    assert contains(boxes[1], 300, 40, 380, 70)
+
+
+def test_reading_order_is_top_to_bottom_before_left_to_right():
+    image = page()
+    ink(image, 300, 40, 380, 70)    # upper line, right side
+    ink(image, 20, 130, 120, 160)   # lower line, left side
+    boxes = expression_boxes(image)
+    assert boxes[0][1] < boxes[1][1]
+
+
+def test_a_speck_is_not_writing():
+    image = page()
+    ink(image, 50, 40, 150, 70)
+    ink(image, 300, 250, 302, 252)
+    assert len(expression_boxes(image)) == 1
+
+
+def test_a_dark_page_with_light_ink_segments_the_same():
+    image = page()
+    ink(image, 50, 40, 150, 70)
+    ink(image, 60, 130, 200, 160)
+    assert expression_boxes(255 - image) == expression_boxes(image)
+
+
+def test_boxes_are_clipped_to_the_page():
+    image = page()
+    ink(image, 0, 0, 50, 20)
+    (box,) = expression_boxes(image)
+    assert box[0] == 0 and box[1] == 0
+    assert box[2] <= image.shape[1] and box[3] <= image.shape[0]
+
+
+@pytest.mark.parametrize("bad", [np.zeros((10, 10, 3), np.uint8), np.zeros((0, 5), np.uint8)])
+def test_only_a_non_empty_grayscale_image_is_accepted(bad):
+    with pytest.raises(ValueError, match="2-D grayscale"):
+        expression_boxes(bad)
