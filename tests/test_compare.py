@@ -131,6 +131,20 @@ def test_an_ac_output_on_the_rail_is_clipping(reading):
     assert vo["hint"]["kind"] == "rail"
 
 
+def test_a_low_ac_output_on_a_single_supply_is_not_called_clipping():
+    build = copy.deepcopy(lab1.EXP1_NONINVERTING)
+    build["supply"]["vminus"] = 0         # swing 0.5..13.5 V: the low limit is above zero
+    vo = entry(compare_readings(build, {"CH2 vo": 0.5}), "CH2 vo")
+    assert vo["within_tolerance"] is False
+    assert vo.get("hint", {}).get("kind") != "rail"
+
+
+def test_a_low_ac_output_on_a_split_supply_is_not_called_clipping():
+    vo = entry(compare_readings(lab1.EXP1_NONINVERTING, {"CH2 vo": 2.0}), "CH2 vo")
+    assert vo["within_tolerance"] is False
+    assert vo.get("hint", {}).get("kind") != "rail"
+
+
 def test_a_dc_probe_reading_its_source_setting_is_flagged_as_a_source_reading():
     va = entry(compare_readings(lab1.EXP4A_DIVIDER_LED, {"VA": 15.0}), "VA")
     assert va["hint"]["kind"] == "source"
