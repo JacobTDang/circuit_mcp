@@ -8,6 +8,8 @@ import control
 import numpy as np
 import sympy as sp
 
+SUMMING_DAC_TOLERANCE_PCT = 5.0
+
 
 class MetricsError(ValueError):
     """Inputs do not define a meaningful bounded course metric."""
@@ -313,7 +315,11 @@ def relaxation_oscillator(rail_v: float, threshold_v: float, rc_s: float) -> dic
 def dac_output(
     codes: list[int], bits: int, v_min: float = 0.0, v_max: float = 1.0
 ) -> dict[str, Any]:
-    """Ideal straight-binary DAC output using a span/2**bits LSB."""
+    """Ideal straight-binary DAC output over a span: v_min + code * (v_max - v_min) / 2**bits.
+
+    For an op-amp summing-amplifier DAC built from resistors, use
+    ``summing_dac_output``: it is inverting and weights each bit by Rf/Ri.
+    """
     if not 1 <= bits <= 24:
         raise MetricsError("bits must be between 1 and 24")
     if not math.isfinite(v_min) or not math.isfinite(v_max) or v_max <= v_min:
@@ -329,6 +335,60 @@ def dac_output(
         "codes": codes,
         "binary_codes": [format(code, f"0{bits}b") for code in codes],
         "outputs_v": [v_min + code * lsb for code in codes],
+    }
+
+
+def summing_dac_output(
+    codes: list[int],
+    bits: int,
+    r_feedback: float,
+    r_bits: list[float],
+    v_logic: float = 1.0,
+    tolerance_pct: float = SUMMING_DAC_TOLERANCE_PCT,
+) -> dict[str, Any]:
+    """An inverting op-amp summing DAC from its actual resistors, MSB first.
+
+    ``vo = -v_logic * sum(Rf / R_i * b_i)``. The ideal is the same converter
+    with exact binary weights, ``-v_logic * code``, so each output reports how
+    far the real resistors pull it from ideal. Resistances may be in any one
+    unit: only their ratios matter.
+    """
+    if not 1 <= bits <= 16:
+        raise MetricsError("bits must be between 1 and 16")
+    if len(r_bits) != bits:
+        raise MetricsError(f"r_bits needs one resistor per bit, most significant first: expected {bits}, got {len(r_bits)}")
+    if any(not math.isfinite(r) or r <= 0 for r in (r_feedback, *r_bits)):
+        raise MetricsError("r_feedback and every r_bits value must be finite and positive")
+    if not math.isfinite(v_logic) or v_logic <= 0:
+        raise MetricsError("v_logic must be finite and positive")
+    if not math.isfinite(tolerance_pct) or tolerance_pct <= 0:
+        raise MetricsError("tolerance_pct must be finite and positive")
+    levels = 1 << bits
+    if not codes or len(codes) > levels or any(type(code) is not int or not 0 <= code < levels for code in codes):
+        raise MetricsError(f"codes must list integers from 0 through {levels - 1}")
+    weights = [r_feedback / r for r in r_bits]
+    outputs = []
+    for code in codes:
+        on = [(code >> (bits - 1 - i)) & 1 for i in range(bits)]
+        output = -v_logic * sum(w * b for w, b in zip(weights, on)) + 0.0   # + 0.0 turns -0.0 into 0.0
+        ideal = -v_logic * code + 0.0
+        if code == 0:
+            error_pct, within = None, abs(output) <= 1e-12
+        else:
+            error_pct = (output - ideal) / abs(ideal) * 100
+            within = abs(error_pct) <= tolerance_pct
+            error_pct = round(error_pct, 3)
+        outputs.append({"code": code, "binary": format(code, f"0{bits}b"), "output_v": round(output, 6),
+                        "ideal_v": ideal, "error_pct": error_pct, "within_tolerance": within})
+    return {
+        "ok": True,
+        "bits": bits,
+        "v_logic": v_logic,
+        "tolerance_pct": tolerance_pct,
+        "weights": [round(w, 6) for w in weights],
+        "ideal_weights": [1 << (bits - 1 - i) for i in range(bits)],
+        "outputs": outputs,
+        "all_within_tolerance": all(row["within_tolerance"] for row in outputs),
     }
 
 
