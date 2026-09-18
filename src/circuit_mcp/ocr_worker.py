@@ -1,8 +1,9 @@
 """Persistent UniMERNet inference worker.
 
-This file intentionally uses only the standard library and ``page_segment``
-(numpy) until ``_Engine.load``. It is executed by the isolated OCR virtual
-environment, which does not contain the circuit server's dependencies.
+This file intentionally imports only the standard library and ``page_segment``
+(numpy) at module level; PIL, PyTorch and UniMERNet are imported where they are
+used. It is executed by the isolated OCR virtual environment, which does not
+contain the circuit server's dependencies.
 Requests and responses are framed pickles on stdin/stdout; both pipe ends are
 private children of the local MCP process.
 """
@@ -194,11 +195,17 @@ class _Engine:
         }
 
     def transcribe_page(self, png: bytes) -> dict:
-        """Every expression on a page, in reading order, each with its box."""
+        """Every line of working on a page as its own box, in reading order.
+
+        Bands top to bottom; within a band, columns left to right; within a
+        column, lines top to bottom, so a side calculation stays together. The
+        page is decoded and size-checked before the model loads, so a refused
+        page never costs a model load.
+        """
         import numpy as np
 
-        self.load()
         image = self._decode(png, max_pixels=MAX_PAGE_PIXELS)
+        self.load()
         width, height = image.size
         boxes = page_segment.expression_boxes(np.asarray(image.convert("L")))
         expressions, seconds = [], 0.0

@@ -7,9 +7,11 @@ own dependency, so these tests skip where it is not installed.
 from __future__ import annotations
 
 import io
+import pickle
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -85,6 +87,43 @@ def test_the_pixel_limit_is_checked_from_the_header_before_any_pixel_is_decoded(
     monkeypatch.setattr(ocr_worker, "MAX_PAGE_PIXELS", 100)
     with pytest.raises(ValueError, match=r"30x20 .*100"):
         engine.transcribe_page(header_only)
+
+
+def test_a_refused_page_does_not_load_the_model(engine, monkeypatch):
+    def load():
+        pytest.fail("the model was loaded for a page that is refused")
+
+    monkeypatch.setattr(engine, "load", load)
+    monkeypatch.setattr(ocr_worker, "MAX_PAGE_PIXELS", 100)
+    with pytest.raises(ValueError, match=r"30x20 .*100"):
+        engine.transcribe_page(png(np.full((20, 30), 255, np.uint8)))
+    with pytest.raises(ValueError, match="Could not decode"):
+        engine.transcribe_page(b"\x89PNG\r\n\x1a\nnot really")
+
+
+def test_the_worker_loop_dispatches_a_page_request(monkeypatch):
+    class StubEngine:
+        def __init__(self, model_dir, device):
+            pass
+
+        def transcribe_page(self, png):
+            return {"ok": True, "expressions": [], "page": png}
+
+    request = io.BytesIO()
+    ocr_worker._write_frame(request, {"action": "transcribe_page", "png": b"page"})
+    request.seek(0)
+    response = io.BytesIO()
+    monkeypatch.setattr(ocr_worker, "_Engine", StubEngine)
+    monkeypatch.setattr(ocr_worker.sys, "stdin", SimpleNamespace(buffer=request))
+    monkeypatch.setattr(ocr_worker.sys, "stdout", SimpleNamespace(buffer=response))
+    ocr_worker.serve("model", "cpu")
+    framed = response.getvalue()
+    header = ocr_worker.HEADER.size
+    (size,) = ocr_worker.HEADER.unpack(framed[:header])
+    assert len(framed) == header + size
+    assert pickle.loads(framed[header:]) == {
+        "ok": True, "expressions": [], "page": b"page"
+    }
 
 
 def test_an_undecodable_page_is_a_value_error(engine):
