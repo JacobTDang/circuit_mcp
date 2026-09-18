@@ -77,6 +77,16 @@ def test_a_page_over_the_pixel_limit_is_refused_before_segmentation(engine, monk
     assert engine.seen == []
 
 
+def test_the_pixel_limit_is_checked_from_the_header_before_any_pixel_is_decoded(engine, monkeypatch):
+    page = png(np.full((20, 30), 255, np.uint8))
+    header_only = page[: page.index(b"IDAT") + 4]   # the pixel data is cut off
+    with pytest.raises(ValueError, match="Could not decode"):
+        engine.transcribe_page(header_only)
+    monkeypatch.setattr(ocr_worker, "MAX_PAGE_PIXELS", 100)
+    with pytest.raises(ValueError, match=r"30x20 .*100"):
+        engine.transcribe_page(header_only)
+
+
 def test_an_undecodable_page_is_a_value_error(engine):
     with pytest.raises(ValueError, match="Could not decode"):
         engine.transcribe_page(b"\x89PNG\r\n\x1a\nnot really")

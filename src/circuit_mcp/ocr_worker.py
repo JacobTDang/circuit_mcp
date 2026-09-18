@@ -26,7 +26,8 @@ except ImportError:              # run as a script by OCRWorker: this file's dir
 
 MAX_PAGE_EXPRESSIONS = 60
 # A small PNG can decode to a huge image, which the persistent worker would hold
-# several times over (RGB, grayscale, ink mask). A 300 dpi letter page is ~8.4 M pixels.
+# several times over (RGB, grayscale, ink mask), so a page's size is checked from its
+# header before any pixel is decoded. A 300 dpi letter page is ~8.4 M pixels.
 MAX_PAGE_PIXELS = 40_000_000
 
 HEADER = struct.Struct("!Q")
@@ -145,11 +146,21 @@ class _Engine:
             "pid": os.getpid(),
         }
 
-    def _decode(self, png: bytes):
+    def _decode(self, png: bytes, max_pixels: int | None = None):
         from PIL import Image
 
         try:
-            image = Image.open(io.BytesIO(png)).convert("RGB")
+            image = Image.open(io.BytesIO(png))
+        except Exception as exc:
+            raise ValueError(f"Could not decode input image: {exc}") from exc
+        width, height = image.size   # read from the header: no pixel is decoded yet
+        if max_pixels is not None and width * height > max_pixels:
+            raise ValueError(
+                f"Image is {width}x{height} ({width * height} pixels); "
+                f"the limit is {max_pixels} pixels."
+            )
+        try:
+            image = image.convert("RGB")
             image.load()
         except Exception as exc:
             raise ValueError(f"Could not decode input image: {exc}") from exc
@@ -187,13 +198,8 @@ class _Engine:
         import numpy as np
 
         self.load()
-        image = self._decode(png)
+        image = self._decode(png, max_pixels=MAX_PAGE_PIXELS)
         width, height = image.size
-        if width * height > MAX_PAGE_PIXELS:
-            raise ValueError(
-                f"Page is {width}x{height} ({width * height} pixels); "
-                f"the limit is {MAX_PAGE_PIXELS} pixels."
-            )
         boxes = page_segment.expression_boxes(np.asarray(image.convert("L")))
         expressions, seconds = [], 0.0
         for index, box in enumerate(boxes[:MAX_PAGE_EXPRESSIONS]):
