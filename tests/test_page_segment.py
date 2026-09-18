@@ -98,7 +98,7 @@ def test_a_wide_gap_splits_a_side_column_left_first():
     assert contains(boxes[1], 300, 40, 380, 70)
 
 
-def test_reading_order_is_top_to_bottom_before_left_to_right():
+def test_reading_order_is_band_then_column_then_line():
     image = page()
     ink(image, 300, 40, 380, 70)    # upper line, right side
     ink(image, 20, 130, 120, 160)   # lower line, left side
@@ -111,6 +111,38 @@ def test_a_speck_is_not_writing():
     ink(image, 50, 40, 150, 70)
     ink(image, 300, 250, 302, 252)
     assert len(expression_boxes(image)) == 1
+
+
+def test_specks_in_blank_rows_do_not_shrink_the_line_height():
+    image = page()
+    ink(image, 100, 50, 200, 70)    # numerator
+    ink(image, 90, 75, 210, 78)     # fraction bar
+    ink(image, 100, 82, 200, 102)   # denominator
+    for y in range(150, 270, 20):   # six 2x2 specks, each in its own blank rows
+        ink(image, 300, y, 302, y + 2)
+    boxes = expression_boxes(image)
+    assert len(boxes) == 1
+    assert contains(boxes[0], 90, 50, 210, 102)
+
+
+def test_a_page_of_only_specks_has_no_expressions():
+    image = page()
+    for y in range(50, 250, 40):
+        ink(image, 100, y, 102, y + 2)
+    assert expression_boxes(image) == []
+
+
+def test_a_speck_inside_a_bridged_band_is_dropped():
+    image = page()
+    ink(image, 20, 40, 120, 70)     # main line 1
+    ink(image, 40, 110, 100, 140)   # main line 2
+    ink(image, 300, 55, 380, 125)   # side block spanning the gap between them
+    ink(image, 20, 180, 150, 210)
+    ink(image, 20, 240, 150, 270)
+    clean = expression_boxes(image)
+    ink(image, 60, 88, 62, 90)      # speck in the main column, between its two lines
+    assert expression_boxes(image) == clean
+    assert len(clean) == 5
 
 
 def test_a_dark_page_with_light_ink_segments_the_same():
@@ -126,6 +158,12 @@ def test_boxes_are_clipped_to_the_page():
     (box,) = expression_boxes(image)
     assert box[0] == 0 and box[1] == 0
     assert box[2] <= image.shape[1] and box[3] <= image.shape[0]
+
+
+def test_ink_at_the_bottom_right_corner_is_clipped_to_the_page():
+    image = page()
+    ink(image, 300, 270, 400, 300)
+    assert expression_boxes(image) == [(300 - PAD, 270 - PAD, image.shape[1], image.shape[0])]
 
 
 @pytest.mark.parametrize("bad", [np.zeros((10, 10, 3), np.uint8), np.zeros((0, 5), np.uint8)])
