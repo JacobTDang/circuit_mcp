@@ -25,6 +25,9 @@ except ImportError:              # run as a script by OCRWorker: this file's dir
     import page_segment
 
 MAX_PAGE_EXPRESSIONS = 60
+# A small PNG can decode to a huge image, which the persistent worker would hold
+# several times over (RGB, grayscale, ink mask). A 300 dpi letter page is ~8.4 M pixels.
+MAX_PAGE_PIXELS = 40_000_000
 
 HEADER = struct.Struct("!Q")
 
@@ -186,6 +189,11 @@ class _Engine:
         self.load()
         image = self._decode(png)
         width, height = image.size
+        if width * height > MAX_PAGE_PIXELS:
+            raise ValueError(
+                f"Page is {width}x{height} ({width * height} pixels); "
+                f"the limit is {MAX_PAGE_PIXELS} pixels."
+            )
         boxes = page_segment.expression_boxes(np.asarray(image.convert("L")))
         expressions, seconds = [], 0.0
         for index, box in enumerate(boxes[:MAX_PAGE_EXPRESSIONS]):

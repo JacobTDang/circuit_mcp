@@ -163,7 +163,7 @@ class OCRWorker:
             self._discard()
 
     def call(self, request: dict[str, Any], timeout: float = OCR_TIMEOUT_SECONDS) -> dict:
-        if request.get("action") == "transcribe":
+        if request.get("action") in ("transcribe", "transcribe_page"):
             png = request.get("png")
             if not isinstance(png, bytes) or not png.startswith(b"\x89PNG\r\n\x1a\n"):
                 return {"ok": False, "error": "bad_image", "message": "Input is not PNG data."}

@@ -67,6 +67,16 @@ def test_page_transcription_caps_the_expression_count(engine):
     assert result["truncated"] is True
 
 
+def test_a_page_over_the_pixel_limit_is_refused_before_segmentation(engine, monkeypatch):
+    segmented = []
+    monkeypatch.setattr(ocr_worker.page_segment, "expression_boxes", lambda gray: segmented.append(gray) or [])
+    monkeypatch.setattr(ocr_worker, "MAX_PAGE_PIXELS", 100)
+    with pytest.raises(ValueError, match=r"30x20 .*100"):
+        engine.transcribe_page(png(np.full((20, 30), 255, np.uint8)))
+    assert segmented == []
+    assert engine.seen == []
+
+
 def test_an_undecodable_page_is_a_value_error(engine):
     with pytest.raises(ValueError, match="Could not decode"):
         engine.transcribe_page(b"\x89PNG\r\n\x1a\nnot really")
