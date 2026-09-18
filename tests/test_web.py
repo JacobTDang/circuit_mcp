@@ -29,6 +29,10 @@ def test_dashboard_and_real_tool_execution(tmp_path, monkeypatch):
         assert result["equivalent"] is True
 
 
+def test_the_bench_check_tools_are_exposed_in_the_command_center():
+    assert {"compare_readings", "summing_dac_output"} <= set(web.TOOLS)
+
+
 def test_dashboard_starts_as_a_manual_blank_spatial_workspace(tmp_path, monkeypatch):
     with client(tmp_path, monkeypatch) as browser:
         page = browser.get("/")
