@@ -16,6 +16,7 @@ from circuit_mcp.course_metrics import (
     rectifier_metrics,
     relaxation_oscillator,
     spectrum_metrics,
+    summing_dac_output,
     transfer_metrics,
     quantize,
     transimpedance,
@@ -139,3 +140,53 @@ def test_remaining_ee230_closed_form_helpers_match_independent_answers():
 def test_closed_form_helpers_reject_unphysical_inputs(function, args):
     with pytest.raises(MetricsError):
         function(*args)
+
+
+def test_summing_dac_with_nominal_resistors_is_the_ideal_binary_ladder():
+    dac = summing_dac_output(list(range(8)), 3, 10e3, [2.5e3, 5e3, 10e3])
+    assert [row["output_v"] for row in dac["outputs"]] == pytest.approx([0, -1, -2, -3, -4, -5, -6, -7])
+    assert [row["ideal_v"] for row in dac["outputs"]] == [0, -1, -2, -3, -4, -5, -6, -7]
+    assert [row["binary"] for row in dac["outputs"]][5] == "101"
+    assert dac["weights"] == pytest.approx([4, 2, 1])
+    assert dac["ideal_weights"] == [4, 2, 1]
+    assert dac["all_within_tolerance"] is True
+
+
+def test_summing_dac_with_lab1_measured_resistors():
+    # Exp 7 as built: Rf 9.78k, RD2 2.39k, RD1 4.87k, RD0 9.79k. Units cancel, so kilohms are fine.
+    row = summing_dac_output([5], 3, 9.78, [2.39, 4.87, 9.79])["outputs"][0]
+    assert row["output_v"] == pytest.approx(-5.091, abs=0.001)
+    assert row["error_pct"] == pytest.approx(-1.82, abs=0.01)
+    assert row["within_tolerance"] is True
+
+
+def test_summing_dac_flags_a_code_outside_tolerance():
+    dac = summing_dac_output([4], 3, 10e3, [2.0e3, 5e3, 10e3])   # MSB resistor 20 % low
+    row = dac["outputs"][0]
+    assert row["output_v"] == pytest.approx(-5.0)
+    assert row["error_pct"] == pytest.approx(-25.0)
+    assert row["within_tolerance"] is False
+    assert dac["all_within_tolerance"] is False
+
+
+def test_summing_dac_code_zero_is_positive_zero_with_no_percent_error():
+    row = summing_dac_output([0], 3, 10e3, [2.5e3, 5e3, 10e3])["outputs"][0]
+    assert row["output_v"] == 0.0
+    assert str(row["output_v"]) == "0.0"
+    assert row["error_pct"] is None
+    assert row["within_tolerance"] is True
+
+
+@pytest.mark.parametrize(("args", "kwargs"), [
+    (([8], 3, 10e3, [2.5e3, 5e3, 10e3]), {}),            # code out of range
+    (([1], 3, 10e3, [2.5e3, 5e3]), {}),                  # one resistor short
+    (([1], 3, 0.0, [2.5e3, 5e3, 10e3]), {}),             # zero feedback resistor
+    (([1], 3, 10e3, [2.5e3, -5e3, 10e3]), {}),           # negative resistor
+    (([1], 0, 10e3, []), {}),                            # no bits
+    (([], 3, 10e3, [2.5e3, 5e3, 10e3]), {}),             # no codes
+    (([1], 3, 10e3, [2.5e3, 5e3, 10e3]), {"v_logic": 0.0}),
+    (([1], 3, 10e3, [2.5e3, 5e3, 10e3]), {"tolerance_pct": 0.0}),
+])
+def test_summing_dac_rejects_unphysical_inputs(args, kwargs):
+    with pytest.raises(MetricsError):
+        summing_dac_output(*args, **kwargs)

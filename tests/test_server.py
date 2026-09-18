@@ -44,6 +44,7 @@ from circuit_mcp.server import (
     characterize_transfer,
     derive,
     simulate_spice,
+    summing_dac_output,
 )
 from circuit_mcp.symbols import SymbolConflictError
 from tests.fixtures import lab1
@@ -122,6 +123,7 @@ TOOL_NAMES = {
     "instrument_status",
     "instrument_query",
     "compare_readings",
+    "summing_dac_output",
 }
 
 
@@ -1011,3 +1013,15 @@ def test_compare_readings_tool_names_an_unknown_probe_as_a_compare_error():
     assert result["ok"] is False
     assert result["error"] == "compare_error"
     assert "CH9" in result["message"]
+
+
+def test_summing_dac_output_tool_reports_each_code():
+    result = summing_dac_output([5], 3, 9.78, [2.39, 4.87, 9.79])
+    assert result["ok"] is True
+    assert result["outputs"][0]["output_v"] == pytest.approx(-5.091, abs=0.001)
+
+
+def test_summing_dac_output_tool_names_bad_input_as_a_metrics_error():
+    result = summing_dac_output([1], 3, 10e3, [2.5e3, 5e3])
+    assert result["ok"] is False
+    assert result["error"] == "metrics_error"
