@@ -12,6 +12,9 @@ within a column, so a side calculation stays together.
 
 Known limitation: a hand-drawn frame around an answer joins that answer to the
 line above it, because the frame's edges read as ink that bridges the gap.
+Coloured ink is not filtered out to prevent this: students often write in blue
+or other coloured ink, so treating coloured pixels as background would erase
+whole pages.
 
 Only numpy and the standard library, and no relative imports: the OCR worker is
 run as a script and imports this module by file name, outside the package.
@@ -20,8 +23,11 @@ from __future__ import annotations
 
 import numpy as np
 
-MERGE_FRACTION = 0.3            # a vertical gap under this share of the median line height joins lines;
-                                # handwritten fraction gaps measure 0.05-0.23 of it, gaps between lines 0.28 up
+# A vertical gap under MERGE_FRACTION of the median line height joins lines. On four
+# real pages, gaps inside a fraction measured 0.05-0.23 of it and gaps between lines
+# 0.22-0.47, so 0.3 separates most lines while keeping fractions whole; the ranges
+# overlap, so a tightly stacked pair of lines can still merge.
+MERGE_FRACTION = 0.3
 SPLIT_LINE_HEIGHTS = 3.0        # a horizontal gap this many median line heights wide splits columns
 SPLIT_MIN_WIDTH_FRACTION = 0.08  # ...and never narrower than this share of the page width
 MIN_INK_PIXELS = 12             # fewer ink pixels than this is a speck, not writing
@@ -68,9 +74,11 @@ def expression_boxes(gray: np.ndarray) -> list[Box]:
     ink = ink_mask(gray)
     height, width = ink.shape
     rows = _runs(ink.any(axis=1))
-    if not rows:
+    # Specks in blank rows are dropped as boxes below; they must not drag the line height down.
+    heights = [end - start for start, end in rows if int(ink[start:end].sum()) >= MIN_INK_PIXELS]
+    if not heights:
         return []
-    line_height = float(np.median([end - start for start, end in rows]))
+    line_height = float(np.median(heights))
     merge_gap = max(2, int(MERGE_FRACTION * line_height))
     split_gap = max(int(SPLIT_LINE_HEIGHTS * line_height), int(SPLIT_MIN_WIDTH_FRACTION * width), 1)
     boxes: list[Box] = []
