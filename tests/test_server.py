@@ -16,6 +16,7 @@ fail *quietly* and both produce a confident wrong verdict on correct work:
   finishes.
 """
 import asyncio
+import base64
 import json
 import os
 import signal
@@ -37,6 +38,7 @@ from circuit_mcp.server import (
     configure_workspace,
     ocr_status,
     transcribe_image,
+    transcribe_page,
     transcribe_workspace,
     workspace_status,
     workspace_configuration,
@@ -94,6 +96,7 @@ TOOL_NAMES = {
     "canvas_card_list",
     "canvas_card_remove",
     "transcribe_image",
+    "transcribe_page",
     "transcribe_workspace",
     "configure_workspace",
     "workspace_configuration",
@@ -539,6 +542,30 @@ def test_transcribe_image_rejects_non_base64_without_starting_ocr_worker():
     assert result.structured_content["ok"] is False
     assert result.structured_content["error"] == "bad_image"
     assert server_module.OCR_WORKER.pid == before
+
+
+def test_transcribe_page_rejects_a_non_png_without_starting_ocr_worker():
+    before = server_module.OCR_WORKER.pid
+    result = transcribe_page(base64.b64encode(b"GIF89a").decode("ascii"))
+    assert result.structured_content["ok"] is False
+    assert result.structured_content["error"] == "bad_image"
+    assert server_module.OCR_WORKER.pid == before
+
+
+def test_transcribe_page_sends_the_page_to_the_worker_with_the_page_timeout(monkeypatch):
+    seen = {}
+
+    def call(request, timeout=None):
+        seen.update(request=request, timeout=timeout)
+        return {"ok": True, "expressions": [{"index": 0, "bbox": [0, 0, 10, 10], "latex": "x"}],
+                "expression_count": 1, "truncated": False}
+
+    monkeypatch.setattr(server_module.OCR_WORKER, "call", call)
+    page = b"\x89PNG\r\n\x1a\npage"
+    result = transcribe_page(base64.b64encode(page).decode("ascii"))
+    assert seen["request"] == {"action": "transcribe_page", "png": page}
+    assert seen["timeout"] == server_module.PAGE_OCR_TIMEOUT_SECONDS
+    assert result.structured_content["expressions"][0]["latex"] == "x"
 
 
 def test_workspace_transcription_returns_exact_frame_and_local_ocr_metadata(monkeypatch):

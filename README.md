@@ -13,7 +13,7 @@ verdicts.
 ## Status
 
 The linear-circuit MCP server is implemented and registered by [`.mcp.json`](.mcp.json).
-It currently provides forty-eight tools:
+It currently provides fifty-six tools:
 
 | Tool | Purpose |
 |---|---|
@@ -33,6 +33,7 @@ It currently provides forty-eight tools:
 | `configure_workspace` | Save an iPad screen rectangle without enabling unrelated full-display capture |
 | `ocr_status` | Report or warm the persistent UniMERNet worker and selected device |
 | `transcribe_image` | Convert one base64 PNG formula crop to local LaTeX |
+| `transcribe_page` | Convert each handwritten expression on one base64 PNG page to local LaTeX, with its box |
 | `transcribe_workspace` | Capture the configured region and return its image plus local LaTeX |
 | `simulate_spice` | Run a bounded local ngspice operating-point, DC-sweep, AC, or transient analysis |
 | `characterize_transfer` | Compute poles, zeros, explicit stability class, margins, bandwidth, step metrics, and optional unity-feedback closed-loop results |
