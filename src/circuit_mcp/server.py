@@ -66,6 +66,7 @@ from .analysis import (
 from .showman import SHOWMAN
 from .retention import sweep_if_due
 from .cards import CardError, build_card
+from .compare import CompareError, compare_readings as _compare_readings
 from .capture import CaptureError, capture_status as _capture_status
 from .capture import capture_workspace as _capture_workspace
 from .course_metrics import (
@@ -473,6 +474,7 @@ def _build_card(kind: str, title: str, content: Any) -> dict[str, Any]:
 
 _IMPLEMENTATIONS = {
     "build_card": _build_card,
+    "compare_readings": _compare_readings,
     "derive": _derive,
     "check_equivalence": _check_equivalence,
     "check_derivation": _check_derivation,
@@ -543,6 +545,7 @@ _ERROR_KINDS: tuple[tuple[type[BaseException], str], ...] = (
     (LabDataError, "lab_data_error"),
     (InstrumentError, "instrument_error"),
     (StorageError, "storage_error"),
+    (CompareError, "compare_error"),
     (CardError, "card_refused"),
 )
 
@@ -1682,6 +1685,25 @@ def canvas_card_add(
         # gets the wire list instead of 20 KB of holes it cannot act on.
         card = {**card, "payload": {**card["payload"], "svg": "(rendered on the canvas)"}}
     return {"ok": True, "card": card}
+
+
+@server.tool()
+def compare_readings(
+    build: dict[str, Any], measured: dict[str, Any], tolerance_pct: float = 5.0
+) -> dict[str, Any]:
+    """Check bench readings against what the build predicts at each probe.
+
+    ``build`` is the same description an ``expected`` card takes. ``measured``
+    maps probe labels to readings: a number is volts for a DC probe and V RMS
+    for an AC probe (the scope's AC RMS measurement); ``{"vpp": x}`` or
+    ``{"vpk": x}`` gives an AC reading in that basis instead. Each probe comes
+    back with its expected value, error and pass/fail, and measured gains are
+    checked against predicted gains. An out-of-tolerance reading carries a
+    hint naming the likeliest cause: a lost minus sign, a probe on a source
+    instead of its node, or an output sitting on a rail. An expected 0 V is
+    judged with an absolute 0.05 V band instead of a percentage.
+    """
+    return _guarded("compare_readings", build=build, measured=measured, tolerance_pct=tolerance_pct)
 
 
 @server.tool()
