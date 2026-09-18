@@ -71,6 +71,7 @@ from .capture import CaptureError, capture_status as _capture_status
 from .capture import capture_workspace as _capture_workspace
 from .course_metrics import (
     MetricsError,
+    SUMMING_DAC_TOLERANCE_PCT,
     alias_frequency as _alias_frequency,
     bjt_emitter_follower as _bjt_emitter_follower,
     converter_metrics as _converter_metrics,
@@ -80,6 +81,7 @@ from .course_metrics import (
     rectifier_metrics as _rectifier_metrics,
     relaxation_oscillator as _relaxation_oscillator,
     spectrum_metrics as _spectrum_metrics,
+    summing_dac_output as _summing_dac_output,
     transimpedance as _transimpedance,
     transfer_metrics as _transfer_metrics,
 )
@@ -489,6 +491,7 @@ _IMPLEMENTATIONS = {
     "bjt_emitter_follower": _bjt_emitter_follower,
     "relaxation_oscillator": _relaxation_oscillator,
     "dac_output": _dac_output,
+    "summing_dac_output": _summing_dac_output,
     "alias_frequency": _alias_frequency,
     "transimpedance": _transimpedance,
     "library_search": _library_search,
@@ -1339,8 +1342,37 @@ def relaxation_oscillator(rail_v: float, threshold_v: float, rc_s: float) -> dic
 def dac_output(
     codes: list[int], bits: int, v_min: float = 0.0, v_max: float = 1.0
 ) -> dict[str, Any]:
-    """Map ideal straight-binary DAC codes to output voltages."""
+    """Map ideal straight-binary DAC codes to output voltages over a span.
+
+    Output is v_min + code * (v_max - v_min) / 2**bits. For an op-amp
+    summing-amplifier DAC built from resistors (inverting, bits weighted by
+    Rf/Ri), use ``summing_dac_output`` instead.
+    """
     return _guarded("dac_output", codes=list(codes), bits=bits, v_min=v_min, v_max=v_max)
+
+
+@server.tool()
+def summing_dac_output(
+    codes: list[int],
+    bits: int,
+    r_feedback: float,
+    r_bits: list[float],
+    v_logic: float = 1.0,
+    tolerance_pct: float = SUMMING_DAC_TOLERANCE_PCT,
+) -> dict[str, Any]:
+    """Outputs of an inverting op-amp summing DAC, from its actual resistors.
+
+    ``r_bits`` lists one input resistor per bit, most significant first, in
+    the same unit as ``r_feedback``. Each code returns the output
+    ``-v_logic * sum(Rf/Ri * bit_i)``, the ideal ``-v_logic * code``, the
+    percent error and whether it sits within ``tolerance_pct`` of ideal.
+    ``error_pct`` is ``(output - ideal) / |ideal|`` in percent, so with
+    negative outputs a negative value means the output is larger in
+    magnitude than ideal: -1.82 % is 1.82 % too large. Use the measured
+    resistor values to predict what the bench should read.
+    """
+    return _guarded("summing_dac_output", codes=list(codes), bits=bits, r_feedback=r_feedback,
+                    r_bits=list(r_bits), v_logic=v_logic, tolerance_pct=tolerance_pct)
 
 
 @server.tool()

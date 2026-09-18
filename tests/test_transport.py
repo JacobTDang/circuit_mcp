@@ -96,6 +96,7 @@ async def _exercise_server(data_dir: Path) -> None:
                 "attempt_complete",
                 "problem_tag",
                 "compare_readings",
+                "summing_dac_output",
             }
 
             # Reachable without a renderer: both report honestly instead of pretending.
