@@ -100,3 +100,59 @@ def test_a_non_positive_tolerance_is_refused():
 def test_a_build_that_cannot_be_simulated_is_a_compare_error():
     with pytest.raises(CompareError, match="cannot predict"):
         compare_readings({"supply": {}}, {"vo": 1.0})
+
+
+def fed_back(build):
+    """Every probe's own predicted V RMS, as a scope's RMS measurement would read it."""
+    return {label: reading["vrms"] for label, reading in predicted(build).items()}
+
+
+def test_gains_use_the_predicted_waveform_shape_not_a_sine():
+    # Square in, triangle out: neither has a sine's sqrt(2) peak-to-RMS ratio.
+    result = compare_readings(lab1.EXP5_INTEGRATOR, fed_back(lab1.EXP5_INTEGRATOR))
+    assert result["all_within_tolerance"] is True
+    assert result["gains"][0]["within_tolerance"] is True
+
+
+def test_a_clipped_output_read_as_predicted_keeps_its_gain():
+    build = copy.deepcopy(lab1.EXP1_NONINVERTING)
+    build["sources"][0]["vrms"] = 3.0     # vi = 1.5 V RMS; 16 times that is far past the 15 V rails
+    assert predicted(build)["CH2 vo"]["clipped"] is True
+    result = compare_readings(build, fed_back(build))
+    assert result["gains"][0]["within_tolerance"] is True
+
+
+@pytest.mark.parametrize("reading", [
+    {"vpk": 13.45},
+    9.6,                                   # V RMS: a sine with its 13.5 V peak on the rail
+])
+def test_an_ac_output_on_the_rail_is_clipping(reading):
+    vo = entry(compare_readings(lab1.EXP1_NONINVERTING, {"CH2 vo": reading}), "CH2 vo")
+    assert vo["hint"]["kind"] == "rail"
+
+
+def test_a_dc_probe_reading_its_source_setting_is_flagged_as_a_source_reading():
+    va = entry(compare_readings(lab1.EXP4A_DIVIDER_LED, {"VA": 15.0}), "VA")
+    assert va["hint"]["kind"] == "source"
+    assert "VDC" in va["hint"]["message"]
+
+
+def test_the_tolerance_sets_the_verdict():
+    assert entry(compare_readings(lab1.EXP7_DAC, {"vo": -5.3}), "vo")["within_tolerance"] is False
+    assert entry(compare_readings(lab1.EXP7_DAC, {"vo": -5.3}, tolerance_pct=10), "vo")["within_tolerance"] is True
+
+
+def test_repeated_probe_labels_are_refused():
+    build = copy.deepcopy(lab1.EXP1_NONINVERTING)
+    for probe in build["probes"]:
+        probe["label"] = "CH1"
+    with pytest.raises(CompareError, match="'CH1'"):
+        compare_readings(build, {"CH1": 0.5})
+
+
+def test_a_gain_with_no_measurable_input_is_reported_not_dropped():
+    gain = compare_readings(lab1.EXP1_NONINVERTING, {"CH1 vi": 0.0005, "CH2 vo": 7.99})["gains"][0]
+    assert gain["measured"] is None
+    assert gain["error_pct"] is None
+    assert gain["within_tolerance"] is False
+    assert "1 mV" in gain["reason"]

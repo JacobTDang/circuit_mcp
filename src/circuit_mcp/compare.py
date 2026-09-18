@@ -55,17 +55,34 @@ def _close(a: float, b: float, tolerance_pct: float) -> bool:
 
 
 def _judge(expected: float, measured: float, tolerance_pct: float) -> dict[str, Any]:
-    if abs(expected) < ZERO_FLOOR_V:
-        return {"expected": expected, "measured": measured, "error_pct": None,
-                "within_tolerance": abs(measured - expected) <= ABS_TOLERANCE_V}
-    error = (measured - expected) / abs(expected) * 100
-    return {"expected": expected, "measured": measured, "error_pct": round(error, 2),
-            "within_tolerance": abs(error) <= tolerance_pct}
+    error = None if abs(expected) < ZERO_FLOOR_V else round((measured - expected) / abs(expected) * 100, 2)
+    return {"expected": expected, "measured": measured, "error_pct": error,
+            "within_tolerance": _close(measured, expected, tolerance_pct)}
 
 
-def _peak(basis: str, value: float) -> float:
-    """Every reading as a peak (a signed level for DC): the basis predicted gains use."""
-    return {"volts": value, "vpk": value, "vpp": value / 2, "vrms": value * math.sqrt(2)}[basis]
+def _peak(basis: str, value: float, expected: dict[str, Any]) -> float:
+    """A reading as a peak (a signed level for DC): the basis predicted gains use.
+
+    An AC reading is scaled by the predicted waveform's own peak-to-basis ratio,
+    so a square, a triangle or a clipped sine is not treated as a sine.
+    """
+    if basis == "volts":
+        return value
+    level = expected[basis]
+    if abs(level) < ZERO_FLOOR_V:
+        # A flat predicted trace has no shape to scale by, so assume a sine.
+        return {"vpk": value, "vpp": value / 2, "vrms": value * math.sqrt(2)}[basis]
+    return value * expected["vpk"] / level
+
+
+def _probes_by_label(probes: tuple[Probe, ...]) -> dict[str, Probe]:
+    """Each probe by its label. A repeated label would judge a reading against the wrong node."""
+    labels = [probe.label for probe in probes]
+    repeated = sorted({label for label in labels if labels.count(label) > 1})
+    if repeated:
+        raise CompareError(f"probe labels must be unique to compare readings; "
+                           f"repeated: {', '.join(map(repr, repeated))}")
+    return {probe.label: probe for probe in probes}
 
 
 def _source_setting(source: Source, basis: str) -> float | None:
@@ -81,10 +98,11 @@ def _source_setting(source: Source, basis: str) -> float | None:
     return {"vpp": vpp, "vpk": vpp / 2, "vrms": vpp / 2}[basis]
 
 
-def _hint(probe: Probe, basis: str, measured: float, expected: float, sources: tuple[Source, ...],
+def _hint(probe: Probe, basis: str, measured: float, expected: dict[str, Any], sources: tuple[Source, ...],
           swing: dict[str, float], outputs: set[str], tolerance_pct: float) -> dict[str, str] | None:
     """The likeliest cause of an out-of-tolerance reading, or None if nothing fits."""
-    if basis == "volts" and abs(expected) >= ZERO_FLOOR_V and _close(measured, -expected, tolerance_pct):
+    level = expected[basis]
+    if basis == "volts" and abs(level) >= ZERO_FLOOR_V and _close(measured, -level, tolerance_pct):
         return {"kind": "sign",
                 "message": f"{probe.label} reads {_fmt(measured, basis)}: the right size with the wrong sign. "
                            "Check the probe polarity, or a minus sign lost when the value was written down."}
@@ -95,16 +113,13 @@ def _hint(probe: Probe, basis: str, measured: float, expected: float, sources: t
         if _close(measured, setting, tolerance_pct):
             return {"kind": "source",
                     "message": f"{probe.label} reads {_fmt(measured, basis)}, which is source {source.ref}'s "
-                               f"setting ({_fmt(setting, basis)}), not the {_fmt(expected, basis)} expected at "
+                               f"setting ({_fmt(setting, basis)}), not the {_fmt(level, basis)} expected at "
                                f"{probe.node}. The probe is probably on {source.node} instead of {probe.node}."}
     if probe.node in outputs:
         if basis == "volts":
             on_rail = measured >= swing["high"] - RAIL_MARGIN_V or measured <= swing["low"] + RAIL_MARGIN_V
-        elif basis in ("vpk", "vpp"):
-            peak = measured if basis == "vpk" else measured / 2
-            on_rail = peak >= min(swing["high"], -swing["low"]) - RAIL_MARGIN_V
         else:
-            on_rail = False
+            on_rail = _peak(basis, measured, expected) >= min(swing["high"], -swing["low"]) - RAIL_MARGIN_V
         if on_rail:
             return {"kind": "rail",
                     "message": f"{probe.label} reads {_fmt(measured, basis)}, at the op amp's output limit "
@@ -114,7 +129,11 @@ def _hint(probe: Probe, basis: str, measured: float, expected: float, sources: t
 
 
 def compare_readings(build: Any, measured: Any, tolerance_pct: float = DEFAULT_TOLERANCE_PCT) -> dict[str, Any]:
-    """Each measured probe against the build's prediction, with the likeliest cause of every miss."""
+    """Each measured probe against the build's prediction, with the likeliest cause of every miss.
+
+    A predicted gain is checked only when both of its probes were measured. One
+    whose measured input reads below 1 mV is returned as failed, with the reason.
+    """
     if not isinstance(measured, dict) or not measured:
         raise CompareError("measured must map at least one probe label to its reading")
     tolerance = _number(tolerance_pct, "tolerance_pct")
@@ -122,10 +141,10 @@ def compare_readings(build: Any, measured: Any, tolerance_pct: float = DEFAULT_T
         raise CompareError("tolerance_pct must be positive")
     try:
         parsed = parse_build(build)
+        probes = _probes_by_label(parsed.probes)
         predicted = expectations(build)
     except (BuildError, ExpectError) as exc:
         raise CompareError(f"cannot predict this build: {exc}") from exc
-    probes = {probe.label: probe for probe in parsed.probes}
     expected_by_label = {reading["label"]: reading for reading in predicted["readings"]}
     unknown = [label for label in measured if label not in expected_by_label]
     if unknown:
@@ -139,18 +158,23 @@ def compare_readings(build: Any, measured: Any, tolerance_pct: float = DEFAULT_T
         basis, value = _reading(label, raw, expected["kind"])
         entry = {"label": label, "basis": basis, **_judge(expected[basis], value, tolerance)}
         if not entry["within_tolerance"]:
-            hint = _hint(probes[label], basis, value, expected[basis], parsed.sources,
+            hint = _hint(probes[label], basis, value, expected, parsed.sources,
                          predicted["swing"], outputs, tolerance)
             if hint is not None:
                 entry["hint"] = hint
         readings.append(entry)
-        peaks[label] = _peak(basis, value)
+        peaks[label] = _peak(basis, value, expected)
     gains: list[dict[str, Any]] = []
     for gain in predicted["gains"]:
         out_peak, in_peak = peaks.get(gain["output"]), peaks.get(gain["input"])
-        if out_peak is None or in_peak is None or abs(in_peak) < ZERO_FLOOR_V:
+        if out_peak is None or in_peak is None:
             continue
-        gains.append({"output": gain["output"], "input": gain["input"],
-                      **_judge(gain["gain"], round(out_peak / in_peak, 3), tolerance)})
+        pair = {"output": gain["output"], "input": gain["input"]}
+        if abs(in_peak) < ZERO_FLOOR_V:
+            gains.append({**pair, "expected": gain["gain"], "measured": None, "error_pct": None,
+                          "within_tolerance": False,
+                          "reason": f"{gain['input']} reads below 1 mV, so no gain can be compared"})
+            continue
+        gains.append({**pair, **_judge(gain["gain"], round(out_peak / in_peak, 3), tolerance)})
     return {"ok": True, "tolerance_pct": tolerance, "readings": readings, "gains": gains,
             "all_within_tolerance": all(item["within_tolerance"] for item in readings + gains)}
