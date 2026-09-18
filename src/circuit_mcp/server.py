@@ -1954,7 +1954,7 @@ def transcribe_page(image_base64: str) -> CallToolResult:
     """Transcribe every handwritten expression on one page PNG, in reading order.
 
     The page is split into expression boxes, each line of working its own box
-    (a fraction's numerator, bar and denominator stay one box). ``index``
+    (a fraction's numerator, bar and denominator normally stay one box). ``index``
     follows reading order: bands top to bottom; within a band, columns left to
     right; within a column, lines top to bottom, so a side calculation stays
     together. Each box goes through UniMERNet, up to 60 per page;
