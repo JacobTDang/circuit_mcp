@@ -119,7 +119,9 @@ def _hint(probe: Probe, basis: str, measured: float, expected: dict[str, Any], s
         if basis == "volts":
             on_rail = measured >= swing["high"] - RAIL_MARGIN_V or measured <= swing["low"] + RAIL_MARGIN_V
         else:
-            on_rail = _peak(basis, measured, expected) >= min(swing["high"], -swing["low"]) - RAIL_MARGIN_V
+            peak = _peak(basis, measured, expected)
+            on_rail = (expected["mean"] + peak >= swing["high"] - RAIL_MARGIN_V
+                       or expected["mean"] - peak <= swing["low"] + RAIL_MARGIN_V)
         if on_rail:
             return {"kind": "rail",
                     "message": f"{probe.label} reads {_fmt(measured, basis)}, at the op amp's output limit "
