@@ -6,7 +6,7 @@ import sys
 import tempfile
 import time
 
-from circuit_mcp.ocr_client import OCRWorker
+from circuit_mcp.ocr_client import MAX_IMAGE_BYTES, OCRWorker
 
 
 def _configuration(tmp_path: Path):
@@ -38,6 +38,36 @@ def test_bad_png_is_refused_before_worker_start():
     worker = OCRWorker()
     result = worker.call({"action": "transcribe", "png": b"not png"})
     assert result["error"] == "bad_image"
+    assert worker.pid is None
+
+
+def _refuse_start(worker, monkeypatch):
+    started = []
+
+    def start():
+        started.append(True)
+        raise AssertionError("the worker must not be started")
+
+    monkeypatch.setattr(worker, "_start", start)
+    return started
+
+
+def test_a_non_png_page_is_refused_before_worker_start(monkeypatch):
+    worker = OCRWorker()
+    started = _refuse_start(worker, monkeypatch)
+    result = worker.call({"action": "transcribe_page", "png": b"GIF89a"})
+    assert result["error"] == "bad_image"
+    assert started == []
+    assert worker.pid is None
+
+
+def test_an_oversized_page_is_refused_before_worker_start(monkeypatch):
+    worker = OCRWorker()
+    started = _refuse_start(worker, monkeypatch)
+    page = b"\x89PNG\r\n\x1a\n" + bytes(MAX_IMAGE_BYTES)
+    result = worker.call({"action": "transcribe_page", "png": page})
+    assert result["error"] == "image_too_large"
+    assert started == []
     assert worker.pid is None
 
 
