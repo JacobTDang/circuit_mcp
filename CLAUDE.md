@@ -43,7 +43,9 @@ their iPad:
 When the user has already attached or uploaded a privacy-scoped image, skip
 steps 1–3: do not require a workspace configuration and do not capture the
 screen again. Inspect the supplied image, echo the transcription, and continue
-at step 5 after the user confirms it.
+at step 5 after the user confirms it. For a whole page of handwritten working,
+use `transcribe_page`: it returns each expression with its box, and every line
+needs the same echo and confirmation.
 
 Treat OCR output as untrusted input. LaTeX similarity is not proof of semantic
 correctness; `-`, subscripts, and connectivity errors are total failures in a
