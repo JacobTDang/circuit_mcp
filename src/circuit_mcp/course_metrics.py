@@ -351,7 +351,10 @@ def summing_dac_output(
     ``vo = -v_logic * sum(Rf / R_i * b_i)``. The ideal is the same converter
     with exact binary weights, ``-v_logic * code``, so each output reports how
     far the real resistors pull it from ideal. Resistances may be in any one
-    unit: only their ratios matter.
+    unit: only their ratios matter. ``error_pct`` is
+    ``(output - ideal) / |ideal|`` in percent, so with negative outputs a
+    negative value means the output is larger in magnitude than ideal:
+    -1.82 % is 1.82 % too large.
     """
     if not 1 <= bits <= 16:
         raise MetricsError("bits must be between 1 and 16")
@@ -364,7 +367,9 @@ def summing_dac_output(
     if not math.isfinite(tolerance_pct) or tolerance_pct <= 0:
         raise MetricsError("tolerance_pct must be finite and positive")
     levels = 1 << bits
-    if not codes or len(codes) > levels or any(type(code) is not int or not 0 <= code < levels for code in codes):
+    if len(codes) > levels:
+        raise MetricsError(f"codes may list at most {levels} codes")
+    if not codes or any(type(code) is not int or not 0 <= code < levels for code in codes):
         raise MetricsError(f"codes must list integers from 0 through {levels - 1}")
     weights = [r_feedback / r for r in r_bits]
     outputs = []
@@ -373,7 +378,7 @@ def summing_dac_output(
         output = -v_logic * sum(w * b for w, b in zip(weights, on)) + 0.0   # + 0.0 turns -0.0 into 0.0
         ideal = -v_logic * code + 0.0
         if code == 0:
-            error_pct, within = None, abs(output) <= 1e-12
+            error_pct, within = None, True
         else:
             error_pct = (output - ideal) / abs(ideal) * 100
             within = abs(error_pct) <= tolerance_pct

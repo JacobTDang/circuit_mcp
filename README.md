@@ -22,6 +22,7 @@ It currently provides forty-eight tools:
 | `check_derivation` | Locate the first invalid algebra transition, setup error, or wrong final answer; optional parameters support symbolic-to-numeric steps |
 | `circuit_equations` | Return lcapy's nodal system and solved circuit quantities |
 | `check_setup` | Check that submitted equations hold and have full rank; classify each equation's role |
+| `compare_readings` | Check measured bench readings against a build's prediction and name the likeliest cause of each miss |
 | `workspace_status` | Check whether the macOS screenshot backend is available without capturing anything |
 | `capture_workspace` | Return the current visible iPad screen or selected region as an MCP PNG image |
 | `ipad_capture_status` | Report managed AirPlay and USB-C source health |
@@ -42,7 +43,8 @@ It currently provides forty-eight tools:
 | `rectifier_metrics` | Analyze constant-drop half-wave conduction and DC average |
 | `bjt_emitter_follower` | Compute hybrid-pi gm, r-pi, and loaded voltage gain |
 | `relaxation_oscillator` | Compute symmetric Schmitt-RC period and frequency |
-| `dac_output` | Map ideal straight-binary DAC codes to voltages |
+| `dac_output` | Map codes of an ideal straight-binary span DAC to voltages; for a resistor summing-amplifier DAC use `summing_dac_output` |
+| `summing_dac_output` | Predict an inverting op-amp summing DAC's outputs from its actual resistors, with each code's error against ideal |
 | `alias_frequency` | Fold a sinusoid into the first Nyquist zone |
 | `transimpedance` | Compute ideal current-input inverting op-amp output |
 | `import_waveform_csv` | Parse bounded oscilloscope/DMM CSV payloads without filesystem access |
