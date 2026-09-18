@@ -1,9 +1,10 @@
 """Persistent UniMERNet inference worker.
 
-This file intentionally uses only the standard library until ``_Engine.load``.
-It is executed by the isolated OCR virtual environment, which does not contain
-the circuit server's dependencies. Requests and responses are framed pickles on
-stdin/stdout; both pipe ends are private children of the local MCP process.
+This file intentionally uses only the standard library and ``page_segment``
+(numpy) until ``_Engine.load``. It is executed by the isolated OCR virtual
+environment, which does not contain the circuit server's dependencies.
+Requests and responses are framed pickles on stdin/stdout; both pipe ends are
+private children of the local MCP process.
 """
 from __future__ import annotations
 
@@ -17,6 +18,13 @@ import sys
 import time
 import traceback
 from pathlib import Path
+
+try:
+    from . import page_segment   # imported as circuit_mcp.ocr_worker, by the tests and tooling
+except ImportError:              # run as a script by OCRWorker: this file's directory is sys.path[0]
+    import page_segment
+
+MAX_PAGE_EXPRESSIONS = 60
 
 HEADER = struct.Struct("!Q")
 
@@ -134,24 +142,33 @@ class _Engine:
             "pid": os.getpid(),
         }
 
-    def transcribe(self, png: bytes) -> dict:
-        self.load()
+    def _decode(self, png: bytes):
         from PIL import Image
-        import torch
 
         try:
             image = Image.open(io.BytesIO(png)).convert("RGB")
             image.load()
         except Exception as exc:
             raise ValueError(f"Could not decode input image: {exc}") from exc
-        width, height = image.size
+        return image
+
+    def _latex(self, image) -> tuple[str, float]:
+        """One cropped expression -> (LaTeX, seconds spent generating)."""
+        import torch
+
         tensor = self.processor(image).unsqueeze(0).to(self.device)
         started = time.monotonic()
         with torch.inference_mode():
             output = self.model.generate(
                 {"image": tensor}, temperature=0.0, do_sample=False
             )
-        latex = output["pred_str"][0].strip()
+        return output["pred_str"][0].strip(), time.monotonic() - started
+
+    def transcribe(self, png: bytes) -> dict:
+        self.load()
+        image = self._decode(png)
+        width, height = image.size
+        latex, seconds = self._latex(image)
         return {
             "ok": True,
             "latex": latex,
@@ -159,7 +176,32 @@ class _Engine:
             "model": self.model_dir.name,
             "image_width": width,
             "image_height": height,
-            "inference_seconds": time.monotonic() - started,
+            "inference_seconds": seconds,
+        }
+
+    def transcribe_page(self, png: bytes) -> dict:
+        """Every expression on a page, in reading order, each with its box."""
+        import numpy as np
+
+        self.load()
+        image = self._decode(png)
+        width, height = image.size
+        boxes = page_segment.expression_boxes(np.asarray(image.convert("L")))
+        expressions, seconds = [], 0.0
+        for index, box in enumerate(boxes[:MAX_PAGE_EXPRESSIONS]):
+            latex, spent = self._latex(image.crop(box))
+            seconds += spent
+            expressions.append({"index": index, "bbox": list(box), "latex": latex})
+        return {
+            "ok": True,
+            "expressions": expressions,
+            "expression_count": len(boxes),
+            "truncated": len(boxes) > MAX_PAGE_EXPRESSIONS,
+            "device": self.device,
+            "model": self.model_dir.name,
+            "image_width": width,
+            "image_height": height,
+            "inference_seconds": seconds,
         }
 
 
@@ -184,6 +226,8 @@ def serve(model_dir: str, device: str) -> None:
                 response = engine.status()
             elif action == "transcribe":
                 response = engine.transcribe(request["png"])
+            elif action == "transcribe_page":
+                response = engine.transcribe_page(request["png"])
             else:
                 response = {
                     "ok": False,

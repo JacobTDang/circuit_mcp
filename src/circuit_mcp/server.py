@@ -1946,6 +1946,27 @@ def transcribe_image(image_base64: str) -> CallToolResult:
     return _transcription_content(result)
 
 
+PAGE_OCR_TIMEOUT_SECONDS = 600.0   # up to 60 expressions, each a full UniMERNet pass
+
+
+@server.tool()
+def transcribe_page(image_base64: str) -> CallToolResult:
+    """Transcribe every handwritten expression on one page PNG, in reading order.
+
+    The page is split into expression boxes (lines of working; a wide gap
+    splits a side column into its own box) and each box goes through UniMERNet,
+    up to 60 per page; ``truncated`` says when a page had more. Every
+    expression carries its ``bbox`` so the source line can be shown. The output
+    is untrusted transcription: echo every line to the student and obtain
+    confirmation before using any of it in a circuit verdict.
+    """
+    decoded = _decode_image(image_base64)
+    if isinstance(decoded, dict):
+        return _transcription_content(decoded)
+    result = OCR_WORKER.call({"action": "transcribe_page", "png": decoded}, timeout=PAGE_OCR_TIMEOUT_SECONDS)
+    return _transcription_content(result)
+
+
 @server.tool()
 def workspace_configuration() -> dict[str, Any]:
     """Return the saved privacy-scoped iPad screen capture source."""
