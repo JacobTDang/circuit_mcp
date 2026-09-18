@@ -1365,8 +1365,11 @@ def summing_dac_output(
     ``r_bits`` lists one input resistor per bit, most significant first, in
     the same unit as ``r_feedback``. Each code returns the output
     ``-v_logic * sum(Rf/Ri * bit_i)``, the ideal ``-v_logic * code``, the
-    percent error and whether it sits within ``tolerance_pct`` of ideal. Use
-    the measured resistor values to predict what the bench should read.
+    percent error and whether it sits within ``tolerance_pct`` of ideal.
+    ``error_pct`` is ``(output - ideal) / |ideal|`` in percent, so with
+    negative outputs a negative value means the output is larger in
+    magnitude than ideal: -1.82 % is 1.82 % too large. Use the measured
+    resistor values to predict what the bench should read.
     """
     return _guarded("summing_dac_output", codes=list(codes), bits=bits, r_feedback=r_feedback,
                     r_bits=list(r_bits), v_logic=v_logic, tolerance_pct=tolerance_pct)

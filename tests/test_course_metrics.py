@@ -186,7 +186,21 @@ def test_summing_dac_code_zero_is_positive_zero_with_no_percent_error():
     (([], 3, 10e3, [2.5e3, 5e3, 10e3]), {}),             # no codes
     (([1], 3, 10e3, [2.5e3, 5e3, 10e3]), {"v_logic": 0.0}),
     (([1], 3, 10e3, [2.5e3, 5e3, 10e3]), {"tolerance_pct": 0.0}),
+    (([1], 3, math.nan, [2.5e3, 5e3, 10e3]), {}),        # NaN resistance
+    (([1], 3, 10e3, [2.5e3, math.inf, 10e3]), {}),       # infinite resistance
+    (([1], 3, 10e3, [2.5e3, 5e3, 10e3]), {"v_logic": math.nan}),
+    (([1], 3, 10e3, [2.5e3, 5e3, 10e3]), {"v_logic": math.inf}),
+    (([1], 3, 10e3, [2.5e3, 5e3, 10e3]), {"tolerance_pct": math.nan}),
+    (([1], 3, 10e3, [2.5e3, 5e3, 10e3]), {"tolerance_pct": math.inf}),
+    (([1], 17, 10e3, [10e3] * 17), {}),                  # too many bits
+    (([True], 3, 10e3, [2.5e3, 5e3, 10e3]), {}),         # bool is not a code
+    (([0] * 9, 3, 10e3, [2.5e3, 5e3, 10e3]), {}),        # more codes than levels
 ])
 def test_summing_dac_rejects_unphysical_inputs(args, kwargs):
     with pytest.raises(MetricsError):
         summing_dac_output(*args, **kwargs)
+
+
+def test_summing_dac_names_the_code_limit_when_given_too_many_codes():
+    with pytest.raises(MetricsError, match="codes may list at most 8 codes"):
+        summing_dac_output([0] * 9, 3, 10e3, [2.5e3, 5e3, 10e3])
