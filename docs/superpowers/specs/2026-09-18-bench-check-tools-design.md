@@ -45,10 +45,12 @@ arithmetic knows, and the Lab 1 DAC cannot clip (−7 V on ±10 V rails).
 
 - `page_segment.py`: numpy-only segmentation. Ink is anything far from the median
   background, so light and dark pages both work. Rows of ink form lines; lines
-  closer than half the median line height merge (a fraction stays whole);
+  closer than 0.3 of the median line height merge (a fraction stays whole);
   horizontal gaps wider than three line heights (or 8 % of the page width) split
-  side columns into separate boxes. Boxes come back in reading order: top to
-  bottom, then left to right.
+  side columns into separate boxes. Each column is then split into lines again
+  with the same gap, so a side column cannot bridge two lines of the main one.
+  Boxes come back in reading order: bands top to bottom, columns left to right,
+  then lines top to bottom within a column.
 - Segmentation runs inside the OCR worker, which already decodes with PIL. No new
   dependencies; the server does not rely on its transitive Pillow. The module is
   imported both as `circuit_mcp.page_segment` and, from the worker script, as
