@@ -33,6 +33,7 @@ from circuit_mcp.server import (
     check_derivation,
     check_equivalence,
     check_setup,
+    compare_readings,
     configure_workspace,
     ocr_status,
     transcribe_image,
@@ -45,6 +46,7 @@ from circuit_mcp.server import (
     simulate_spice,
 )
 from circuit_mcp.symbols import SymbolConflictError
+from tests.fixtures import lab1
 
 INVERTING = """
 Vs 1 0 {V}
@@ -119,6 +121,7 @@ TOOL_NAMES = {
     "import_waveform_csv",
     "instrument_status",
     "instrument_query",
+    "compare_readings",
 }
 
 
@@ -995,3 +998,16 @@ def test_a_worker_that_cannot_start_is_reported_rather_than_retried_forever():
     assert elapsed < 10, f"took {elapsed:.1f}s -- it kept retrying"
     # And a real worker still starts afterwards.
     assert check_equivalence("Rf/Ri", "Rf/Ri")["equivalent"] is True
+
+
+def test_compare_readings_tool_flags_a_dropped_minus_sign():
+    result = compare_readings(lab1.EXP7_DAC, {"vo": 5.0})
+    assert result["ok"] is True
+    assert result["readings"][0]["hint"]["kind"] == "sign"
+
+
+def test_compare_readings_tool_names_an_unknown_probe_as_a_compare_error():
+    result = compare_readings(lab1.EXP7_DAC, {"CH9": 1.0})
+    assert result["ok"] is False
+    assert result["error"] == "compare_error"
+    assert "CH9" in result["message"]

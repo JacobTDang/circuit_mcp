@@ -35,7 +35,10 @@ their iPad:
    build-order wire list; the expected card is what the meter and scope should
    read at each probe. Chips are LM324 and LMC660; say which section and which
    pins. If a measurement is far from the expected card, suspect the wiring
-   first, then the pot position, then the model.
+   first, then the pot position, then the model. Put numbers on that with
+   `compare_readings`: pass the same build and the student's readings, and it
+   reports each probe's error and names a lost minus sign, a probe on a source
+   instead of its node, or an output on a rail.
 
 When the user has already attached or uploaded a privacy-scoped image, skip
 steps 1–3: do not require a workspace configuration and do not capture the
