@@ -45,6 +45,42 @@ def test_a_fraction_stays_one_expression():
     assert contains(boxes[0], 90, 50, 210, 102)
 
 
+def test_lines_a_third_of_a_line_height_apart_are_two_boxes():
+    image = page()
+    ink(image, 50, 40, 150, 70)
+    ink(image, 60, 81, 200, 111)    # 11 px below: about 0.35 of the 30 px line height
+    boxes = expression_boxes(image)
+    assert len(boxes) == 2
+    assert contains(boxes[0], 50, 40, 150, 70)
+    assert contains(boxes[1], 60, 81, 200, 111)
+
+
+def test_a_fraction_with_gaps_a_fifth_of_a_line_height_stays_one_box():
+    image = page()
+    ink(image, 100, 50, 200, 80)    # numerator, 30 px tall
+    ink(image, 90, 86, 210, 89)     # fraction bar, 6 px below
+    ink(image, 100, 95, 200, 125)   # denominator, 6 px below
+    boxes = expression_boxes(image)
+    assert len(boxes) == 1
+    assert contains(boxes[0], 90, 50, 210, 125)
+
+
+def test_a_side_column_does_not_bridge_the_gap_between_main_lines():
+    image = page()
+    ink(image, 20, 40, 120, 70)     # main line 1
+    ink(image, 40, 110, 100, 140)   # main line 2, narrower, 40 px below
+    ink(image, 300, 55, 380, 125)   # side block whose rows span the gap between them
+    ink(image, 20, 180, 150, 210)   # two ordinary lines, so the median
+    ink(image, 20, 240, 150, 270)   # line height stays 30 px
+    boxes = expression_boxes(image)
+    assert len(boxes) == 5
+    assert boxes[:3] == [
+        (20 - PAD, 40 - PAD, 120 + PAD, 70 + PAD),
+        (40 - PAD, 110 - PAD, 100 + PAD, 140 + PAD),
+        (300 - PAD, 55 - PAD, 380 + PAD, 125 + PAD),
+    ]
+
+
 def test_gaps_between_words_do_not_split_a_line():
     image = page()
     for x0, x1 in ((20, 80), (100, 160), (185, 260)):

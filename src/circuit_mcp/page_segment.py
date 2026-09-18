@@ -1,10 +1,17 @@
 """Where the handwritten expressions are on a page, for the formula recognizer.
 
 UniMERNet reads one tightly cropped expression, but a student's working arrives
-as a whole scanned page. Rows of ink make lines; lines closer than half a
-typical line height stay one expression (a fraction's numerator, bar and
+as a whole scanned page. Rows of ink make lines; lines closer than 0.3 of the
+median line height stay one expression (a fraction's numerator, bar and
 denominator); and a horizontal gap several line heights wide splits a line into
-separate columns, such as a side calculation next to the main working.
+separate columns, such as a side calculation next to the main working. Each
+column is then split into its own lines again, because ink in one column can
+fill the gap between two lines of the other. Boxes come in reading order: bands
+top to bottom, columns left to right within a band, and lines top to bottom
+within a column, so a side calculation stays together.
+
+Known limitation: a hand-drawn frame around an answer joins that answer to the
+line above it, because the frame's edges read as ink that bridges the gap.
 
 Only numpy and the standard library, and no relative imports: the OCR worker is
 run as a script and imports this module by file name, outside the package.
@@ -13,7 +20,8 @@ from __future__ import annotations
 
 import numpy as np
 
-MERGE_FRACTION = 0.5            # a vertical gap under this share of the median line height joins lines
+MERGE_FRACTION = 0.3            # a vertical gap under this share of the median line height joins lines;
+                                # handwritten fraction gaps measure 0.05-0.23 of it, gaps between lines 0.28 up
 SPLIT_LINE_HEIGHTS = 3.0        # a horizontal gap this many median line heights wide splits columns
 SPLIT_MIN_WIDTH_FRACTION = 0.08  # ...and never narrower than this share of the page width
 MIN_INK_PIXELS = 12             # fewer ink pixels than this is a speck, not writing
@@ -52,23 +60,30 @@ def _join(runs: list[tuple[int, int]], gap: int) -> list[tuple[int, int]]:
 
 
 def expression_boxes(gray: np.ndarray) -> list[Box]:
-    """``(x0, y0, x1, y1)`` boxes with exclusive ends, top to bottom then left to right."""
+    """``(x0, y0, x1, y1)`` boxes with exclusive ends, in reading order.
+
+    Bands top to bottom; within a band, columns left to right; within a column,
+    lines top to bottom, so a side calculation stays together.
+    """
     ink = ink_mask(gray)
     height, width = ink.shape
     rows = _runs(ink.any(axis=1))
     if not rows:
         return []
     line_height = float(np.median([end - start for start, end in rows]))
-    bands = _join(rows, max(2, int(MERGE_FRACTION * line_height)))
+    merge_gap = max(2, int(MERGE_FRACTION * line_height))
     split_gap = max(int(SPLIT_LINE_HEIGHTS * line_height), int(SPLIT_MIN_WIDTH_FRACTION * width), 1)
     boxes: list[Box] = []
-    for top, bottom in bands:
+    for top, bottom in _join(rows, merge_gap):
         band = ink[top:bottom]
         for left, right in _join(_runs(band.any(axis=0)), split_gap):
-            cell = band[:, left:right]
-            if int(cell.sum()) < MIN_INK_PIXELS:
-                continue
-            ys = np.flatnonzero(cell.any(axis=1))
-            y0, y1 = top + int(ys[0]), top + int(ys[-1]) + 1
-            boxes.append((max(0, left - PAD), max(0, y0 - PAD), min(width, right + PAD), min(height, y1 + PAD)))
+            column = band[:, left:right]
+            for line_top, line_bottom in _join(_runs(column.any(axis=1)), merge_gap):
+                line = column[line_top:line_bottom]
+                if int(line.sum()) < MIN_INK_PIXELS:
+                    continue
+                xs = np.flatnonzero(line.any(axis=0))
+                x0, x1 = left + int(xs[0]), left + int(xs[-1]) + 1
+                y0, y1 = top + line_top, top + line_bottom
+                boxes.append((max(0, x0 - PAD), max(0, y0 - PAD), min(width, x1 + PAD), min(height, y1 + PAD)))
     return boxes
