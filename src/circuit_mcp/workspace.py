@@ -6,16 +6,12 @@ import os
 import tempfile
 from pathlib import Path
 
+from . import paths
 from .capture import CaptureError, _region
-
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG = ROOT / ".local/workspace.json"
 
 
 def config_path() -> Path:
-    return Path(
-        os.environ.get("CIRCUIT_MCP_WORKSPACE_CONFIG", DEFAULT_CONFIG)
-    ).expanduser().resolve()
+    return paths.workspace_config()
 
 
 def read_workspace() -> dict:

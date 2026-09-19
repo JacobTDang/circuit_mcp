@@ -326,6 +326,11 @@ def test_data_dir_does_not_depend_on_the_checkout_location(tmp_path):
     assert relocated.data_dir == ShowmanManager(port=32995).data_dir
 
 
+def test_data_dir_follows_the_showman_data_variable(tmp_path, monkeypatch):
+    monkeypatch.setenv("CIRCUIT_MCP_SHOWMAN_DATA_DIR", str(tmp_path / "showman-data"))
+    assert ShowmanManager(port=32996).data_dir == (tmp_path / "showman-data").resolve()
+
+
 def test_concurrent_starts_spawn_exactly_one_worker(tmp_path, monkeypatch):
     """Issue #5: the readiness wait must not sit outside the lock."""
     healthy = {"value": False}

@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from pypdf import PdfReader
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from . import paths
 from .ocr_client import OCR_WORKER
 from .storage import CommandCenterDB, StorageError
 from .capture import CaptureError, capture_workspace as _capture_workspace
@@ -56,9 +57,8 @@ from .server import (
     workspace_status,
 )
 
-ROOT = Path(__file__).resolve().parents[2]
 STATIC = Path(__file__).with_name("static")
-DATA = ROOT / ".local" / "command_center"
+DATA = paths.data_dir()
 FILES = DATA / "files"
 INDEX = DATA / "library.json"
 HISTORY = DATA / "history.jsonl"
