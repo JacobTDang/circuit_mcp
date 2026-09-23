@@ -370,3 +370,14 @@ def _visual_count(store) -> int:
         return 0
     with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
         return connection.execute("SELECT count(*) FROM visual_assets").fetchone()[0]
+
+
+def test_posting_attempt_id_inside_arguments_is_refused(tmp_path, monkeypatch):
+    """The web path records the call itself; a tool that also recorded it would double-count."""
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.post(
+            "/api/tools/check_equivalence",
+            json={"arguments": {"expr_a": "a", "expr_b": "a", "attempt_id": "x"}},
+        )
+    assert response.status_code == 422
+    assert "attempt_id" in response.json()["detail"]

@@ -170,3 +170,80 @@ def test_ink_at_the_bottom_right_corner_is_clipped_to_the_page():
 def test_only_a_non_empty_grayscale_image_is_accepted(bad):
     with pytest.raises(ValueError, match="2-D grayscale"):
         expression_boxes(bad)
+
+
+# --- hand-drawn frames -------------------------------------------------------
+
+def frame(image, x0, y0, x1, y1, thickness=3, slope=0):
+    """A hollow rectangle, optionally drifting down to the right like a scanned page."""
+    for column in range(x0, x1):
+        drift = int(slope * (column - x0))
+        image[y0 + drift:y0 + drift + thickness, column] = 0
+        image[y1 + drift - thickness:y1 + drift, column] = 0
+    for row in range(y0, y1):
+        image[row:row + 1, x0:x0 + thickness] = 0
+        image[row + int(slope * (x1 - x0 - 1)):row + int(slope * (x1 - x0 - 1)) + 1, x1 - thickness:x1] = 0
+
+
+def test_a_framed_answer_is_its_own_box():
+    """The frame's edges used to bridge the gap, joining the answer to the line above."""
+    image = page(height=260, width=400)
+    ink(image, 40, 30, 200, 60)        # the working
+    frame(image, 30, 90, 260, 160)     # a box drawn around the answer
+    ink(image, 60, 115, 180, 140)      # the answer inside it
+
+    boxes = expression_boxes(image)
+
+    assert len(boxes) == 2
+    assert contains(boxes[0], 40, 30, 200, 60)
+    assert contains(boxes[1], 60, 115, 180, 140)
+
+
+def test_a_sloped_frame_is_removed_too():
+    image = page(height=260, width=400)
+    ink(image, 40, 30, 200, 60)
+    frame(image, 30, 90, 260, 160, slope=0.05)
+    ink(image, 60, 118, 180, 140)
+
+    assert len(expression_boxes(image)) == 2
+
+
+def test_frames_do_not_merge_tightly_stacked_lines():
+    """Each framed answer is one tall row run, which drags the median line height up.
+
+    The merge gap is a fraction of that median, so on a page with several framed
+    answers it grows wide enough to swallow the gaps between ordinary lines.
+    """
+    image = page(height=700, width=400)
+    for index in range(4):                       # four framed answers
+        top = 30 + index * 100
+        frame(image, 40, top, 300, top + 80)
+        ink(image, 70, top + 25, 220, top + 55)
+    for index in range(3):                       # three ordinary lines below them
+        top = 450 + index * 24
+        ink(image, 60, top, 200, top + 12)
+
+    boxes = expression_boxes(image)
+
+    assert len(boxes) == 7
+
+
+def test_a_closed_digit_is_not_a_frame():
+    """A 0 is a closed loop, but it is taller than it is wide."""
+    image = page()
+    frame(image, 100, 60, 130, 120, thickness=2)
+
+    boxes = expression_boxes(image)
+
+    assert len(boxes) == 1
+    assert contains(boxes[0], 100, 60, 130, 120)
+
+
+def test_a_fraction_bar_is_not_a_frame():
+    """A bar is wide and short like a frame, but solid rather than hollow."""
+    image = page()
+    ink(image, 100, 50, 200, 70)
+    ink(image, 95, 73, 205, 77)
+    ink(image, 100, 80, 200, 100)
+
+    assert len(expression_boxes(image)) == 1

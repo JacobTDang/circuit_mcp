@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from circuit_mcp.storage import SCHEMA_VERSION, CommandCenterDB, StorageError
+from circuit_mcp.storage import SCHEMA_VERSION, CommandCenterDB, StorageError, verdict_for
 
 
 def database(tmp_path):
@@ -224,3 +224,55 @@ def test_a_card_kind_outside_the_known_set_is_refused_at_the_store(tmp_path):
     db, _ = database(tmp_path)
     with pytest.raises(StorageError, match="kind"):
         db.create_card("diagram", "t", {"items": []})
+
+
+def test_verdict_names_what_each_tool_proved():
+    assert verdict_for("check_derivation", {"ok": True, "kind": "ok"}) == "pass"
+    assert verdict_for("check_derivation", {"ok": False, "kind": "algebra"}) == "fail"
+    assert verdict_for("check_setup", {"ok": False, "kind": "not_satisfied"}) == "fail"
+    assert verdict_for("check_equivalence", {"ok": True, "equivalent": True, "oracle": "symbolic"}) == "pass"
+    assert verdict_for("check_equivalence", {"ok": True, "equivalent": False, "oracle": "numeric"}) == "fail"
+    assert verdict_for("derive", {"ok": True, "transfer_function": {}}) == "computed"
+    assert verdict_for("simulate_spice", {"ok": True, "points": []}) == "computed"
+    assert verdict_for("derive", {"ok": False, "error": "circuit_error", "message": "bad netlist"}) == "error"
+
+
+def test_numeric_oracle_equivalence_counts_as_pass():
+    """Strong evidence still counts; result_json keeps the oracle that settled it."""
+    result = {"ok": True, "equivalent": True, "oracle": "numeric", "counterexample": None}
+    assert verdict_for("check_equivalence", result) == "pass"
+
+
+def test_attempt_history_shows_each_check_verdict_and_its_arguments(tmp_path):
+    """Evidence is only reusable if the reader can see what was checked, and how it came out."""
+    db, data = database(tmp_path)
+    document = add_document(db, data)
+    problem = db.create_problem("Inverting gain", "op-amps", "Find vo/vi", document["id"])
+    attempt = db.create_attempt(problem["id"], "student")
+    db.record_tool_call("check_derivation", {"steps": ["R2/R1"], "truth": "R2/R1"},
+                        {"ok": True, "kind": "ok"}, 12.0, attempt["id"])
+    db.record_tool_call("check_equivalence", {"expr_a": "a", "expr_b": "b"},
+                        {"ok": True, "equivalent": False, "oracle": "numeric"}, 8.0, attempt["id"])
+    db.record_tool_call("derive", {"netlist": "R1 1 0 {R}"},
+                        {"ok": True, "transfer_function": {"text": "1"}}, 30.0, attempt["id"])
+
+    calls = db.attempt_history(problem["id"])[0]["tool_calls"]
+
+    assert [call["verdict"] for call in calls] == ["pass", "fail", "computed"]
+    assert calls[0]["arguments"] == {"steps": ["R2/R1"], "truth": "R2/R1"}
+    assert "arguments_json" not in calls[0]
+
+
+def test_problem_list_counts_checks_by_verdict(tmp_path):
+    """The board says what has been verified, without reading any stored result."""
+    db, data = database(tmp_path)
+    document = add_document(db, data)
+    problem = db.create_problem("Inverting gain", "op-amps", "Find vo/vi", document["id"])
+    attempt = db.create_attempt(problem["id"], "student")
+    db.record_tool_call("check_derivation", {}, {"ok": True, "kind": "ok"}, 1.0, attempt["id"])
+    db.record_tool_call("check_setup", {}, {"ok": True, "kind": "ok"}, 1.0, attempt["id"])
+    db.record_tool_call("check_setup", {}, {"ok": False, "kind": "not_satisfied"}, 1.0, attempt["id"])
+    db.record_tool_call("derive", {}, {"ok": True}, 1.0, None)  # unattached: counts against no problem
+
+    assert db.list_problems()[0]["checks"] == {"pass": 2, "fail": 1}
+    assert db.course_progress()["checks"] == {"pass": 2, "fail": 1, "computed": 1}

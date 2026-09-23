@@ -71,7 +71,7 @@ def test_a_fresh_store_never_creates_the_retired_table(tmp_path):
     report = db.prepare()
     assert report["schema_version"] == SCHEMA_VERSION
     assert not table_exists(db, "animation_scenes")
-    assert applied_versions(db) == [1, 2]
+    assert applied_versions(db) == [1, 2, 3]
     assert not archives(data)
 
 
@@ -80,7 +80,7 @@ def test_prepare_archives_then_drops_a_legacy_animation_table(tmp_path):
     assert table_exists(db, "animation_scenes")
     db.prepare()
     assert not table_exists(db, "animation_scenes")
-    assert applied_versions(db) == [1, 2]
+    assert applied_versions(db) == [1, 2, 3]
     assert len(archives(data)) == 1
 
 
@@ -101,7 +101,7 @@ def test_repeated_prepare_neither_re_archives_nor_fails(tmp_path):
     db.prepare()
     db.prepare()
     assert archives(data) == first
-    assert applied_versions(db) == [1, 2]
+    assert applied_versions(db) == [1, 2, 3]
 
 
 def test_an_unverifiable_archive_leaves_the_table_and_its_rows_intact(tmp_path, monkeypatch):
@@ -132,5 +132,27 @@ def test_a_step_that_fails_is_retried_and_completes_once_repaired(tmp_path, monk
     monkeypatch.undo()
     db.prepare()
     assert not table_exists(db, "animation_scenes")
-    assert applied_versions(db) == [1, 2]
+    assert applied_versions(db) == [1, 2, 3]
     assert len(archives(data)) == 1
+
+
+def test_migration_3_backfills_verdicts(tmp_path):
+    """A store written before the column comes forward with a verdict on every row."""
+    db = CommandCenterDB(tmp_path / "command_center" / "circuit_mcp.sqlite3")
+    db.prepare()
+    with db.transaction() as connection:
+        for identifier, tool, result in (
+            ("a", "check_derivation", '{"ok":true,"kind":"ok"}'),
+            ("b", "check_derivation", '{"ok":false,"kind":"algebra"}'),
+            ("c", "check_equivalence", '{"ok":true,"equivalent":false,"oracle":"numeric"}'),
+            ("d", "derive", '{"ok":true}'),
+        ):
+            connection.execute(
+                "INSERT INTO tool_calls (id,attempt_id,tool_name,arguments_json,result_json,ok,error_kind,"
+                "duration_ms,server_version,created_at,verdict) VALUES(?,?,?,?,?,?,?,?,?,?,NULL)",
+                (identifier, None, tool, "{}", result, 1, None, 1.0, "0.1.0", 1.0))
+        connection.execute("DELETE FROM schema_migrations WHERE version=3")
+    db.prepare()
+    with db._connect() as connection:
+        verdicts = dict(connection.execute("SELECT id,verdict FROM tool_calls"))
+    assert verdicts == {"a": "pass", "b": "fail", "c": "fail", "d": "computed"}
