@@ -257,13 +257,21 @@ later `transcribe_workspace` call override the saved values for that call.
 browser tab and no `run_ui.py`. The app starts the server itself on a free local
 port, shows the desk once the server answers, and stops the server when you quit.
 
-Build it on an Apple silicon Mac with uv installed:
+Build it on an Apple silicon Mac with uv and ngspice installed:
 
 ```console
 uv python install 3.12
+brew install ngspice
 macos/build_app.sh
 macos/smoke_test.sh
 ```
+
+The simulator travels inside the app. `macos/stage_ngspice.sh` copies the build
+machine's `ngspice` with the fourteen libraries it loads and rewrites every load
+command to point inside the bundle, because a Mac that never installed Homebrew
+has no `/opt/homebrew` for the original paths to resolve against. It reads back
+what the staged files load and refuses rather than shipping a binary that dies
+at launch on the machine the app exists for.
 
 That produces `dist/Andrew's PrepPal.app` and `dist/PrepPal-<version>.dmg`.
 
@@ -279,9 +287,10 @@ That produces `dist/Andrew's PrepPal.app` and `dist/PrepPal-<version>.dmg`.
   and paste the result into your MCP configuration.
 - **Requirements:** Apple silicon and macOS 14 or later.
 
-This release bundles the core tools. Circuit simulation, Showman visuals, iPad
-capture, and handwriting OCR are added in later releases. Until then, each one
-reports itself unavailable, as it does in a checkout without that runtime.
+This release bundles the core tools and circuit simulation. Showman visuals,
+iPad capture, and handwriting OCR need runtimes the app cannot carry, and each
+reports itself unavailable with what is missing, as it does in a checkout
+without that runtime.
 
 ### Opening it on another Mac
 
