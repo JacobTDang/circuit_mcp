@@ -553,18 +553,23 @@ def test_transcribe_page_rejects_a_non_png_without_starting_ocr_worker():
     assert server_module.OCR_WORKER.pid == before
 
 
-def test_transcribe_page_sends_the_page_to_the_worker_with_the_page_timeout(monkeypatch):
+def test_transcribe_page_reads_the_page_box_by_box_with_the_page_budget(monkeypatch):
+    """The tool hands the page to the client's loop, which releases the worker between boxes."""
     seen = {}
 
-    def call(request, timeout=None):
-        seen.update(request=request, timeout=timeout)
+    def read_page(png, timeout=None):
+        seen.update(png=png, timeout=timeout)
         return {"ok": True, "expressions": [{"index": 0, "bbox": [0, 0, 10, 10], "latex": "x"}],
                 "expression_count": 1, "truncated": False}
 
-    monkeypatch.setattr(server_module.OCR_WORKER, "call", call)
+    def refuse_call(*args, **kwargs):
+        raise AssertionError("the whole page must not be one request")
+
+    monkeypatch.setattr(server_module.OCR_WORKER, "transcribe_page", read_page)
+    monkeypatch.setattr(server_module.OCR_WORKER, "call", refuse_call)
     page = b"\x89PNG\r\n\x1a\npage"
     result = transcribe_page(base64.b64encode(page).decode("ascii"))
-    assert seen["request"] == {"action": "transcribe_page", "png": page}
+    assert seen["png"] == page
     assert seen["timeout"] == server_module.PAGE_OCR_TIMEOUT_SECONDS
     assert result.structured_content["expressions"][0]["latex"] == "x"
 
@@ -1054,6 +1059,30 @@ def test_summing_dac_output_tool_names_bad_input_as_a_metrics_error():
     assert result["ok"] is False
     assert result["error"] == "metrics_error"
 
+
+def test_check_derivation_reports_the_rename():
+    """'is' parses, and the result says what it was read as -- a silent rename is its own trap."""
+    result = check_derivation(["is*R1", "R1*is"], "is*R1")
+    assert result["ok"] is True
+    assert result["renamed_symbols"] == {"is": "i_s"}
+
+
+def test_check_equivalence_reports_the_rename():
+    result = check_equivalence("is*R1", "R1*is")
+    assert result["equivalent"] is True
+    assert result["renamed_symbols"] == {"is": "i_s"}
+
+
+def test_a_derivation_without_a_reserved_name_reports_no_rename():
+    result = check_derivation(["Rf/Ri"], "Rf/Ri")
+    assert result["renamed_symbols"] == {}
+
+def test_check_equivalence_confirms_a_bounded_sum_against_its_closed_form():
+    """The n-term sum a summing amplifier writes, checked at n = 1 through 4."""
+    result = check_equivalence("sum_n(V/R^i, i, 1, n)", "V*(1 - R^(-n))/(R - 1)")
+    assert result["ok"] is True
+    assert result["equivalent"] is True
+    assert "n = 1, 2, 3, 4" in result["detail"]
 
 # --------------------------------------------------------------------------
 # verification filed against an attempt

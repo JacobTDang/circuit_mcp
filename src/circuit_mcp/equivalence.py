@@ -39,6 +39,26 @@ def _trial_values(symbols: list[sp.Symbol], trial: int) -> dict:
     }
 
 
+# How many terms a symbolic-bound sum is checked at. Fixed, like _TRIALS, so a
+# verdict is reproducible.
+_SUM_TERMS: tuple[int, ...] = (1, 2, 3, 4)
+
+
+def _symbolic_bounds(*expressions: sp.Expr) -> set[sp.Symbol]:
+    """Names used as a summation limit rather than as a quantity."""
+    bounds: set[sp.Symbol] = set()
+    for expression in expressions:
+        for summation in expression.atoms(sp.Sum):
+            for _, lower, upper in summation.limits:
+                bounds |= {symbol for symbol in (lower, upper) if isinstance(symbol, sp.Symbol)}
+    return bounds
+
+
+def _expanded_at(expressions: tuple[sp.Expr, sp.Expr], bound: sp.Symbol, terms: int) -> tuple[sp.Expr, sp.Expr]:
+    """Both sides with the bound set to a concrete term count, sums carried out."""
+    return tuple(expression.subs({bound: terms}).doit() for expression in expressions)  # type: ignore[return-value]
+
+
 def equivalent(a: sp.Expr, b: sp.Expr) -> EquivalenceResult:
     """Decide whether two expressions are algebraically equal."""
     a, b = sp.sympify(a), sp.sympify(b)
@@ -46,6 +66,31 @@ def equivalent(a: sp.Expr, b: sp.Expr) -> EquivalenceResult:
     # A name bound to differing assumptions on each side would make identical
     # expressions compare unequal. Refuse rather than return a wrong verdict.
     assert_no_conflicts(a, b)
+
+    # A summation bound is a term count, not a continuous quantity, and the
+    # numeric oracle hangs when it hands one a random rational. Check the two
+    # sides at each of the first few term counts instead.
+    bounds = _symbolic_bounds(a, b)
+    if bounds:
+        if len(bounds) > 1:
+            return EquivalenceResult(
+                False, "symbolic", None,
+                f"more than one symbolic summation bound ({', '.join(sorted(str(x) for x in bounds))}); "
+                f"this check expands one bound at a time",
+            )
+        bound = bounds.pop()
+        for terms in _SUM_TERMS:
+            left, right = _expanded_at((a, b), bound, terms)
+            verdict = equivalent(left, right)
+            if not verdict.equivalent:
+                return EquivalenceResult(
+                    False, verdict.oracle, verdict.counterexample,
+                    f"differ at {bound} = {terms}: {verdict.detail}",
+                )
+        return EquivalenceResult(
+            True, "numeric", None,
+            f"agreed at {bound} = " + ", ".join(str(n) for n in _SUM_TERMS),
+        )
 
     # Oracle 1: symbolic. cancel/together handle rational functions far better
     # than simplify alone, which is the shape this tool mostly sees.
