@@ -204,10 +204,24 @@ class _Engine:
         """
         import numpy as np
 
+        from PIL import Image
+
         image = self._decode(png, max_pixels=MAX_PAGE_PIXELS)
         self.load()
         width, height = image.size
-        boxes = page_segment.expression_boxes(np.asarray(image.convert("L")))
+        gray = np.asarray(image.convert("L"))
+        boxes = page_segment.expression_boxes(gray)
+        # Segmentation already ignores frames, but a box's padding can still
+        # reach one, and a frame edge inside a crop is ink the recognizer tries
+        # to read. Paint it out at the page's own background level first.
+        frames = page_segment.frame_mask(page_segment.ink_mask(gray))
+        if frames.any():
+            painted = np.array(image)
+            if painted.ndim == 3:
+                painted[frames] = np.median(painted.reshape(-1, painted.shape[-1]), axis=0)
+            else:
+                painted[frames] = int(np.median(painted))
+            image = Image.fromarray(painted)
         expressions, seconds = [], 0.0
         for index, box in enumerate(boxes[:MAX_PAGE_EXPRESSIONS]):
             latex, spent = self._latex(image.crop(box))
