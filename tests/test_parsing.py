@@ -442,6 +442,61 @@ def test_parse_as_written_runs_the_same_screen_as_the_checker():
         parse_as_written("")
 
 
+# --- the source-current name -------------------------------------------------
+
+def test_is_is_read_as_i_s():
+    """'is' is the standard source-current name and a Python keyword; it is renamed, not banned."""
+    renames = {}
+    expr = parse_expression("is*R1", renames=renames)
+    assert {str(symbol) for symbol in expr.free_symbols} == {"i_s", "R1"}
+    assert renames == {"is": "i_s"}
+
+
+def test_the_rename_only_matches_a_whole_word():
+    expr = parse_expression("island + is")
+    assert {str(symbol) for symbol in expr.free_symbols} == {"island", "i_s"}
+
+
+def test_an_equation_reports_the_rename_from_either_side():
+    renames = {}
+    equation = parse_equation("vo = is*R1", renames=renames)
+    assert renames == {"is": "i_s"}
+    assert {str(symbol) for symbol in equation.free_symbols} == {"vo", "i_s", "R1"}
+
+
+def test_every_other_keyword_is_still_banned():
+    for text in ("lambda*R", "class*R", "import*R", "None + R"):
+        with pytest.raises(ParseError):
+            parse_expression(text)
+
+# --- parallel combination ----------------------------------------------------
+
+def test_par_equals_its_expansion():
+    """par(...) is the reciprocal-sum every op-amp problem writes by hand."""
+    combined = parse_expression("par(RP1, RP2, RP0)")
+    assert equivalent(combined, parse_expression("1/(1/RP1 + 1/RP2 + 1/RP0)")).equivalent
+
+
+def test_par_of_two_equal_resistors_is_half_of_one():
+    assert sp.simplify(parse_expression("par(R, R)") - parse_expression("R/2")) == 0
+
+
+def test_par_of_one_argument_is_that_argument():
+    assert parse_expression("par(R1)") == sp.Symbol("R1")
+
+
+def test_par_needs_at_least_one_argument():
+    with pytest.raises(ParseError):
+        parse_expression("par()")
+
+
+def test_a_bare_pipe_is_still_rejected():
+    """SymPy overloads | as boolean Or, so admitting it would silently change the meaning."""
+    with pytest.raises(ParseError):
+        parse_expression("R1 | R2")
+    with pytest.raises(ParseError):
+        parse_expression("R1 || R2")
+
 # --- bounded sums ------------------------------------------------------------
 
 def test_sum_n_parses_as_a_symbolic_sum():
