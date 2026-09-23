@@ -31,6 +31,11 @@ def data_dir() -> Path:
     return _location("CIRCUIT_MCP_DATA_DIR", REPO_ROOT / ".local" / "command_center")
 
 
+def showman_root() -> Path:
+    """The vendored Showman checkout. The packaged app names one or carries none."""
+    return _location("CIRCUIT_MCP_SHOWMAN_ROOT", REPO_ROOT / "vendor" / "showman")
+
+
 def showman_data_dir() -> Path:
     return _location("CIRCUIT_MCP_SHOWMAN_DATA_DIR", REPO_ROOT / ".local" / "showman")
 
