@@ -113,8 +113,23 @@ _NAME_PATTERN = re.compile(r"\b(" + "|".join(sorted(_BANNED_NAMES, key=len, reve
 # decimal point.
 _ATTRIBUTE_PATTERN = re.compile(r"\.\s*[A-Za-z_]")
 
+def _bounded_sum(expression: object, index: object, lower: object, upper: object) -> object:
+    """``sum_n(f(i), i, lo, hi)``: the n-term sum a summing amplifier writes.
+
+    The index must be a bare name. ``sum_n(f(i), 2, 1, n)`` would otherwise
+    build a sum over the integer 2, which SymPy accepts and no one means.
+    """
+    if not isinstance(index, sp.Symbol):
+        raise ParseError(
+            f"sum_n's index must be a name, not {index!r}. Write "
+            f"sum_n(V/R^i, i, 1, n), where i is the name the summand varies over."
+        )
+    return sp.Sum(expression, (index, lower, upper))
+
+
 # The functions a string may call.
 _FUNCTIONS: dict[str, object] = {
+    "sum_n": _bounded_sum,
     "sqrt": sp.sqrt,
     "exp": sp.exp,
     "log": sp.log,

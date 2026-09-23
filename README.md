@@ -317,6 +317,10 @@ as `s^2`, `2R`, and `0.5` is normalized, while attribute access, unknown functio
 calls, Python keywords, Unicode lookalikes, and other interpreter escape routes
 are rejected before parsing.
 
+An n-term sum is written `sum_n(V/R^i, i, 1, n)`. A summation bound is a term
+count rather than a continuous quantity, so `check_equivalence` expands it at
+n = 1 through 4 instead of substituting a random value for it.
+
 Rendered expressions contain two forms:
 
 - `text`: readable and suitable for feeding into another MCP tool call.
