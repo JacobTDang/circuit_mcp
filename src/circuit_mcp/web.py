@@ -582,6 +582,10 @@ def run_tool(name: str, request: ToolRequest) -> Any:
     tool = TOOLS.get(name)
     if tool is None:
         raise HTTPException(404, "tool is not exposed in the command center")
+    if "attempt_id" in request.arguments:
+        # This path records the call itself. A tool that recorded a second one
+        # would double-count a single check on the board.
+        raise HTTPException(422, "pass attempt_id beside arguments, not inside them")
     started = time.monotonic()
     try:
         result = tool(**request.arguments)
