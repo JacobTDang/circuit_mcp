@@ -23,7 +23,8 @@ paths.
 - `problems`: prompts, topics, source documents, confirmed circuit
   interpretations, and workflow status.
 - `attempts`: student/agent answers and outcomes.
-- `tool_calls`: bounded JSON arguments/results linked to attempts when known.
+- `tool_calls`: bounded JSON arguments/results linked to attempts when known,
+  each with the `verdict` it reached (`pass`, `fail`, `computed`, `error`).
 - `tags` and `problem_tags`: normalized course labels.
 - `events`: durable command-center activity history.
 - `schema_migrations` and `settings`: migration identity and idempotence.

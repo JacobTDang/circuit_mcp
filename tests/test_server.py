@@ -48,6 +48,7 @@ from circuit_mcp.server import (
     simulate_spice,
     summing_dac_output,
 )
+from circuit_mcp.storage import StorageError
 from circuit_mcp.symbols import SymbolConflictError
 from tests.fixtures import lab1
 
@@ -1082,3 +1083,75 @@ def test_check_equivalence_confirms_a_bounded_sum_against_its_closed_form():
     assert result["ok"] is True
     assert result["equivalent"] is True
     assert "n = 1, 2, 3, 4" in result["detail"]
+
+# --------------------------------------------------------------------------
+# verification filed against an attempt
+# --------------------------------------------------------------------------
+
+def _open_attempt(tmp_path, monkeypatch):
+    """A problem with one open attempt, in a throwaway store."""
+    data = tmp_path / "command_center"
+    monkeypatch.setattr(server_module, "default_data_dir", lambda: data)
+    database = server_module._storage()
+    problem = database.create_problem("Inverting gain", "op-amps", "Find vo/vi")
+    return database, problem, database.create_attempt(problem["id"], "student")
+
+
+def test_derive_with_attempt_id_records_arguments_and_result(tmp_path, monkeypatch):
+    database, problem, attempt = _open_attempt(tmp_path, monkeypatch)
+
+    result = derive(INVERTING, 1, 0, 3, 0, "finite", attempt_id=attempt["id"])
+
+    assert result["ok"] is True
+    assert result["evidence_id"]
+    assert result["verdict"] == "computed"
+    call = database.attempt_history(problem["id"])[0]["tool_calls"][0]
+    assert call["tool_name"] == "derive"
+    assert call["arguments"]["netlist"] == INVERTING
+    assert json.loads(json.dumps(result["transfer_function"]))  # the result round-tripped as stored
+
+
+def test_attempt_history_shows_a_passed_and_a_failed_check(tmp_path, monkeypatch):
+    database, problem, attempt = _open_attempt(tmp_path, monkeypatch)
+
+    check_derivation(["Rf/Ri", "Rf/Ri"], "Rf/Ri", None, attempt_id=attempt["id"])
+    check_derivation(["Rf/Ri", "Rf/Ri + 1"], "Rf/Ri", None, attempt_id=attempt["id"])
+    check_equivalence("Rf/Ri", "Ri/Rf", attempt_id=attempt["id"])
+
+    calls = database.attempt_history(problem["id"])[0]["tool_calls"]
+    assert [call["verdict"] for call in calls] == ["pass", "fail", "fail"]
+
+
+def test_unknown_attempt_fails_before_the_tool_runs(tmp_path, monkeypatch):
+    database, _, _ = _open_attempt(tmp_path, monkeypatch)
+
+    result = check_equivalence("a+b", "b+a", attempt_id="nope")
+
+    assert result["ok"] is False
+    assert result["error"] == "storage_error"
+    with database._connect() as connection:
+        assert connection.execute("SELECT count(*) FROM tool_calls").fetchone()[0] == 0
+
+
+def test_calls_without_attempt_id_record_nothing(tmp_path, monkeypatch):
+    database, _, _ = _open_attempt(tmp_path, monkeypatch)
+
+    result = check_equivalence("a+b", "b+a")
+
+    assert result["ok"] is True
+    assert "evidence_id" not in result and "verdict" not in result
+    with database._connect() as connection:
+        assert connection.execute("SELECT count(*) FROM tool_calls").fetchone()[0] == 0
+
+
+def test_a_storage_failure_keeps_the_result_and_warns(tmp_path, monkeypatch):
+    _, _, attempt = _open_attempt(tmp_path, monkeypatch)
+
+    def refuse(*args, **kwargs):
+        raise StorageError("disk is full")
+
+    monkeypatch.setattr(server_module.CommandCenterDB, "record_tool_call", refuse)
+    result = check_equivalence("a+b", "b+a", attempt_id=attempt["id"])
+
+    assert result["ok"] is True and result["equivalent"] is True
+    assert "disk is full" in result["evidence_warning"]

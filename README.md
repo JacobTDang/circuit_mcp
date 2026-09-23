@@ -22,6 +22,11 @@ It currently provides fifty-six tools:
 | `check_derivation` | Locate the first invalid algebra transition, setup error, or wrong final answer; optional parameters support symbolic-to-numeric steps |
 | `circuit_equations` | Return lcapy's nodal system and solved circuit quantities |
 | `check_setup` | Check that submitted equations hold and have full rank; classify each equation's role |
+
+`derive`, `check_equivalence`, `check_derivation`, `check_setup`, and
+`simulate_spice` take an optional `attempt_id`. Pass one and the call is
+recorded against that attempt with the verdict it reached, which
+`attempt_history` and the problem board then show.
 | `compare_readings` | Check measured bench readings against a build's prediction and name the likeliest cause of each miss |
 | `workspace_status` | Check whether the macOS screenshot backend is available without capturing anything |
 | `capture_workspace` | Return the current visible iPad screen or selected region as an MCP PNG image |
