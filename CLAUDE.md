@@ -17,7 +17,10 @@ their iPad:
 6. After confirmation, translate the work into lcapy netlist syntax and the
    server's restricted SymPy text syntax.
 7. Use `check_setup` for circuit laws, `check_derivation` for ordered algebra,
-   and `derive` only as the ground-truth oracle needed for checking.
+   and `derive` only as the ground-truth oracle needed for checking. Once the
+   interpretation is confirmed, call `attempt_create` and pass that `attempt_id`
+   to every check, so the problem board records what was verified instead of
+   leaving the evidence in this chat.
 8. Explain the first divergence and the relevant principle. Do not replace the
    student's derivation with a complete worked solution unless they explicitly
    ask for that.

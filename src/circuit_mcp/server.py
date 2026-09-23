@@ -975,6 +975,33 @@ def _guarded(name: str, **kwargs: Any) -> dict[str, Any]:
     return _WORKER.call(name, kwargs, TIMEOUT_SECONDS)
 
 
+def _recorded(name: str, attempt_id: str | None, **kwargs: Any) -> dict[str, Any]:
+    """Run a verification tool, and file its evidence against an attempt.
+
+    The attempt is looked up first: a mistyped id should not spend thirty
+    seconds of SymPy and only then fail to record. The write happens here in
+    the parent, because the worker is a subprocess that exists to be killable
+    and must not own a database handle.
+    """
+    if not attempt_id:
+        return _guarded(name, **kwargs)
+    database = _storage()
+    try:
+        database.get_attempt(attempt_id)
+    except StorageError as exc:
+        return _failure("storage_error", str(exc))
+    started = time.monotonic()
+    result = _guarded(name, **kwargs)
+    duration_ms = (time.monotonic() - started) * 1000
+    try:
+        evidence = database.record_tool_call(name, kwargs, result, duration_ms, attempt_id)
+    except StorageError as exc:
+        # The check itself succeeded. Losing the bookkeeping is not a reason to
+        # throw the student's answer away, so it is reported beside the result.
+        return {**result, "evidence_warning": str(exc)}
+    return {**result, "evidence_id": evidence["id"], "verdict": evidence["verdict"]}
+
+
 # ---------------------------------------------------------------------------
 # the worker, from its own side
 # ---------------------------------------------------------------------------
@@ -1073,6 +1100,7 @@ def derive(
     out_pos: str | int,
     out_neg: str | int,
     mode: str = "finite",
+    attempt_id: str | None = None,
 ) -> dict[str, Any]:
     """Ground-truth transfer function between two node pairs, and its poles.
 
@@ -1095,9 +1123,13 @@ def derive(
     Each expression comes back as ``text`` and ``srepr``. Pass ``text`` to
     :func:`check_derivation` as the ground truth; ``srepr`` is the exact record,
     assumptions included, for a caller reconstructing the expression in SymPy.
+
+    Pass ``attempt_id`` to file this check against an attempt; it then appears
+    in ``attempt_history`` with its verdict.
     """
-    return _guarded(
+    return _recorded(
         "derive",
+        attempt_id,
         netlist=netlist,
         in_pos=in_pos,
         in_neg=in_neg,
@@ -1108,7 +1140,7 @@ def derive(
 
 
 @server.tool()
-def check_equivalence(expr_a: str, expr_b: str) -> dict[str, Any]:
+def check_equivalence(expr_a: str, expr_b: str, attempt_id: str | None = None) -> dict[str, Any]:
     """Are two expressions algebraically equal?
 
     Decided by two oracles. ``oracle`` says which one settled it: ``symbolic``
@@ -1118,13 +1150,17 @@ def check_equivalence(expr_a: str, expr_b: str) -> dict[str, Any]:
 
     Both sides are parsed onto one set of symbols, so ``Rf`` on the left is the
     same object as ``Rf`` on the right.
+
+    Pass ``attempt_id`` to file this check against an attempt; it then appears
+    in ``attempt_history`` with its verdict.
     """
-    return _guarded("check_equivalence", expr_a=expr_a, expr_b=expr_b)
+    return _recorded("check_equivalence", attempt_id, expr_a=expr_a, expr_b=expr_b)
 
 
 @server.tool()
 def check_derivation(
-    steps: list[str], truth: str, parameters: dict[str, float] | None = None
+    steps: list[str], truth: str, parameters: dict[str, float] | None = None,
+    attempt_id: str | None = None,
 ) -> dict[str, Any]:
     """Find where an ordered derivation diverges from the truth.
 
@@ -1148,9 +1184,12 @@ def check_derivation(
     The parsed steps are echoed back. Check them against what was actually
     written before trusting a verdict -- a misread subscript produces a
     confident "your step 3 is wrong" about a step 3 that was fine.
+
+    Pass ``attempt_id`` to file this check against an attempt; it then appears
+    in ``attempt_history`` with its verdict.
     """
-    return _guarded(
-        "check_derivation", steps=list(steps), truth=truth,
+    return _recorded(
+        "check_derivation", attempt_id, steps=list(steps), truth=truth,
         parameters=parameters or {},
     )
 
@@ -1171,7 +1210,8 @@ def circuit_equations(netlist: str) -> dict[str, Any]:
 
 @server.tool()
 def check_setup(
-    netlist: str, equations: list[str], unknowns: list[str]
+    netlist: str, equations: list[str], unknowns: list[str],
+    attempt_id: str | None = None,
 ) -> dict[str, Any]:
     """Does a system of equations describe this circuit?
 
@@ -1196,9 +1236,13 @@ def check_setup(
     Two conventions are lcapy's and are assumed here: node voltages reference
     node ``0``, and a branch current flows *into* the first node named for that
     element in the netlist. The opposite current direction reads as a sign error.
+
+    Pass ``attempt_id`` to file this check against an attempt; it then appears
+    in ``attempt_history`` with its verdict.
     """
-    return _guarded(
+    return _recorded(
         "check_setup",
+        attempt_id,
         netlist=netlist,
         equations=list(equations),
         unknowns=list(unknowns),
@@ -1207,7 +1251,8 @@ def check_setup(
 
 @server.tool()
 def simulate_spice(
-    netlist: str, analysis: str, outputs: list[str] | None = None
+    netlist: str, analysis: str, outputs: list[str] | None = None,
+    attempt_id: str | None = None,
 ) -> dict[str, Any]:
     """Run a bounded local ngspice operating-point, sweep, AC, or transient analysis.
 
@@ -1218,9 +1263,12 @@ def simulate_spice(
     or ``tran TSTEP TSTOP [TSTART [TMAX]]``. ``outputs`` optionally selects
     vectors such as ``v(out)`` or ``i(v1)``. Results are numeric simulation,
     useful for nonlinear and time-domain checking; they are not symbolic proof.
+
+    Pass ``attempt_id`` to file this check against an attempt; it then appears
+    in ``attempt_history`` with its verdict.
     """
-    return _guarded(
-        "simulate_spice", netlist=netlist, analysis=analysis, outputs=outputs or []
+    return _recorded(
+        "simulate_spice", attempt_id, netlist=netlist, analysis=analysis, outputs=outputs or []
     )
 
 
