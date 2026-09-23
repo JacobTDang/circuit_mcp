@@ -763,6 +763,30 @@ class CommandCenterDB:
             connection.execute("INSERT OR IGNORE INTO problem_tags(problem_id,tag_id) SELECT ?,id FROM tags WHERE name=?", (identifier, normalized))
         return self.get_problem(identifier)
 
+    def solution_sheet(self, tag: str) -> list[dict[str, Any]]:
+        """Every problem carrying a tag, in the order it is handed in.
+
+        One assignment is a tag rather than a table of its own: a problem already
+        knows its page, and a tag is how a set was grouped before this existed.
+        A problem with no solution card still comes back, because a sheet that
+        silently omits an unfinished problem hides the one thing worth seeing.
+        """
+        with self._connect() as connection:
+            problems = [dict(row) for row in connection.execute(
+                "SELECT p.* FROM problems p JOIN problem_tags pt ON pt.problem_id=p.id "
+                "JOIN tags t ON t.id=pt.tag_id WHERE t.name=? AND p.course_id=? "
+                "ORDER BY COALESCE(p.source_page, 1e9), p.created_at", (tag.casefold().strip(), COURSE_ID))]
+            for problem in problems:
+                cards = [_card(row) for row in connection.execute(
+                    "SELECT * FROM canvas_cards WHERE problem_id=? AND kind='solution' "
+                    "AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1", (problem["id"],))]
+                problem["solution"] = cards[0] if cards else None
+                attempt_id = (cards[0]["payload"].get("attempt_id") if cards else None)
+                problem["tool_calls"] = [dict(row) for row in connection.execute(
+                    "SELECT tool_name,verdict,created_at FROM tool_calls WHERE attempt_id=? "
+                    "ORDER BY created_at", (attempt_id,))] if attempt_id else []
+        return problems
+
     def create_attempt(self, problem_id: str, actor: str, answer: str = "", status: str = "working") -> dict[str, Any]:
         self.get_problem(problem_id)
         if status not in ATTEMPT_STATUSES or not actor.strip() or len(answer) > 2_000_000: raise StorageError("invalid attempt")

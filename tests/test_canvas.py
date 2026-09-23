@@ -309,3 +309,10 @@ def test_app_js_never_puts_a_solution_on_the_desk(tmp_path, monkeypatch):
         app_script = browser.get("/assets/app.js").text
         kinds = app_script.split("const CARD_KINDS=", 1)[1].split(";", 1)[0]
         assert "solution" not in kinds
+
+
+def test_app_js_opens_the_solutions_sheet_for_a_tag(tmp_path, monkeypatch):
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        assert "/solutions?tag=" in app_script
+        assert "encodeURIComponent(tag)" in app_script, "a tag must not be pasted into the URL raw"

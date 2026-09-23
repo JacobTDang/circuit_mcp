@@ -149,6 +149,21 @@ schema migration 2 archived its rows to `.local/command_center/archive/` as JSON
 before dropping it. See the
 [Showman integration scope](docs/SHOWMAN_INTEGRATION.md).
 
+## Solutions sheet
+
+One assignment is one page: `GET /solutions?tag=m2-hw1` renders every problem
+carrying that tag in page order, each with its prompt, the given values as
+chips, the drawn schematic, the numbered steps, an answer box with its unit,
+and a line saying which recorded checks stand behind it. A problem with no
+solution card still appears, saying so -- a sheet that quietly omits unfinished
+work hides the one thing worth seeing.
+
+The page is rendered on the server, so what is handed in is what the tests
+assert. Export is the browser's own print: the stylesheet sets US Letter,
+hides the button, keeps a problem from splitting across pages, and prints on a
+light ground. Checked end to end -- eight problems come out as six Letter
+pages with all eight answer boxes.
+
 ## Canvas cards
 
 The agent can put its explanation on the desk beside the student's work with

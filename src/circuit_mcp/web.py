@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from pypdf import PdfReader
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from . import solution_sheet
 from .ocr_client import OCR_WORKER
 from .storage import CommandCenterDB, StorageError
 from .capture import CaptureError, capture_workspace as _capture_workspace
@@ -616,6 +617,18 @@ def visuals(problem_id: str = "", limit: int = 50) -> dict[str, Any]:
     except StorageError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True, "items": items}
+
+
+@app.get("/solutions")
+def solutions(tag: str = "") -> Response:
+    """One assignment as one page, ready to read, check and hand in."""
+    if not tag.strip():
+        raise HTTPException(400, "name the assignment tag, for example /solutions?tag=m2-hw1")
+    try:
+        problems = _db().solution_sheet(tag)
+    except StorageError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return Response(content=solution_sheet.render(tag, problems), media_type="text/html")
 
 
 @app.get("/api/canvas")

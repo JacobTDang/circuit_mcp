@@ -1,0 +1,113 @@
+/* The solutions sheet: read on screen, handed in on paper.
+   Light ground either way -- this is the one page that leaves the app, and a
+   dark theme prints as a black rectangle or, worse, as invisible ink. */
+:root {
+  --ink: #16212b;
+  --muted: #5c6b78;
+  --rule: #d5dde2;
+  --accent: #1d4ed8;
+  --answer: #f2f6fb;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: #fff;
+  color: var(--ink);
+  font: 16px/1.55 "Source Serif 4", Georgia, "Times New Roman", serif;
+}
+header.sheet {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 32px 24px 12px;
+  border-bottom: 2px solid var(--ink);
+}
+header.sheet h1 {
+  margin: 0;
+  font: 600 26px/1.2 "IBM Plex Sans Condensed", system-ui, sans-serif;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+header.sheet button {
+  font: 500 13px/1 "IBM Plex Sans Condensed", system-ui, sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 8px 14px;
+  border: 1.5px solid var(--ink);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+}
+main { max-width: 880px; margin: 0 auto; padding: 0 24px 64px; }
+
+.problem { padding: 26px 0; border-bottom: 1px solid var(--rule); break-inside: avoid; }
+.problem header { display: flex; gap: 12px; align-items: baseline; }
+.problem .number {
+  font: 600 13px/1 "IBM Plex Sans Condensed", system-ui, sans-serif;
+  color: #fff;
+  background: var(--ink);
+  border-radius: 999px;
+  padding: 5px 9px;
+}
+.problem h2 { margin: 0; font: 600 19px/1.25 "IBM Plex Sans Condensed", system-ui, sans-serif; }
+.prompt { margin: 8px 0 14px; color: var(--muted); }
+
+ul.given { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 0 0 14px; padding: 0; }
+ul.given li {
+  font: 13px/1 ui-monospace, Menlo, monospace;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 6px 11px;
+}
+
+ol.steps { margin: 0 0 16px; padding-left: 22px; }
+ol.steps > li { margin-bottom: 10px; }
+ol.steps .math { font-size: 17px; text-align: left; }
+/* MathML block display centres itself, which leaves each step adrift from the
+   number that introduces it. */
+ol.steps .math math, .answer .math math { display: inline-block; margin: 0; }
+ol.steps .note { margin: 2px 0 0; color: var(--muted); font-size: 14.5px; }
+
+.answer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--answer);
+  border: 1.5px solid var(--accent);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+.answer .label {
+  font: 600 11px/1 "IBM Plex Sans Condensed", system-ui, sans-serif;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.answer .unit { color: var(--muted); font-size: 14px; }
+
+figure.schematic { margin: 0 0 16px; }
+figure.schematic svg { max-width: 100%; height: auto; color: var(--ink); }
+
+.evidence { margin: 10px 0 0; font-size: 13.5px; color: var(--muted); }
+.evidence .verdict { font-family: ui-monospace, Menlo, monospace; }
+.evidence .verdict.pass { color: #0e7a56; }
+.evidence .verdict.fail { color: #b3261e; }
+.missing {
+  font: 600 12px/1 "IBM Plex Sans Condensed", system-ui, sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #b3261e;
+}
+
+@page { size: letter; margin: 18mm 16mm; }
+@media print {
+  header.sheet button { display: none; }
+  body { font-size: 12pt; }
+  main { padding: 0; max-width: none; }
+  .problem { padding: 16px 0; }
+  a[href]::after { content: ""; }
+}
