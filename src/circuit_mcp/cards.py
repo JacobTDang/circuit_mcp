@@ -249,10 +249,12 @@ def _solution(content: dict[str, Any]) -> dict[str, Any]:
         return _expression(text, where, symbols)
 
     try:
+        # One step is a stated answer with no transition to check. Two or more
+        # make a chain, and every transition in it has to hold.
         checked = check_written(parse, texts[:-1], texts[-1], parameters)
     except SubstitutionError as exc:
         raise CardError(f"solution refused: {exc}") from exc
-    if not checked.result.ok:
+    if len(texts) > 1 and not checked.result.ok:
         raise CardError(f"solution refused: {checked.result.message}")
     last = checked.evaluated_truth
     answer_expr = _expression(answer_text, "answer", dict(bind(checked.truth)))
