@@ -118,3 +118,72 @@ def test_timeout_kills_a_wedged_worker(monkeypatch):
     result = worker.call({"action": "status", "load_model": False}, timeout=0.1)
     assert result["error"] == "ocr_timeout"
     assert worker.pid is None
+
+
+# --- a page must not block every other OCR call ------------------------------
+
+STUB = Path(__file__).parent / "fixtures" / "stub_ocr_worker.py"
+
+
+def _stub_worker(monkeypatch, **environment):
+    """An OCRWorker talking to the stub, over real pipes."""
+    worker = OCRWorker()
+
+    def start():
+        worker._stderr = tempfile.TemporaryFile()
+        worker._process = subprocess.Popen(
+            [sys.executable, str(STUB)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=worker._stderr,
+            bufsize=0, start_new_session=True,
+            env={**os.environ, **{key: str(value) for key, value in environment.items()}},
+        )
+        return worker._process
+
+    monkeypatch.setattr(worker, "_start", start)
+    return worker
+
+
+def test_an_image_call_during_a_page_waits_one_box(monkeypatch):
+    """A page holds the worker for minutes; a single image must not wait for all of it."""
+    import threading
+
+    worker = _stub_worker(monkeypatch, STUB_BOXES=6, STUB_BOX_SECONDS=0.2, STUB_IMAGE_SECONDS=0.02)
+    page_result = {}
+    try:
+        def read_page():
+            page_result.update(worker.transcribe_page(b"\x89PNG\r\n\x1a\npage", timeout=30))
+
+        reader = threading.Thread(target=read_page)
+        reader.start()
+        time.sleep(0.25)                      # the page is under way
+        started = time.monotonic()
+        single = worker.call({"action": "transcribe", "png": b"\x89PNG\r\n\x1a\nimage"})
+        waited = time.monotonic() - started
+        reader.join(timeout=30)
+    finally:
+        worker.shutdown()
+
+    assert single["ok"] is True
+    assert waited < 0.5, f"waited {waited:.2f}s -- that is the whole page, not one box"
+    assert page_result["ok"] is True
+    assert [e["latex"] for e in page_result["expressions"]] == [f"expr{n}" for n in range(1, 7)]
+
+
+def test_a_page_the_worker_forgot_fails_loudly(monkeypatch):
+    """A worker restarted mid-page must not return a half-read page as if it were whole."""
+    worker = _stub_worker(monkeypatch, STUB_BOXES=4, STUB_BOX_SECONDS=0.0, STUB_FORGET_AFTER=2)
+    try:
+        result = worker.transcribe_page(b"\x89PNG\r\n\x1a\npage", timeout=30)
+    finally:
+        worker.shutdown()
+
+    assert result["ok"] is False
+    assert result["error"] == "page_expired"
+    assert "2 of 4" in result["message"]
+
+
+def test_a_page_is_refused_before_the_worker_starts_when_it_is_not_png(monkeypatch):
+    worker = _stub_worker(monkeypatch, STUB_BOXES=2)
+    result = worker.transcribe_page(b"not png", timeout=5)
+    assert result["error"] == "bad_image"
+    assert worker.pid is None

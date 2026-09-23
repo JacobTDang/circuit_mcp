@@ -18,6 +18,7 @@ import struct
 import sys
 import time
 import traceback
+import uuid
 from pathlib import Path
 
 try:
@@ -62,6 +63,9 @@ class _Engine:
         self.device = None
         self.loaded_at = None
         self.load_seconds = None
+        # At most one page is held open at a time: a page's pixels are tens of
+        # megabytes, and the client only ever reads one page at a time.
+        self._page: dict | None = None
 
     def _select_device(self, torch) -> str:
         requested = self.requested_device
@@ -194,6 +198,92 @@ class _Engine:
             "inference_seconds": seconds,
         }
 
+    def page_open(self, png: bytes) -> dict:
+        """Prepare a page and hold it, transcribing nothing yet.
+
+        Splitting the page open from reading its boxes is what lets the client
+        release its lock between boxes: a page can take ten minutes, and a
+        single ``transcribe_image`` call should not wait behind all of it.
+
+        Only one page is held at a time. A second open replaces the first, and
+        the abandoned page's id is then refused rather than silently reused.
+        """
+        import numpy as np
+
+        from PIL import Image
+
+        image, boxes, width, height = self._segment(png)
+        self._page = {
+            "id": uuid.uuid4().hex,
+            "image": image,
+            "boxes": boxes[:MAX_PAGE_EXPRESSIONS],
+        }
+        return {
+            "ok": True,
+            "page_id": self._page["id"],
+            "expression_count": len(boxes),
+            "truncated": len(boxes) > MAX_PAGE_EXPRESSIONS,
+            "device": self.device,
+            "model": self.model_dir.name,
+            "image_width": width,
+            "image_height": height,
+        }
+
+    def page_expression(self, page_id: str, index: int) -> dict:
+        """One box of the page held open, transcribed now."""
+        page = self._page
+        if page is None or page["id"] != page_id:
+            return {
+                "ok": False,
+                "error": "page_expired",
+                "message": "The worker no longer holds that page. Send the page again.",
+            }
+        if not 0 <= index < len(page["boxes"]):
+            return {
+                "ok": False,
+                "error": "no_such_expression",
+                "message": f"Page has {len(page['boxes'])} expressions; asked for index {index}.",
+            }
+        box = page["boxes"][index]
+        latex, spent = self._latex(page["image"].crop(box))
+        return {
+            "ok": True,
+            "index": index,
+            "bbox": list(box),
+            "latex": latex,
+            "inference_seconds": spent,
+        }
+
+    def page_close(self, page_id: str) -> dict:
+        """Drop a page the client is done with, so its pixels are not held."""
+        if self._page is not None and self._page["id"] == page_id:
+            self._page = None
+        return {"ok": True}
+
+    def _segment(self, png: bytes):
+        """Decode, size-check, segment and de-frame a page. No model work."""
+        import numpy as np
+
+        from PIL import Image
+
+        image = self._decode(png, max_pixels=MAX_PAGE_PIXELS)
+        self.load()
+        width, height = image.size
+        gray = np.asarray(image.convert("L"))
+        boxes = page_segment.expression_boxes(gray)
+        # Segmentation already ignores frames, but a box's padding can still
+        # reach one, and a frame edge inside a crop is ink the recognizer tries
+        # to read. Paint it out at the page's own background level first.
+        frames = page_segment.frame_mask(page_segment.ink_mask(gray))
+        if frames.any():
+            painted = np.array(image)
+            if painted.ndim == 3:
+                painted[frames] = np.median(painted.reshape(-1, painted.shape[-1]), axis=0)
+            else:
+                painted[frames] = int(np.median(painted))
+            image = Image.fromarray(painted)
+        return image, boxes, width, height
+
     def transcribe_page(self, png: bytes) -> dict:
         """Every line of working on a page as its own box, in reading order.
 
@@ -201,27 +291,27 @@ class _Engine:
         column, lines top to bottom, so a side calculation stays together. The
         page is decoded and size-checked before the model loads, so a refused
         page never costs a model load.
-        """
-        import numpy as np
 
-        image = self._decode(png, max_pixels=MAX_PAGE_PIXELS)
-        self.load()
-        width, height = image.size
-        boxes = page_segment.expression_boxes(np.asarray(image.convert("L")))
+        The client drives ``page_open``/``page_expression`` instead, so that it
+        can release its lock between boxes; this stays for a caller that wants
+        the whole page in one request.
+        """
+        opened = self.page_open(png)
         expressions, seconds = [], 0.0
-        for index, box in enumerate(boxes[:MAX_PAGE_EXPRESSIONS]):
-            latex, spent = self._latex(image.crop(box))
-            seconds += spent
-            expressions.append({"index": index, "bbox": list(box), "latex": latex})
+        for index in range(len(self._page["boxes"])):
+            result = self.page_expression(opened["page_id"], index)
+            seconds += result["inference_seconds"]
+            expressions.append({"index": index, "bbox": result["bbox"], "latex": result["latex"]})
+        self.page_close(opened["page_id"])
         return {
             "ok": True,
             "expressions": expressions,
-            "expression_count": len(boxes),
-            "truncated": len(boxes) > MAX_PAGE_EXPRESSIONS,
+            "expression_count": opened["expression_count"],
+            "truncated": opened["truncated"],
             "device": self.device,
             "model": self.model_dir.name,
-            "image_width": width,
-            "image_height": height,
+            "image_width": opened["image_width"],
+            "image_height": opened["image_height"],
             "inference_seconds": seconds,
         }
 
@@ -249,6 +339,12 @@ def serve(model_dir: str, device: str) -> None:
                 response = engine.transcribe(request["png"])
             elif action == "transcribe_page":
                 response = engine.transcribe_page(request["png"])
+            elif action == "page_open":
+                response = engine.page_open(request["png"])
+            elif action == "page_expression":
+                response = engine.page_expression(request["page_id"], request["index"])
+            elif action == "page_close":
+                response = engine.page_close(request["page_id"])
             else:
                 response = {
                     "ok": False,
