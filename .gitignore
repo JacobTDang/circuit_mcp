@@ -31,3 +31,7 @@ output/playwright/
 # swift build regenerates.
 macos/.build/
 macos/.swiftpm/
+
+# A student's own line crops for the handwriting eval; the manifest that names
+# them is committed, the coursework images are not.
+benchmarks/handwriting/crops/
