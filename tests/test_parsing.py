@@ -440,3 +440,32 @@ def test_parse_as_written_runs_the_same_screen_as_the_checker():
         parse_as_written("R.__class__")
     with pytest.raises(ParseError):
         parse_as_written("")
+
+
+# --- parallel combination ----------------------------------------------------
+
+def test_par_equals_its_expansion():
+    """par(...) is the reciprocal-sum every op-amp problem writes by hand."""
+    combined = parse_expression("par(RP1, RP2, RP0)")
+    assert equivalent(combined, parse_expression("1/(1/RP1 + 1/RP2 + 1/RP0)")).equivalent
+
+
+def test_par_of_two_equal_resistors_is_half_of_one():
+    assert sp.simplify(parse_expression("par(R, R)") - parse_expression("R/2")) == 0
+
+
+def test_par_of_one_argument_is_that_argument():
+    assert parse_expression("par(R1)") == sp.Symbol("R1")
+
+
+def test_par_needs_at_least_one_argument():
+    with pytest.raises(ParseError):
+        parse_expression("par()")
+
+
+def test_a_bare_pipe_is_still_rejected():
+    """SymPy overloads | as boolean Or, so admitting it would silently change the meaning."""
+    with pytest.raises(ParseError):
+        parse_expression("R1 | R2")
+    with pytest.raises(ParseError):
+        parse_expression("R1 || R2")

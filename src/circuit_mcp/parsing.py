@@ -113,8 +113,22 @@ _NAME_PATTERN = re.compile(r"\b(" + "|".join(sorted(_BANNED_NAMES, key=len, reve
 # decimal point.
 _ATTRIBUTE_PATTERN = re.compile(r"\.\s*[A-Za-z_]")
 
+def _parallel(*values: object) -> object:
+    """Parallel combination: the reciprocal of the sum of reciprocals.
+
+    Written as a function rather than a ``||`` operator on purpose. SymPy
+    overloads ``Symbol.__or__`` as boolean ``Or``, so a bare ``|`` reaching the
+    parser would quietly produce a logical expression instead of a resistance --
+    the exact silent reinterpretation the screen exists to prevent.
+    """
+    if not values:
+        raise ParseError("par() needs at least one value.")
+    return sp.Pow(sp.Add(*(sp.Pow(value, -1) for value in values)), -1)
+
+
 # The functions a string may call.
 _FUNCTIONS: dict[str, object] = {
+    "par": _parallel,
     "sqrt": sp.sqrt,
     "exp": sp.exp,
     "log": sp.log,
