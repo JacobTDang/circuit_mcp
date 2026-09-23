@@ -78,3 +78,20 @@ def test_a_sample_without_a_confirmed_label_is_refused(tmp_path):
     path.write_text(json.dumps({"samples": [{"crop": "a.png"}]}))
     with pytest.raises(EvalError, match="confirmed label"):
         load_manifest(path)
+
+
+def test_the_lab1_eval_set_is_fourteen_confirmed_formula_lines():
+    """The set the baseline was scored on, so a later edit cannot quietly shrink it."""
+    samples = load_manifest(Path("benchmarks/handwriting/manifest.json"))
+    assert len(samples) == 14
+    assert all(sample.label.strip() for sample in samples)
+    assert all(len(sample.bbox) == 4 for sample in samples), "each crop must be cuttable again"
+    assert all("lab1-p3" in sample.crop for sample in samples)
+
+
+def test_every_label_spells_the_page_rather_than_the_model():
+    """The page writes uppercase V by hand; a label that says v would score the model against itself."""
+    samples = load_manifest(Path("benchmarks/handwriting/manifest.json"))
+    voltages = [sample.label for sample in samples if "V" in sample.label or "v" in sample.label]
+    assert voltages, "the page is full of voltages"
+    assert not any("v_{" in sample.label for sample in samples)

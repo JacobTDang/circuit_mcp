@@ -53,15 +53,43 @@ against the last. Everything runs offline against the local OCR worker.
 3. A CROHME-trained model such as PosFormer — a new dependency, which needs
    sign-off before it is added.
 
-## Status
+## The eval set
 
-The eval set is empty: nothing has been confirmed on this machine yet. The
-baseline cannot be scored until a page's lines are confirmed, which is the
-point of the confirmation step rather than an obstacle to work around.
+Fourteen formula lines from Lab 1 calculations page 3, rendered at 200 dpi and
+segmented by the page tool. The two prose headings on that page are left out:
+this is a formula recogniser, and scoring it on prose measures something it
+never claimed to do.
 
-The miss this exists for, from Lab 1 calculations page 3 at `mps`:
+The labels were read off the page and confirmed line by line before they were
+written down. They spell what the page spells -- uppercase `V`, as handwritten
+-- so a model that returns `v` is counted as not reading what is there.
+
+The crops are the student's own coursework and are not committed. Each sample
+carries the box it was cut from, so the set rebuilds from the page:
+
+```console
+pdftoppm -r 200 -png -f 3 -l 3 ee230_lab_calculations.pdf page
+uv run python benchmarks/handwriting/run.py --cut-crops page-3.png
+```
+
+## Baseline
+
+`unimernet_small`, the model in `models/`, on 2026-09-23:
+
+| exact | sign | subscript | digit |
+|---|---|---|---|
+| **0 / 14** | 0 | 60 | 40 |
+
+Not one line of fourteen comes back exactly. No minus sign was lost, which is
+the one piece of good news in it. The miss this was filed for is line 10:
 
 ```
-want  v_b = v_a → G = 10
-got   u_b = v_a → v = 0
+want  V_{b} = V_{a} \rightarrow G = 10
+got   u_{b} = v_{a} \rightarrow v = 0
 ```
+
+Two failures repeat across the set and are worth knowing before picking a
+candidate: `V` is read as `v` almost everywhere, and the letter `o` in `V_o` is
+read as the digit `0`. A candidate that fixes only those would move the exact
+count a long way without understanding the handwriting any better, so read the
+misses, not just the totals.

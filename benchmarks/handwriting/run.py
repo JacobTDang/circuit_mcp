@@ -49,16 +49,41 @@ def _rebuild(manifest: Path) -> int:
     return 0
 
 
+def _cut(samples: list, page: Path) -> int:
+    """Cut the crops out of the page again.
+
+    The crops are a student's own coursework and are not committed, so the
+    manifest carries each box instead: the eval set can be rebuilt from the
+    page it came from without the images ever being in git.
+    """
+    from PIL import Image
+
+    image = Image.open(page)
+    for sample in samples:
+        if not sample.bbox:
+            raise EvalError(f"{sample.crop} has no box to cut from")
+        target = (HERE / sample.crop).resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        image.crop(tuple(sample.bbox)).save(target)
+    print(f"{len(samples)} crop(s) cut from {page}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=HERE / "manifest.json")
     parser.add_argument("--model", type=Path, help="model directory, for the record and the worker")
     parser.add_argument("--from-store", action="store_true",
                         help="rebuild the manifest from confirmed transcriptions and exit")
+    parser.add_argument("--cut-crops", type=Path, metavar="PAGE_PNG",
+                        help="cut every crop out of this page again, using the manifest's boxes")
     args = parser.parse_args(argv)
 
     if args.from_store:
         return _rebuild(args.manifest)
+
+    if args.cut_crops:
+        return _cut(load_manifest(args.manifest), args.cut_crops)
 
     samples = load_manifest(args.manifest)
     if not samples:
