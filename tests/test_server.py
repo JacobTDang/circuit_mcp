@@ -848,8 +848,18 @@ def test_a_timeout_leaves_nothing_of_the_worker_running(monkeypatch):
 
     assert check_equivalence("9^(9^9)", "1")["error"] == "timeout"
 
-    with pytest.raises(ProcessLookupError):
-        os.killpg(group, 0)
+    # The group goes when the last of it is reaped, and a killed process is a
+    # zombie until its parent gets to it -- on Linux the runaway the worker
+    # forked is re-parented to init first, which takes a moment. Waiting for
+    # the group to disappear still fails on a worker that was merely let go of.
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            os.killpg(group, 0)
+        except ProcessLookupError:
+            break
+        assert time.monotonic() < deadline, f"process group {group} is still alive 5s after the timeout"
+        time.sleep(0.05)
 
 
 def test_a_timeout_does_not_wedge_the_next_call(monkeypatch):
