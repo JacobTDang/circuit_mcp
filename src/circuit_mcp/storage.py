@@ -23,7 +23,7 @@ class StorageError(ValueError):
     """A bounded repository operation could not be completed."""
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 BASELINE_VERSION = 1
 COURSE_ID = "circuits"
 COURSE_CODE = "CIRCUITS"
@@ -119,8 +119,49 @@ def _drop_animation_scenes(db: CommandCenterDB, connection: sqlite3.Connection) 
     connection.execute("DROP TABLE animation_scenes")
 
 
+_JUDGING_TOOLS = frozenset({"check_derivation", "check_setup"})
+
+
+def verdict_for(tool_name: str, result: dict[str, Any]) -> str:
+    """What a recorded call proved.
+
+    ``ok`` cannot answer this on its own: it means "the work passed" for
+    ``check_derivation`` and ``check_setup``, "the comparison ran" for
+    ``check_equivalence``, and "it computed" for ``derive`` and
+    ``simulate_spice``. Deciding once, at write time, is what keeps every reader
+    from parsing a stored result of up to 10 MB to find out.
+    """
+    if result.get("error"):
+        return "error"
+    if tool_name in _JUDGING_TOOLS:
+        return "pass" if result.get("ok") else "fail"
+    if not result.get("ok"):
+        return "error"
+    if tool_name == "check_equivalence":
+        return "pass" if result.get("equivalent") else "fail"
+    return "computed"
+
+
+def _add_tool_call_verdict(db: CommandCenterDB, connection: sqlite3.Connection) -> None:
+    """Record what each stored call proved, for rows written before the column."""
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(tool_calls)")}
+    if "verdict" not in columns:
+        connection.execute("ALTER TABLE tool_calls ADD COLUMN verdict TEXT")
+    rows = connection.execute(
+        "SELECT id,tool_name,result_json FROM tool_calls WHERE verdict IS NULL").fetchall()
+    for identifier, tool_name, result_json in rows:
+        try:
+            result = json.loads(result_json)
+        except json.JSONDecodeError:
+            # A row whose result cannot be read still ran; it just proved nothing.
+            result = {}
+        connection.execute("UPDATE tool_calls SET verdict=? WHERE id=?",
+                           (verdict_for(tool_name, result), identifier))
+
+
 MIGRATIONS: tuple[tuple[int, str, Callable[[CommandCenterDB, sqlite3.Connection], None]], ...] = (
     (2, "drop legacy animation_scenes", _drop_animation_scenes),
+    (3, "add tool_call verdict", _add_tool_call_verdict),
 )
 
 
@@ -231,7 +272,7 @@ class CommandCenterDB:
                     tool_name TEXT NOT NULL, arguments_json TEXT NOT NULL,
                     result_json TEXT NOT NULL, ok INTEGER NOT NULL,
                     error_kind TEXT, duration_ms REAL, server_version TEXT,
-                    created_at REAL NOT NULL
+                    created_at REAL NOT NULL, verdict TEXT
                 );
                 CREATE INDEX IF NOT EXISTS tool_calls_attempt ON tool_calls(attempt_id, created_at);
                 CREATE TABLE IF NOT EXISTS tags (
@@ -735,11 +776,15 @@ class CommandCenterDB:
         result_json = json.dumps(result, separators=(",", ":"), allow_nan=False)
         if len(arguments_json) > 5_000_000 or len(result_json) > 10_000_000: raise StorageError("tool evidence is too large")
         identifier = uuid.uuid4().hex
+        verdict = verdict_for(tool_name, result)
         with self.transaction() as connection:
-            connection.execute("INSERT INTO tool_calls VALUES(?,?,?,?,?,?,?,?,?,?)",
-                               (identifier, attempt_id, tool_name, arguments_json, result_json,
-                                int(bool(result.get("ok"))), result.get("error"), duration_ms, "0.1.0", time.time()))
-        return {"id": identifier, "attempt_id": attempt_id, "tool_name": tool_name, "ok": bool(result.get("ok"))}
+            connection.execute(
+                "INSERT INTO tool_calls (id,attempt_id,tool_name,arguments_json,result_json,ok,"
+                "error_kind,duration_ms,server_version,created_at,verdict) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (identifier, attempt_id, tool_name, arguments_json, result_json,
+                 int(bool(result.get("ok"))), result.get("error"), duration_ms, "0.1.0", time.time(), verdict))
+        return {"id": identifier, "attempt_id": attempt_id, "tool_name": tool_name,
+                "ok": bool(result.get("ok")), "verdict": verdict}
 
     def attempt_history(self, problem_id: str, limit: int = 100) -> list[dict[str, Any]]:
         self.get_problem(problem_id)
