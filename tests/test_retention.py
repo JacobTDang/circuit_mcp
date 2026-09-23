@@ -147,10 +147,13 @@ def test_the_object_proxy_reports_a_missing_artifact_as_gone(monkeypatch):
     from circuit_mcp import web
     from circuit_mcp.showman import ShowmanMissingObject
 
-    def missing(key, timeout=30):
+    # The route calls object_response. Stubbing object_bytes left the real one
+    # running, so this passed only on a machine where Showman itself starts --
+    # and answered 502 "Showman is unavailable" anywhere else.
+    def missing(key, byte_range=None, timeout=30):
         raise ShowmanMissingObject(f"no artifact for {key}")
 
-    monkeypatch.setattr(web.SHOWMAN, "object_bytes", missing)
+    monkeypatch.setattr(web.SHOWMAN, "object_response", missing)
     client = TestClient(web.app, headers={"host": "localhost:2300"})
     assert client.get("/api/showman/objects/videos/gone.mp4").status_code == 404
 

@@ -32,6 +32,14 @@ their iPad:
    identity; a circuit-law substitution such as `I = C*dV_C` is not one, so
    start a new card at the substituted form. Write the words as text, never
    markup; the server renders the math.
+   A `schematic` card draws the circuit itself from the netlist `derive` was
+   given, so the drawing and the maths cannot describe different circuits; it is
+   the card to reach for on a design problem.
+   When a problem is finished, add a `solution` card against its `problem_id`:
+   the given values with units, the ordered steps, the answer with its unit, and
+   the `attempt_id` whose recorded checks are its evidence. Tag every problem of
+   one assignment the same way, and `/solutions?tag=<tag>` is the whole set as
+   one page to hand in.
    When the student is about to build a circuit, add a `breadboard` card and an
    `expected` card from the same build description, and only after the netlist
    has been confirmed in step 5. The breadboard card is the wiring picture with a

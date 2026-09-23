@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from pypdf import PdfReader
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import paths
+from . import paths, solution_sheet
 from .ocr_client import OCR_WORKER
 from .storage import CommandCenterDB, StorageError
 from .capture import CaptureError, capture_workspace as _capture_workspace
@@ -41,6 +41,7 @@ from .server import (
     dac_output,
     derive,
     import_waveform_csv,
+    port_impedance,
     instrument_query,
     instrument_status,
     opamp_limits,
@@ -180,7 +181,8 @@ def _extract(path: Path, extension: str) -> tuple[str, int | None]:
 
 
 TOOLS: dict[str, Callable[..., Any]] = {
-    "derive": derive, "check_equivalence": check_equivalence,
+    "derive": derive, "port_impedance": port_impedance,
+    "check_equivalence": check_equivalence,
     "check_derivation": check_derivation, "circuit_equations": circuit_equations,
     "check_setup": check_setup, "compare_readings": compare_readings,
     "simulate_spice": simulate_spice,
@@ -616,11 +618,23 @@ def visuals(problem_id: str = "", limit: int = 50) -> dict[str, Any]:
     return {"ok": True, "items": items}
 
 
+@app.get("/solutions")
+def solutions(tag: str = "") -> Response:
+    """One assignment as one page, ready to read, check and hand in."""
+    if not tag.strip():
+        raise HTTPException(400, "name the assignment tag, for example /solutions?tag=m2-hw1")
+    try:
+        problems = _db().solution_sheet(tag)
+    except StorageError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return Response(content=solution_sheet.render(tag, problems), media_type="text/html")
+
+
 @app.get("/api/canvas")
 def canvas_cards(problem_id: str = "", limit: int = 50) -> dict[str, Any]:
     """Cards the agent has put on the canvas. The board polls this; it never authors."""
     try:
-        items = _db().list_cards(problem_id or None, limit)
+        items = _db().list_cards(problem_id or None, limit, without_kind="solution")
     except StorageError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True, "items": items}

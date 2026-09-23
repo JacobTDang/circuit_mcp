@@ -17,7 +17,8 @@ It currently provides fifty-six tools:
 
 | Tool | Purpose |
 |---|---|
-| `derive` | Derive a transfer function and poles in finite, ideal, or finite-GBW mode |
+| `derive` | Derive a transfer function and poles in finite, ideal, or finite-GBW mode; a voltage or a current input |
+| `port_impedance` | Impedance looking into a port, with the independent sources killed; input and output resistance, derived rather than simulated |
 | `check_equivalence` | Compare two expressions and return a counterexample when they differ |
 | `check_derivation` | Locate the first invalid algebra transition, setup error, or wrong final answer; optional parameters support symbolic-to-numeric steps |
 | `circuit_equations` | Return lcapy's nodal system and solved circuit quantities |
@@ -148,6 +149,21 @@ schema migration 2 archived its rows to `.local/command_center/archive/` as JSON
 before dropping it. See the
 [Showman integration scope](docs/SHOWMAN_INTEGRATION.md).
 
+## Solutions sheet
+
+One assignment is one page: `GET /solutions?tag=m2-hw1` renders every problem
+carrying that tag in page order, each with its prompt, the given values as
+chips, the drawn schematic, the numbered steps, an answer box with its unit,
+and a line saying which recorded checks stand behind it. A problem with no
+solution card still appears, saying so -- a sheet that quietly omits unfinished
+work hides the one thing worth seeing.
+
+The page is rendered on the server, so what is handed in is what the tests
+assert. Export is the browser's own print: the stylesheet sets US Letter,
+hides the button, keeps a problem from splitting across pages, and prints on a
+light ground. Checked end to end -- eight problems come out as six Letter
+pages with all eight answer boxes.
+
 ## Canvas cards
 
 The agent can put its explanation on the desk beside the student's work with
@@ -160,6 +176,17 @@ every transition is a proved identity that reaches the stated truth. Math render
 as native MathML -- no library, no CDN -- laid out in the order it was written
 rather than SymPy's canonical order. Cards are draggable and resizable like
 everything else on the desk; closing one in the browser removes it for the agent.
+
+A `schematic` card takes `{"netlist": ...}` -- the same lcapy netlist `derive`
+was given -- and draws the circuit from it: op-amp stages left to right, the
+inverting input on top, feedback on a track above the triangle, and everything
+tied to ground dropped onto a ground symbol. The drawing is then read back out
+of its own geometry, with wires joined where they share an end, where a dot
+marks a junction and where they run over one another, and nowhere else; it is
+refused unless the connections it shows are the ones the netlist declares. A
+card can therefore never show a circuit other than the one the maths was done
+on. A netlist it cannot place is refused by name rather than drawn
+approximately, and the browser can save the drawing as a PNG.
 
 Two more kinds turn a confirmed circuit into a bench session. `breadboard` draws
 the build on the columns of a 30-column board it uses: the chip across the

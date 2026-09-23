@@ -33,7 +33,8 @@ CATEGORIES = {"homework", "lecture", "reference", "solution"}
 STATUSES = {"draft", "confirmed", "solved", "needs_review"}
 ATTEMPT_STATUSES = {"working", "correct", "incorrect", "partial", "gap"}
 UUID_RE = re.compile(r"^[0-9a-f]{32}$")
-CARD_KINDS = ("formula", "walkthrough", "vocabulary", "breadboard", "expected")
+CARD_KINDS = ("formula", "walkthrough", "vocabulary", "breadboard", "expected", "schematic",
+              "solution")
 
 
 def default_data_dir() -> Path:
@@ -690,12 +691,19 @@ class CommandCenterDB:
             raise StorageError("card not found")
         return _card(row)
 
-    def list_cards(self, problem_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    def list_cards(self, problem_id: str | None = None, limit: int = 50,
+                   kind: str | None = None, without_kind: str | None = None) -> list[dict[str, Any]]:
         clause, params = "", [COURSE_ID]
         if problem_id:
             if not UUID_RE.fullmatch(problem_id):
                 raise StorageError("problem not found")
             clause, params = " AND problem_id=?", [COURSE_ID, problem_id]
+        if kind:
+            clause, params = clause + " AND kind=?", [*params, kind]
+        if without_kind:
+            # A solution is homework, not a desk card: closing a card on the
+            # board deletes it, and that must never reach finished work.
+            clause, params = clause + " AND kind<>?", [*params, without_kind]
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM canvas_cards WHERE course_id=? AND deleted_at IS NULL" + clause +
@@ -755,6 +763,30 @@ class CommandCenterDB:
             connection.execute("INSERT OR IGNORE INTO tags(name) VALUES(?)", (normalized,))
             connection.execute("INSERT OR IGNORE INTO problem_tags(problem_id,tag_id) SELECT ?,id FROM tags WHERE name=?", (identifier, normalized))
         return self.get_problem(identifier)
+
+    def solution_sheet(self, tag: str) -> list[dict[str, Any]]:
+        """Every problem carrying a tag, in the order it is handed in.
+
+        One assignment is a tag rather than a table of its own: a problem already
+        knows its page, and a tag is how a set was grouped before this existed.
+        A problem with no solution card still comes back, because a sheet that
+        silently omits an unfinished problem hides the one thing worth seeing.
+        """
+        with self._connect() as connection:
+            problems = [dict(row) for row in connection.execute(
+                "SELECT p.* FROM problems p JOIN problem_tags pt ON pt.problem_id=p.id "
+                "JOIN tags t ON t.id=pt.tag_id WHERE t.name=? AND p.course_id=? "
+                "ORDER BY COALESCE(p.source_page, 1e9), p.created_at", (tag.casefold().strip(), COURSE_ID))]
+            for problem in problems:
+                cards = [_card(row) for row in connection.execute(
+                    "SELECT * FROM canvas_cards WHERE problem_id=? AND kind='solution' "
+                    "AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1", (problem["id"],))]
+                problem["solution"] = cards[0] if cards else None
+                attempt_id = (cards[0]["payload"].get("attempt_id") if cards else None)
+                problem["tool_calls"] = [dict(row) for row in connection.execute(
+                    "SELECT tool_name,verdict,created_at FROM tool_calls WHERE attempt_id=? "
+                    "ORDER BY created_at", (attempt_id,))] if attempt_id else []
+        return problems
 
     def create_attempt(self, problem_id: str, actor: str, answer: str = "", status: str = "working") -> dict[str, Any]:
         self.get_problem(problem_id)

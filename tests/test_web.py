@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from circuit_mcp import paths, web
+from circuit_mcp.cards import build_card
 
 
 def client(tmp_path, monkeypatch):
@@ -382,3 +383,135 @@ def test_posting_attempt_id_inside_arguments_is_refused(tmp_path, monkeypatch):
         )
     assert response.status_code == 422
     assert "attempt_id" in response.json()["detail"]
+
+
+def test_the_canvas_feed_leaves_solutions_off_the_desk(tmp_path, monkeypatch):
+    """A solution is homework; the board deletes what it closes, so it never sees one."""
+    with client(tmp_path, monkeypatch) as browser:
+        database = web._db()
+        problem = database.create_problem("Exp 1 gain", "op-amps", "find the gain")
+        database.create_card("solution", "Exp 1 gain", {"given": [], "steps": [], "answer": {}},
+                             problem["id"])
+        database.create_card("formula", "gain", {"items": []}, problem["id"])
+
+        served = browser.get("/api/canvas").json()["items"]
+
+    assert [card["kind"] for card in served] == ["formula"]
+    assert [card["kind"] for card in database.list_cards()] == ["formula", "solution"]
+
+
+def _hw1_sheet(browser):
+    """The Module 2 HW1 fixture, stored the way the agent would store it."""
+    from tests.fixtures import module2_hw1 as hw
+
+    database = web._db()
+    for entry in hw.PROBLEMS:
+        problem = database.create_problem(entry["title"], entry["topic"], entry["prompt"],
+                                          source_page=entry["page"])
+        database.tag_problem(problem["id"], hw.TAG)
+        card = build_card("solution", entry["title"], entry["solution"])
+        database.create_card(card["kind"], card["title"], card["payload"], problem["id"])
+    return database
+
+
+def test_the_sheet_renders_all_eight_hw1_problems_in_page_order(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as browser:
+        _hw1_sheet(browser)
+        page = browser.get("/solutions?tag=m2-hw1")
+
+    assert page.status_code == 200
+    from tests.fixtures import module2_hw1 as hw
+    positions = [page.text.index(entry["title"]) for entry in hw.PROBLEMS]
+    assert positions == sorted(positions), "problems must appear in page order"
+    assert page.text.count('class="answer"') == 8
+    assert "1 MΩ" not in page.text  # the answer is shown as written, not re-formatted
+    assert "V/V" in page.text and "Ω" in page.text
+    assert "<math" in page.text
+
+
+def test_the_sheet_says_so_when_a_problem_has_no_solution(tmp_path, monkeypatch):
+    """A sheet that silently omits an unfinished problem hides the thing worth seeing."""
+    with client(tmp_path, monkeypatch) as browser:
+        database = web._db()
+        problem = database.create_problem("2.97 offset", "op-amps", "find Vos", source_page=9)
+        database.tag_problem(problem["id"], "m2-hw2")
+        page = browser.get("/solutions?tag=m2-hw2")
+
+    assert "2.97 offset" in page.text
+    assert "no solution yet" in page.text
+
+
+def test_the_sheet_needs_an_assignment_tag(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as browser:
+        assert browser.get("/solutions").status_code == 400
+
+
+def test_the_sheet_escapes_every_text_field(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as browser:
+        database = web._db()
+        problem = database.create_problem("<script>alert(1)</script>", "op-amps",
+                                          "prompt <b>bold</b>", source_page=1)
+        database.tag_problem(problem["id"], "m2-hw3")
+        page = browser.get("/solutions?tag=m2-hw3")
+
+    assert "<script>alert(1)</script>" not in page.text
+    assert "&lt;script&gt;" in page.text
+
+
+def test_the_sheet_stylesheet_prints_on_us_letter(tmp_path, monkeypatch):
+    """The one page that leaves the app: it has to come out of a printer readable."""
+    with client(tmp_path, monkeypatch) as browser:
+        css = browser.get("/assets/solution.css").text
+
+    assert "@page { size: letter" in css
+    assert "@media print" in css
+    assert "header.sheet button { display: none; }" in css, "the export button must not print"
+    assert "background: #fff" in css, "a dark ground prints as a black rectangle"
+    assert "break-inside: avoid" in css, "a problem split across pages is hard to grade"
+
+
+def test_the_sheet_shows_the_checks_that_stand_behind_an_answer(tmp_path, monkeypatch):
+    """The evidence line is the point of recording tool calls against an attempt."""
+    with client(tmp_path, monkeypatch) as browser:
+        database = web._db()
+        problem = database.create_problem("Exp 1 gain", "op-amps", "find the gain", source_page=1)
+        database.tag_problem(problem["id"], "m2-evidence")
+        attempt = database.create_attempt(problem["id"], "student")
+        database.record_tool_call("check_derivation", {"steps": ["1 + R2/R1"], "truth": "16"},
+                                  {"ok": True, "kind": "ok"}, 12.0, attempt["id"])
+        database.record_tool_call("check_equivalence", {"expr_a": "a", "expr_b": "b"},
+                                  {"ok": True, "equivalent": False, "oracle": "numeric"}, 8.0, attempt["id"])
+        database.record_tool_call("simulate_spice", {"netlist": "R1 1 0 1k"},
+                                  {"ok": True, "points": []}, 40.0, attempt["id"])
+        card = build_card("solution", "Exp 1 gain", {
+            "given": [{"name": "R1", "value": 1000, "unit": "Ω"},
+                      {"name": "R2", "value": 15000, "unit": "Ω"}],
+            "steps": [{"expression": "1 + R2/R1"}, {"expression": "16"}],
+            "answer": {"expression": "16", "unit": "V/V"},
+            "attempt_id": attempt["id"],
+        })
+        database.create_card(card["kind"], card["title"], card["payload"], problem["id"])
+
+        page = browser.get("/solutions?tag=m2-evidence").text
+
+    assert "checked with" in page
+    assert "check_derivation" in page and "check_equivalence" in page and "simulate_spice" in page
+    assert page.count(">pass<") == 1 and page.count(">fail<") == 1 and page.count(">computed<") == 1
+    assert "no checks recorded" not in page
+
+
+def test_a_solution_whose_attempt_has_no_checks_says_so(tmp_path, monkeypatch):
+    """Silence would read as verified; the sheet has to say nothing was recorded."""
+    with client(tmp_path, monkeypatch) as browser:
+        database = web._db()
+        problem = database.create_problem("Exp 2 gain", "op-amps", "find the gain", source_page=1)
+        database.tag_problem(problem["id"], "m2-silent")
+        attempt = database.create_attempt(problem["id"], "student")
+        card = build_card("solution", "Exp 2 gain", {
+            "given": [], "steps": [{"expression": "16"}],
+            "answer": {"expression": "16", "unit": "V/V"}, "attempt_id": attempt["id"]})
+        database.create_card(card["kind"], card["title"], card["payload"], problem["id"])
+
+        page = browser.get("/solutions?tag=m2-silent").text
+
+    assert "no checks recorded against this attempt" in page

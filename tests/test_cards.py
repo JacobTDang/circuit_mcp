@@ -13,8 +13,10 @@ from circuit_mcp.cards import KINDS, MAX_ITEMS, MAX_TEXT, CardError, build_card
 MATH = '<math xmlns="http://www.w3.org/1998/Math/MathML"'
 
 
-def test_the_kinds_are_exactly_the_ones_the_canvas_renders():
-    assert KINDS == ("formula", "walkthrough", "vocabulary", "breadboard", "expected")
+def test_the_kinds_are_the_desk_kinds_plus_the_solution_sheet():
+    """Every kind but `solution` is a desk card; a solution is homework, kept off it."""
+    assert KINDS == ("formula", "walkthrough", "vocabulary", "breadboard", "expected", "schematic",
+                     "solution")
 
 
 # --- formula ------------------------------------------------------------------
@@ -230,3 +232,89 @@ def test_a_bad_build_is_refused_naming_the_field():
         build_card("breadboard", "x", {"parts": []})
     with pytest.raises(CardError, match="at least one probe"):
         build_card("expected", "x", {**lab1.EXP7_DAC, "probes": []})
+
+
+# --- schematic ----------------------------------------------------------------
+
+INVERTING_NETLIST = "Vs 1 0 {V}\nRi 1 2 10e3\nRf 2 3 100e3\nE1 3 0 opamp 0 2 {A}"
+
+
+def test_a_schematic_card_draws_the_netlist_and_keeps_it():
+    card = build_card("schematic", "inverting amplifier", {"netlist": INVERTING_NETLIST})
+    payload = card["payload"]
+    assert payload["netlist"] == INVERTING_NETLIST
+    assert payload["svg"].startswith("<svg")
+    assert "100 kΩ" in payload["svg"] and "10 kΩ" in payload["svg"]
+    assert {element["name"] for element in payload["elements"]} == {"Vs", "Ri", "Rf", "E1"}
+
+
+def test_a_schematic_card_needs_a_netlist():
+    with pytest.raises(CardError, match="netlist"):
+        build_card("schematic", "nothing", {})
+
+
+def test_a_netlist_the_drawer_refuses_never_becomes_a_card():
+    with pytest.raises(CardError, match="F1"):
+        build_card("schematic", "controlled", {"netlist": "Vs 1 0 {V}\nF1 2 0 Vs 2"})
+
+
+# --- solution -----------------------------------------------------------------
+
+SOLUTION = {
+    "given": [{"name": "R1", "value": 1000, "unit": "Ω"}, {"name": "R2", "value": 15000, "unit": "Ω"}],
+    "steps": [
+        {"expression": "1 + R2/R1", "note": "noninverting gain"},
+        {"expression": "16", "note": "with the given values"},
+    ],
+    "answer": {"expression": "16", "unit": "V/V"},
+}
+
+
+def test_a_solution_checks_its_steps_with_the_given_values():
+    """1 + R2/R1 only equals 16 once the given values are substituted."""
+    card = build_card("solution", "Exp 1 gain", SOLUTION)
+    payload = card["payload"]
+    assert payload["verified"] is True
+    assert [given["name"] for given in payload["given"]] == ["R1", "R2"]
+    assert payload["given"][1]["unit"] == "Ω"
+    assert payload["answer"]["unit"] == "V/V"
+    assert all(step["mathml"].startswith(MATH) for step in payload["steps"])
+
+
+def test_a_solution_with_a_bad_step_is_refused_naming_it():
+    broken = {**SOLUTION, "steps": [
+        {"expression": "1 + R2/R1", "note": "gain"},
+        {"expression": "17", "note": "slipped"},
+    ]}
+    with pytest.raises(CardError, match="solution refused"):
+        build_card("solution", "Exp 1 gain", broken)
+
+
+def test_a_solution_answer_must_equal_its_last_step():
+    mismatched = {**SOLUTION, "answer": {"expression": "15", "unit": "V/V"}}
+    with pytest.raises(CardError, match="answer"):
+        build_card("solution", "Exp 1 gain", mismatched)
+
+
+def test_a_solution_may_carry_the_schematic_it_was_solved_on():
+    card = build_card("solution", "Exp 1 gain", {**SOLUTION, "schematic": INVERTING_NETLIST})
+    assert card["payload"]["schematic"]["svg"].startswith("<svg")
+
+
+def test_a_solution_needs_a_step_and_an_answer():
+    with pytest.raises(CardError, match="steps"):
+        build_card("solution", "empty", {"given": [], "answer": {"expression": "1", "unit": "V"}})
+    with pytest.raises(CardError, match="answer"):
+        build_card("solution", "no answer", {"given": [], "steps": SOLUTION["steps"]})
+
+
+def test_a_single_step_solution_is_a_stated_answer_with_nothing_to_check():
+    """One line of working has no transition; the answer must still match it."""
+    card = build_card("solution", "stated", {
+        "given": [], "steps": [{"expression": "16", "note": "read off the datasheet"}],
+        "answer": {"expression": "16", "unit": "V/V"}})
+    assert card["payload"]["verified"] is True
+    with pytest.raises(CardError, match="answer"):
+        build_card("solution", "stated", {
+            "given": [], "steps": [{"expression": "16"}],
+            "answer": {"expression": "17", "unit": "V/V"}})

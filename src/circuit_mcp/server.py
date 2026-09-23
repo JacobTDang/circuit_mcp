@@ -58,8 +58,10 @@ from mcp.types import CallToolResult, ImageContent, TextContent
 
 from .analysis import (
     AssumptionError,
+    PortError,
     ideal_limit,
     poles,
+    port_impedance as port_impedance_of,
     transfer,
     with_finite_gbw,
 )
@@ -97,7 +99,7 @@ from .mna import check_setup as _mna_check_setup
 from .mna import circuit_equations as _mna_circuit_equations
 from .ocr_client import OCR_WORKER
 from .parsing import ParseError, parse_equation, parse_expression
-from .steps import check_steps
+from .steps import check_steps, check_written
 from .spice import SpiceError, simulate_spice as _simulate_spice
 from .symbols import SubstitutionError, SymbolConflictError, bind
 from .storage import CommandCenterDB, StorageError, default_data_dir
@@ -117,6 +119,7 @@ TIMEOUT_SECONDS = 20.0
 _GAIN = "A"
 
 _MODES = ("finite", "ideal", "gbw")
+_INPUT_KINDS = ("voltage", "current")
 
 # lcapy's failure modes when a netlist is unbuildable or unsolvable. Mirrors
 # ``mna._LCAPY_ERRORS``: ``OSError`` is in the list because lcapy reads a
@@ -220,17 +223,34 @@ def _equation(
 # implementations
 # ---------------------------------------------------------------------------
 
-def _transfer(netlist: str, in_pos, in_neg, out_pos, out_neg) -> sp.Expr:
+def _transfer(netlist: str, in_pos, in_neg, out_pos, out_neg, kind: str = "voltage") -> sp.Expr:
     """``analysis.transfer``, with lcapy's failures named as circuit errors."""
     try:
-        return transfer(netlist, in_pos, in_neg, out_pos, out_neg)
+        return transfer(netlist, in_pos, in_neg, out_pos, out_neg, kind)
     except _LCAPY_ERRORS as exc:
         raise CircuitError(
             f"lcapy could not derive a transfer function from this netlist: {exc}"
         ) from exc
 
 
-def _derive(netlist: str, in_pos, in_neg, out_pos, out_neg, mode: str) -> dict[str, Any]:
+def _sources_across(netlist: str, pos, neg) -> list[str]:
+    """The independent sources wired straight across a port, by name."""
+    port = {str(pos), str(neg)}
+    return [
+        fields[0] for fields in (line.split() for line in netlist.splitlines())
+        if len(fields) >= 3 and fields[0][:1] in ("V", "I") and {fields[1], fields[2]} == port
+    ]
+
+
+def _derive(netlist: str, in_pos, in_neg, out_pos, out_neg, mode: str,
+            input_kind: str = "voltage") -> dict[str, Any]:
+    if input_kind not in _INPUT_KINDS:
+        return _failure(
+            "bad_input",
+            f"Unknown input kind {input_kind!r}. Use 'voltage' for a voltage "
+            f"across the input pair, or 'current' for a current driven into "
+            f"in_pos and out of in_neg.",
+        )
     if mode not in _MODES:
         return _failure(
             "bad_mode",
@@ -239,7 +259,7 @@ def _derive(netlist: str, in_pos, in_neg, out_pos, out_neg, mode: str) -> dict[s
             f"single-pole finite gain-bandwidth.",
         )
 
-    result = _transfer(netlist, in_pos, in_neg, out_pos, out_neg)
+    result = _transfer(netlist, in_pos, in_neg, out_pos, out_neg, input_kind)
 
     if mode != "finite":
         # ``sp.limit`` against a symbol the expression does not contain returns
@@ -264,8 +284,45 @@ def _derive(netlist: str, in_pos, in_neg, out_pos, out_neg, mode: str) -> dict[s
     return {
         "ok": True,
         "mode": mode,
+        "input": input_kind,
+        # Dimensionless for a voltage input, ohms for a current one. Saying so
+        # is what stops a transresistance being read as a gain.
+        "units": "V/V" if input_kind == "voltage" else "V/A",
         "transfer_function": _rendered(result),
         "poles": [_rendered(pole) for pole in poles(result)],
+        "symbols": sorted(bind(result)),
+    }
+
+
+def _port_impedance(netlist: str, pos, neg, mode: str) -> dict[str, Any]:
+    if mode not in _MODES:
+        return _failure(
+            "bad_mode",
+            f"Unknown mode {mode!r}. Use 'finite', 'ideal', or 'gbw'.",
+        )
+    try:
+        result = port_impedance_of(netlist, pos, neg)
+    except PortError as exc:
+        return _failure("port_error", str(exc))
+    except _LCAPY_ERRORS as exc:
+        raise CircuitError(f"lcapy could not measure this port: {exc}") from exc
+
+    if mode != "finite":
+        if _GAIN not in bind(result):
+            return _failure(
+                "missing_gain",
+                f"No symbol named {_GAIN!r} in this impedance "
+                f"({sorted(bind(result))}), so there is no open-loop gain to take "
+                f"a limit in. Use mode 'finite'.",
+            )
+        result = (
+            ideal_limit(result, _GAIN) if mode == "ideal" else with_finite_gbw(result, _GAIN)
+        )
+    return {
+        "ok": True,
+        "mode": mode,
+        "impedance": _rendered(result),
+        "removed_sources": _sources_across(netlist, pos, neg),
         "symbols": sorted(bind(result)),
     }
 
@@ -295,42 +352,23 @@ def _check_derivation(
     steps: list[str], truth: str, parameters: dict[str, float] | None = None
 ) -> dict[str, Any]:
     renames: dict[str, str] = {}
-    truth_expr = _expression(truth, "the ground truth", renames=renames)
 
-    # The truth's symbols seed the table; each step adds whatever it introduces,
-    # so step k+1 binds onto the objects step k already used.
-    known = dict(bind(truth_expr))
-    parsed: list[sp.Expr] = []
-    for index, text in enumerate(steps, start=1):
-        expr = _expression(text, f"step {index}", symbols=dict(known), renames=renames)
-        known.update(bind(expr))
-        parsed.append(expr)
+    def parse(text: Any, where: str, symbols: dict[str, sp.Symbol] | None) -> sp.Expr:
+        return _expression(text, where, symbols=symbols, renames=renames)
 
-    substitutions: dict[sp.Symbol, float] = {}
-    for name, value in (parameters or {}).items():
-        if name not in known:
-            raise SubstitutionError(f"parameter {name!r} is not present in the derivation")
-        if not isinstance(value, (int, float)) or not sp.Float(value).is_finite:
-            raise SubstitutionError(f"parameter {name!r} must be a finite number")
-        # JSON numbers arrive as binary floats. Treat their shortest decimal
-        # spelling as the student's intended exact value; otherwise 0.000001
-        # becomes a nearby Float and exact algebra reports phantom errors.
-        substitutions[known[name]] = sp.Rational(str(value))
-    checked_steps = [step.subs(substitutions) for step in parsed]
-    checked_truth = truth_expr.subs(substitutions)
-    result = check_steps(checked_steps, checked_truth)
+    checked = check_written(parse, list(steps), truth, parameters)
     return {
-        "ok": result.ok,
-        "kind": result.kind,
-        "message": result.message,
-        "step_index": result.step_index,
-        "counterexample": _stringified(result.counterexample),
-        "steps": [_rendered(step) for step in parsed],
-        "truth": _rendered(truth_expr),
+        "ok": checked.result.ok,
+        "kind": checked.result.kind,
+        "message": checked.result.message,
+        "step_index": checked.result.step_index,
+        "counterexample": _stringified(checked.result.counterexample),
+        "steps": [_rendered(step) for step in checked.steps],
+        "truth": _rendered(checked.truth),
         "renamed_symbols": renames,
-        "parameters": dict(parameters or {}),
-        "evaluated_steps": [_rendered(step) for step in checked_steps],
-        "evaluated_truth": _rendered(checked_truth),
+        "parameters": dict(checked.parameters),
+        "evaluated_steps": [_rendered(step) for step in checked.evaluated_steps],
+        "evaluated_truth": _rendered(checked.evaluated_truth),
     }
 
 
@@ -484,6 +522,7 @@ _IMPLEMENTATIONS = {
     "build_card": _build_card,
     "compare_readings": _compare_readings,
     "derive": _derive,
+    "port_impedance": _port_impedance,
     "check_equivalence": _check_equivalence,
     "check_derivation": _check_derivation,
     "circuit_equations": _circuit_equations,
@@ -1106,6 +1145,7 @@ def derive(
     out_pos: str | int,
     out_neg: str | int,
     mode: str = "finite",
+    input: str = "voltage",
     attempt_id: str | None = None,
 ) -> dict[str, Any]:
     """Ground-truth transfer function between two node pairs, and its poles.
@@ -1121,6 +1161,14 @@ def derive(
     * ``ideal`` -- ``A`` taken to infinity, i.e. the textbook result.
     * ``gbw`` -- ``A`` replaced by ``A0 / (1 + s/wp)``, whose pole is the
       gain-bandwidth tradeoff.
+
+    ``input`` says what drives the input pair. ``voltage`` (the default) applies
+    ``V(in_pos) - V(in_neg)`` and returns a dimensionless gain. ``current``
+    drives a current *into* ``in_pos`` and out of ``in_neg`` and returns a
+    transresistance in ohms -- for a photodiode, a summing node, or any other
+    current-driven input. ``units`` in the result says which you got. Writing a
+    current source as a voltage source behind a resistor and mapping the current
+    by hand is a sign error waiting to happen, and this is here to avoid it.
 
     ``ideal`` and ``gbw`` require the open-loop gain to be named ``A`` in the
     netlist and are refused otherwise, because substituting a symbol that is not
@@ -1142,7 +1190,34 @@ def derive(
         out_pos=out_pos,
         out_neg=out_neg,
         mode=mode,
+        input_kind=input,
     )
+
+
+@server.tool()
+def port_impedance(
+    netlist: str, pos: str | int, neg: str | int, mode: str = "finite",
+    attempt_id: str | None = None,
+) -> dict[str, Any]:
+    """Impedance looking into a port, with the independent sources killed.
+
+    This is the input or output resistance a circuits course asks for, derived
+    symbolically rather than measured in a simulation.
+
+    Any independent source wired straight across the port is *removed* first,
+    not killed: killing a voltage source shorts it, and a source across the
+    port is exactly how the input being measured is drawn. ``removed_sources``
+    names what went, so a surprising answer can be traced to it.
+
+    ``mode`` works as it does in :func:`derive`. A port shorted by a wire, or
+    one nothing else in the circuit reaches, is refused rather than answered
+    with zero or infinity. A virtual ground whose impedance merely tends to
+    zero as ``A`` grows is a real answer and is returned.
+
+    Pass ``attempt_id`` to file this check against an attempt; it then appears
+    in ``attempt_history`` with its verdict.
+    """
+    return _recorded("port_impedance", attempt_id, netlist=netlist, pos=pos, neg=neg, mode=mode)
 
 
 @server.tool()
@@ -1763,9 +1838,24 @@ def canvas_card_add(
 
     The ``formula``, ``walkthrough`` and ``vocabulary`` cards take expressions in
     the same restricted syntax as ``check_derivation``, rendered to MathML by the
-    server; ``breadboard`` and ``expected`` take a build description and no
-    expressions at all. The browser escapes every text field either way.
+    server; ``breadboard`` and ``expected`` take a build description, and
+    ``schematic`` takes ``{"netlist": ...}`` -- the same lcapy netlist ``derive``
+    was given, so the drawing and the maths cannot describe different circuits.
+    ``solution`` is a finished problem for the solutions sheet rather than the
+    desk: ``given`` values with units, ``steps`` checked with those values
+    substituted, an ``answer`` that must equal the last step, an optional
+    ``schematic`` netlist, and the ``attempt_id`` whose recorded checks are its
+    evidence. It needs a ``problem_id``, and closing a desk card never reaches
+    it.
+    The drawing is read back out of its own geometry and refused unless it still
+    says that netlist. The browser escapes every text field either way.
     """
+    if kind == "solution" and not problem_id:
+        return _failure(
+            "bad_card",
+            "a solution belongs to a problem: pass the problem_id it answers, so the "
+            "sheet can group it with the rest of that assignment.",
+        )
     built = _guarded("build_card", kind=kind, title=title, content=content)
     if not built.get("ok"):
         return built
