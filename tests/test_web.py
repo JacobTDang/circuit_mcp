@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from circuit_mcp import web
+from circuit_mcp import paths, web
 from circuit_mcp.cards import build_card
 
 
@@ -63,11 +63,12 @@ def test_page_title_block_is_removed_and_refresh_stays_reachable(tmp_path, monke
         assert "app.js?v=canvas-15" not in page.text
         aside = page.text.split("<aside>", 1)[1].split("</aside>", 1)[0]
         assert 'id="refresh"' in aside
-        assert "LOCAL · PORT 2300" in aside
+        assert 'LOCAL · PORT <span id="localPort">' in aside
         app_script = browser.get("/assets/app.js").text
         assert "$('#title').textContent=names[view]" not in app_script
         assert "const t=$('#title');if(t)t.textContent=names[view]" in app_script
         assert "$('#refresh').onclick=refresh" in app_script
+        assert "localPort.textContent=location.port" in app_script
 
 
 def test_workspace_canvas_grows_to_contain_its_cards_instead_of_clipping(tmp_path, monkeypatch):
@@ -341,7 +342,7 @@ def test_the_canvas_reconciles_instead_of_rebuilding_every_card(tmp_path, monkey
 
 def test_the_suite_cannot_write_to_the_real_command_center_store(isolated_command_center):
     """A route that records data must never land rows in the developer's database."""
-    project_store = web.ROOT / ".local" / "command_center"
+    project_store = paths.REPO_ROOT / ".local" / "command_center"
 
     assert web.DATA == isolated_command_center
     assert web.DATA != project_store
@@ -350,7 +351,7 @@ def test_the_suite_cannot_write_to_the_real_command_center_store(isolated_comman
 
 def test_generate_records_the_visual_into_the_isolated_store(monkeypatch):
     """The route that persists a render must land it in the test's own store."""
-    project_store = web.ROOT / ".local" / "command_center"
+    project_store = paths.REPO_ROOT / ".local" / "command_center"
     before = _visual_count(project_store)
 
     monkeypatch.setattr(web.SHOWMAN, "start", lambda *a, **k: {"ok": True, "authoring": "openrouter"})

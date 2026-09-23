@@ -15,8 +15,9 @@ import time
 from collections import deque
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-RUNTIME = ROOT / ".local" / "runtime"
+from . import paths
+
+RUNTIME = paths.runtime_dir()
 UXPLAY = RUNTIME / "uxplay" / "bin" / "uxplay"
 WINDOW_INFO = RUNTIME / "bin" / "window_info"
 USB_CAPTURE = RUNTIME / "bin" / "ipad_usb_capture"

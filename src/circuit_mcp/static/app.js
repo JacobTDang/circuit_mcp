@@ -81,3 +81,4 @@ document.addEventListener('pointerover',e=>{const[card,t]=boardTarget(e);if(!car
 document.addEventListener('pointerout',e=>{const[card,t]=boardTarget(e);if(!card||card.dataset.pinned||(e.relatedTarget&&card.contains(e.relatedTarget)))return;boardFocus(card)});
 document.addEventListener('focusin',e=>{const[card,t]=boardTarget(e);if(!card||card.dataset.pinned)return;boardFocus(card,...boardKeys(t))});
 document.addEventListener('click',e=>{const[card,t]=boardTarget(e);if(!card||e.target.closest('.workspace-item-head'))return;const key=t?(t.hasAttribute('data-step')?'s'+t.getAttribute('data-step'):'n'+t.getAttribute('data-nets')):'';if(!t||card.dataset.pinned===key){delete card.dataset.pinned;boardFocus(card);return}card.dataset.pinned=key;boardFocus(card,...boardKeys(t))});
+{const localPort=$('#localPort');if(localPort)localPort.textContent=location.port||'80'}

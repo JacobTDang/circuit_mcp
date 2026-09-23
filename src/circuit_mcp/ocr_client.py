@@ -14,12 +14,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import paths
+
 HEADER = struct.Struct("!Q")
 OCR_TIMEOUT_SECONDS = 120.0
 PAGE_TIMEOUT_SECONDS = 600.0      # up to 60 expressions, each a full UniMERNet pass
 MAX_PAGE_EXPRESSIONS = 60         # matches the worker's own cap
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
-ROOT = Path(__file__).resolve().parents[2]
 
 
 class OCRWorkerError(RuntimeError):
@@ -108,19 +109,8 @@ class OCRWorker:
         return None if process is None else process.pid
 
     def _configuration(self) -> tuple[Path, Path, str]:
-        python = Path(
-            os.environ.get("CIRCUIT_MCP_OCR_PYTHON", ROOT / ".venv-ocr.nosync/bin/python")
-        ).expanduser()
-        if not python.is_absolute():
-            python = ROOT / python
-        # Do not resolve this symlink: a venv's python commonly points at the
-        # base interpreter, and resolving it discards the venv site-packages.
-        python = python.absolute()
-        model = Path(
-            os.environ.get("CIRCUIT_MCP_OCR_MODEL", ROOT / "models/unimernet_small")
-        ).expanduser().resolve()
         device = os.environ.get("CIRCUIT_MCP_OCR_DEVICE", "auto")
-        return python, model, device
+        return paths.ocr_python(), paths.ocr_model(), device
 
     def availability(self) -> dict[str, Any]:
         python, model, device = self._configuration()

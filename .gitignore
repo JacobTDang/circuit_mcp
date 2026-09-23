@@ -27,5 +27,7 @@ output/playwright/
 # linkC multi-agent coordination state
 .linkc/
 
-# Swift build output: 250 MB of module cache, rebuilt by swift build
+# Swift package build output for the macOS app: 250 MB of module cache that
+# swift build regenerates.
 macos/.build/
+macos/.swiftpm/

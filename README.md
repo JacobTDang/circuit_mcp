@@ -251,6 +251,70 @@ configure_workspace(x=<left>, y=<top>, width=<width>, height=<height>)
 It is saved in the ignored `.local/workspace.json`. Explicit coordinates on a
 later `transcribe_workspace` call override the saved values for that call.
 
+## macOS app: Andrew's PrepPal
+
+`Andrew's PrepPal.app` runs the command center in its own window. There's no
+browser tab and no `run_ui.py`. The app starts the server itself on a free local
+port, shows the desk once the server answers, and stops the server when you quit.
+
+Build it on an Apple silicon Mac with uv installed:
+
+```console
+uv python install 3.12
+macos/build_app.sh
+macos/smoke_test.sh
+```
+
+That produces `dist/Andrew's PrepPal.app` and `dist/PrepPal-<version>.dmg`.
+
+- **Data:** `~/Library/Application Support/PrepPal/`. To bring over a
+  checkout's `.local/command_center`, use **Import Existing Data…**. Stop
+  `run_ui.py` first. The app's current data is moved to a backup folder, not
+  deleted.
+- **Logs:** `~/Library/Logs/PrepPal/`, with the last five launches kept. If the
+  server can't start, the app shows the end of the log.
+- **OpenRouter key and model:** stored in the macOS Keychain. Set them with
+  **Settings…**, and use a free model.
+- **Claude Code:** move the app to Applications, choose **Copy MCP Command**,
+  and paste the result into your MCP configuration.
+- **Requirements:** Apple silicon and macOS 14 or later.
+
+This release bundles the core tools. Circuit simulation, Showman visuals, iPad
+capture, and handwriting OCR are added in later releases. Until then, each one
+reports itself unavailable, as it does in a checkout without that runtime.
+
+### Opening it on another Mac
+
+The app is signed ad hoc, not with a Developer ID, and it is not notarized. So
+the Mac that did not build it treats it as downloaded software, and the first
+launch needs your say-so.
+
+1. **Open the disk image and drag the app into Applications. Open it from
+   there, not from the disk image.** macOS runs an app opened straight out of a
+   downloaded image from a randomized read-only copy of itself — app
+   translocation. The app detects that and says so, because the path it is
+   running from will not exist next time: **Copy MCP Command** would hand Claude
+   Code a command that stops working as soon as the image is ejected.
+2. Open it. macOS refuses the first time and says it cannot verify the developer.
+   Leave that dialog, open **System Settings → Privacy & Security**, scroll to
+   Security, and press **Open Anyway** next to the app's name. (On macOS 14 the
+   same permission is given by opening the app once with Control-click, **Open**,
+   then **Open** in the dialog.) You are asked once per copy of the app.
+3. If it is still refused, clear the download flag on the copy in Applications
+   and go back to step 2:
+
+   ```console
+   xattr -d com.apple.quarantine "/Applications/Andrew's PrepPal.app"
+   ```
+
+   That changes this one app. Leave Gatekeeper itself alone: turning it off
+   system-wide to install one tutoring app is a bad trade.
+
+Signing and notarizing it requires Developer ID signing (with the hardened
+runtime and a timestamp), submission to Apple's
+notary service, and stapling the result; those steps would expand the `sign` and
+packaging stages of `macos/build_app.sh`.
+
 ## Development
 
 Create a Python 3.12+ virtual environment and install the project with its test
