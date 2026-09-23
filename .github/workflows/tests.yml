@@ -1,0 +1,47 @@
+name: tests
+
+# Every push and every pull request. The suite is what says a change is safe to
+# merge, and until now nothing ran it but the person who wrote the change.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A second push to the same branch makes the first run's answer irrelevant.
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    # Linux only. The macOS-specific paths -- iPad capture, AirPlay, USB -- are
+    # monkeypatched in the tests, so none of them needs a real Mac.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The one real external dependency. spice.py looks for ngspice and raises
+      # a loud SpiceError when it is missing, rather than skipping, so a runner
+      # without it would fail the simulation tests for the wrong reason.
+      - name: Install ngspice
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ngspice
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # --locked fails rather than re-resolving: CI runs the dependency set the
+      # lockfile pins, or it says the lockfile is stale. pytest lives in the dev
+      # extra, so a bare `uv sync` would quietly install no test runner.
+      - name: Install dependencies
+        run: uv sync --locked --extra dev
+
+      - name: Run the test suite
+        run: uv run pytest -q
