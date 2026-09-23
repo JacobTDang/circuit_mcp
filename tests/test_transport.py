@@ -44,6 +44,7 @@ async def _exercise_server(data_dir: Path) -> None:
             tools = await session.list_tools()
             assert {tool.name for tool in tools.tools} == {
                 "derive",
+                "port_impedance",
                 "check_equivalence",
                 "check_derivation",
                 "circuit_equations",

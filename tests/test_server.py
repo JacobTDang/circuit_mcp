@@ -30,6 +30,7 @@ import sympy as sp
 from circuit_mcp import server as server_module
 from circuit_mcp.analysis import transfer
 from circuit_mcp.equivalence import equivalent
+from circuit_mcp.equivalence import equivalent
 from circuit_mcp.server import (
     check_derivation,
     check_equivalence,
@@ -45,6 +46,7 @@ from circuit_mcp.server import (
     circuit_equations,
     characterize_transfer,
     derive,
+    port_impedance,
     simulate_spice,
     summing_dac_output,
 )
@@ -75,6 +77,7 @@ TOOL_NAMES = {
     "alias_frequency",
     "bjt_emitter_follower",
     "derive",
+    "port_impedance",
     "check_equivalence",
     "check_derivation",
     "circuit_equations",
@@ -1168,3 +1171,51 @@ def test_a_storage_failure_keeps_the_result_and_warns(tmp_path, monkeypatch):
 
     assert result["ok"] is True and result["equivalent"] is True
     assert "disk is full" in result["evidence_warning"]
+
+
+# --- a current input, and the resistance looking into a port -------------------
+
+T_NETWORK = """
+Is 0 1 {Is}
+R1 1 2 {R1}
+R2 2 0 {R2}
+R3 2 3 {R3}
+E1 3 0 opamp 0 1 {A}
+"""
+
+
+def test_derive_takes_a_current_input_and_returns_a_transresistance():
+    result = derive(T_NETWORK, 0, 1, 3, 0, "ideal", input="current")
+    assert result["ok"] is True
+    assert result["input"] == "current"
+    assert equivalent(
+        sp.sympify(result["transfer_function"]["text"]),
+        sp.sympify("(R1*R2 + R1*R3 + R2*R3)/R2"),
+    ).equivalent
+
+
+def test_derive_still_defaults_to_a_voltage_input():
+    result = derive(INVERTING, 1, 0, 3, 0, "finite")
+    assert result["input"] == "voltage"
+    assert result["units"] == "V/V"
+    assert exact(result["transfer_function"]) == transfer(INVERTING, 1, 0, 3, 0)
+
+
+def test_derive_refuses_an_unknown_input_kind():
+    result = derive(INVERTING, 1, 0, 3, 0, "ideal", input="charge")
+    assert result["ok"] is False
+    assert result["error"] == "bad_input"
+
+
+def test_port_impedance_reports_the_input_resistance_of_an_inverting_amplifier():
+    result = port_impedance("Vi 1 0 {Vi}\nR1 1 2 15e3\nRf 2 3 90e3\nE1 3 0 opamp 0 2 {A}", 1, 0, "ideal")
+    assert result["ok"] is True
+    assert result["impedance"]["text"] == "15000"
+    assert result["removed_sources"] == ["Vi"]
+
+
+def test_port_impedance_refuses_a_shorted_port():
+    result = port_impedance("W 1 2\nR1 2 0 1e3", 1, 2, "finite")
+    assert result["ok"] is False
+    assert result["error"] == "port_error"
+    assert "short" in result["message"]

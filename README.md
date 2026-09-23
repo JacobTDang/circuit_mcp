@@ -17,7 +17,8 @@ It currently provides fifty-six tools:
 
 | Tool | Purpose |
 |---|---|
-| `derive` | Derive a transfer function and poles in finite, ideal, or finite-GBW mode |
+| `derive` | Derive a transfer function and poles in finite, ideal, or finite-GBW mode; a voltage or a current input |
+| `port_impedance` | Impedance looking into a port, with the independent sources killed; input and output resistance, derived rather than simulated |
 | `check_equivalence` | Compare two expressions and return a counterexample when they differ |
 | `check_derivation` | Locate the first invalid algebra transition, setup error, or wrong final answer; optional parameters support symbolic-to-numeric steps |
 | `circuit_equations` | Return lcapy's nodal system and solved circuit quantities |

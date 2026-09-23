@@ -6,6 +6,7 @@ from circuit_mcp.analysis import (
     S, AssumptionError, transfer, ideal_limit, with_finite_gbw, poles,
 )
 from circuit_mcp.equivalence import equivalent
+from circuit_mcp.symbols import bind
 
 INVERTING = """
 Vs 1 0 {V}
@@ -92,3 +93,81 @@ def test_substituting_a_missing_gain_symbol_is_loud():
     H = transfer(INVERTING, 1, 0, 3, 0)
     with pytest.raises(SubstitutionError):
         with_finite_gbw(H, "NotAGain")
+
+
+# --- a current input, and the resistance looking into a port -------------------
+
+# Module 2 HW1 Problem 3: a current source into the summing node (1), and a T
+# network -- R1 to the mid node (2), R2 from there to ground, R3 on to the output.
+T_NETWORK = """
+Is 0 1 {Is}
+R1 1 2 {R1}
+R2 2 0 {R2}
+R3 2 3 {R3}
+E1 3 0 opamp 0 1 {A}
+"""
+
+# Problem 2.9 (a)-(d): four inverting amplifiers, each fed through 15 kOhm.
+P29 = {
+    "a": "R1 1 2 15e3\nRf 2 3 90e3\nE1 3 0 opamp 0 2 {A}",
+    "b": "R1 1 2 15e3\nRf 2 3 90e3\nRl 3 0 15e3\nE1 3 0 opamp 0 2 {A}",
+    "c": "R1 1 2 15e3\nRs 2 0 15e3\nRf 2 3 90e3\nE1 3 0 opamp 0 2 {A}",
+    "d": "R1 1 2 15e3\nRf 2 3 90e3\nRp 4 0 15e3\nE1 3 0 opamp 4 2 {A}",
+}
+
+
+def test_a_current_input_derives_the_t_network_transresistance():
+    """The T network is why this exists: the current source had to be hand-mapped before."""
+    from circuit_mcp.analysis import transfer
+
+    result = ideal_limit(transfer(T_NETWORK, 0, 1, 3, 0, kind="current"))
+    # Built from the result's own symbols: lcapy's carry assumptions, and a bare
+    # Symbol("R1") is a different object that compares unequal while printing the same.
+    known = bind(result)
+    R1, R2, R3 = known["R1"], known["R2"], known["R3"]
+    assert equivalent(result, (R1 * R2 + R1 * R3 + R2 * R3) / R2).equivalent
+
+
+def test_the_current_input_direction_sets_the_sign():
+    """Current into the summing node inverts; out of it does not."""
+    from circuit_mcp.analysis import transfer
+
+    into_node = ideal_limit(transfer(T_NETWORK, 1, 0, 3, 0, kind="current"))
+    out_of_node = ideal_limit(transfer(T_NETWORK, 0, 1, 3, 0, kind="current"))
+    assert equivalent(into_node, -out_of_node).equivalent
+
+
+def test_an_unknown_input_kind_is_refused():
+    from circuit_mcp.analysis import transfer
+
+    with pytest.raises(ValueError, match="voltage"):
+        transfer(INVERTING, 1, 0, 3, 0, kind="charge")
+
+
+@pytest.mark.parametrize("name", sorted(P29))
+def test_port_impedance_is_the_series_resistor_on_every_2_9_circuit(name):
+    from circuit_mcp.analysis import port_impedance
+
+    assert ideal_limit(port_impedance(P29[name], 1, 0)) == 15000
+
+
+def test_a_source_across_the_port_is_removed_rather_than_killed():
+    """A killed voltage source is a short, so leaving it in would answer 0 every time."""
+    from circuit_mcp.analysis import port_impedance
+
+    driven = "Vi 1 0 {Vi}\n" + P29["a"]
+    assert ideal_limit(port_impedance(driven, 1, 0)) == 15000
+
+
+def test_a_shorted_port_is_refused_rather_than_answered_zero():
+    from circuit_mcp.analysis import PortError, port_impedance
+
+    with pytest.raises(PortError, match="short"):
+        port_impedance("W 1 2\nR1 2 0 1e3", 1, 2)
+
+
+def test_a_port_the_circuit_does_not_reach_is_refused():
+    from circuit_mcp.analysis import PortError, port_impedance
+
+    with pytest.raises(PortError):
+        port_impedance("R1 1 0 1e3\nR2 2 3 1e3", 2, 3)
