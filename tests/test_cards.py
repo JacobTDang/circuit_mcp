@@ -13,8 +13,10 @@ from circuit_mcp.cards import KINDS, MAX_ITEMS, MAX_TEXT, CardError, build_card
 MATH = '<math xmlns="http://www.w3.org/1998/Math/MathML"'
 
 
-def test_the_kinds_are_exactly_the_ones_the_canvas_renders():
-    assert KINDS == ("formula", "walkthrough", "vocabulary", "breadboard", "expected", "schematic")
+def test_the_kinds_are_the_desk_kinds_plus_the_solution_sheet():
+    """Every kind but `solution` is a desk card; a solution is homework, kept off it."""
+    assert KINDS == ("formula", "walkthrough", "vocabulary", "breadboard", "expected", "schematic",
+                     "solution")
 
 
 # --- formula ------------------------------------------------------------------
@@ -254,3 +256,53 @@ def test_a_schematic_card_needs_a_netlist():
 def test_a_netlist_the_drawer_refuses_never_becomes_a_card():
     with pytest.raises(CardError, match="F1"):
         build_card("schematic", "controlled", {"netlist": "Vs 1 0 {V}\nF1 2 0 Vs 2"})
+
+
+# --- solution -----------------------------------------------------------------
+
+SOLUTION = {
+    "given": [{"name": "R1", "value": 1000, "unit": "Ω"}, {"name": "R2", "value": 15000, "unit": "Ω"}],
+    "steps": [
+        {"expression": "1 + R2/R1", "note": "noninverting gain"},
+        {"expression": "16", "note": "with the given values"},
+    ],
+    "answer": {"expression": "16", "unit": "V/V"},
+}
+
+
+def test_a_solution_checks_its_steps_with_the_given_values():
+    """1 + R2/R1 only equals 16 once the given values are substituted."""
+    card = build_card("solution", "Exp 1 gain", SOLUTION)
+    payload = card["payload"]
+    assert payload["verified"] is True
+    assert [given["name"] for given in payload["given"]] == ["R1", "R2"]
+    assert payload["given"][1]["unit"] == "Ω"
+    assert payload["answer"]["unit"] == "V/V"
+    assert all(step["mathml"].startswith(MATH) for step in payload["steps"])
+
+
+def test_a_solution_with_a_bad_step_is_refused_naming_it():
+    broken = {**SOLUTION, "steps": [
+        {"expression": "1 + R2/R1", "note": "gain"},
+        {"expression": "17", "note": "slipped"},
+    ]}
+    with pytest.raises(CardError, match="solution refused"):
+        build_card("solution", "Exp 1 gain", broken)
+
+
+def test_a_solution_answer_must_equal_its_last_step():
+    mismatched = {**SOLUTION, "answer": {"expression": "15", "unit": "V/V"}}
+    with pytest.raises(CardError, match="answer"):
+        build_card("solution", "Exp 1 gain", mismatched)
+
+
+def test_a_solution_may_carry_the_schematic_it_was_solved_on():
+    card = build_card("solution", "Exp 1 gain", {**SOLUTION, "schematic": INVERTING_NETLIST})
+    assert card["payload"]["schematic"]["svg"].startswith("<svg")
+
+
+def test_a_solution_needs_a_step_and_an_answer():
+    with pytest.raises(CardError, match="steps"):
+        build_card("solution", "empty", {"given": [], "answer": {"expression": "1", "unit": "V"}})
+    with pytest.raises(CardError, match="answer"):
+        build_card("solution", "no answer", {"given": [], "steps": SOLUTION["steps"]})

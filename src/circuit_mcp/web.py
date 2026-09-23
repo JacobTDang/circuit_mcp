@@ -622,7 +622,7 @@ def visuals(problem_id: str = "", limit: int = 50) -> dict[str, Any]:
 def canvas_cards(problem_id: str = "", limit: int = 50) -> dict[str, Any]:
     """Cards the agent has put on the canvas. The board polls this; it never authors."""
     try:
-        items = _db().list_cards(problem_id or None, limit)
+        items = _db().list_cards(problem_id or None, limit, without_kind="solution")
     except StorageError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True, "items": items}

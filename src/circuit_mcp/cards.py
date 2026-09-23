@@ -21,10 +21,13 @@ from .breadboard_view import layout_payload
 from .expect import ExpectError, expectations
 from .schematic import SchematicError, draw as draw_schematic, svg as schematic_svg
 from .parsing import ParseError, parse_as_written, parse_expression
-from .steps import check_steps
+from .equivalence import equivalent
+from .steps import check_steps, check_written
+from .symbols import SubstitutionError
 from .symbols import bind
 
-KINDS = ("formula", "walkthrough", "vocabulary", "breadboard", "expected", "schematic")
+KINDS = ("formula", "walkthrough", "vocabulary", "breadboard", "expected", "schematic",
+         "solution")
 MAX_ITEMS = 24
 MAX_TITLE = 120
 MAX_TEXT = 600
@@ -202,8 +205,97 @@ def _schematic(content: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _given(content: dict[str, Any]) -> list[dict[str, Any]]:
+    """The values the problem states, each with its unit, as chips."""
+    entries = content.get("given", [])
+    if not isinstance(entries, list):
+        raise CardError("given must be a list")
+    if len(entries) > MAX_ITEMS:
+        raise CardError(f"given may hold at most {MAX_ITEMS} entries")
+    chips = []
+    for index, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            raise CardError(f"given {index} must be an object")
+        name = _text(entry.get("name"), f"given {index} name", 60)
+        value = entry.get("value")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise CardError(f"given {index} value must be a number")
+        chips.append({"name": name, "value": value,
+                      "unit": _text(entry.get("unit"), f"given {index} unit", 20, required=False)})
+    return chips
+
+
+def _solution(content: dict[str, Any]) -> dict[str, Any]:
+    """A finished problem: what was given, the work, the answer, and its evidence.
+
+    The steps are checked the way ``check_derivation`` checks them, with the
+    given values substituted, so a solution card cannot show working that does
+    not hold. The answer must equal the last step, because an answer box saying
+    something the work never reached is the one thing a graded page must not do.
+    """
+    chips = _given(content)
+    entries = _entries(content, "steps")
+    answer = content.get("answer")
+    if not isinstance(answer, dict):
+        raise CardError("a solution needs an answer with its unit")
+    answer_text = _text(answer.get("expression"), "answer expression", MAX_EXPRESSION)
+    unit = _text(answer.get("unit"), "answer unit", 20, required=False)
+
+    texts = [_text(entry.get("expression"), f"step {index} expression", MAX_EXPRESSION)
+             for index, entry in enumerate(entries, start=1)]
+    parameters = {chip["name"]: chip["value"] for chip in chips}
+
+    def parse(text: Any, where: str, symbols: dict[str, sp.Symbol] | None) -> sp.Expr:
+        return _expression(text, where, symbols)
+
+    try:
+        checked = check_written(parse, texts[:-1], texts[-1], parameters)
+    except SubstitutionError as exc:
+        raise CardError(f"solution refused: {exc}") from exc
+    if not checked.result.ok:
+        raise CardError(f"solution refused: {checked.result.message}")
+    last = checked.evaluated_truth
+    answer_expr = _expression(answer_text, "answer", dict(bind(checked.truth)))
+    if not equivalent(answer_expr.subs(
+            {bind(checked.truth)[name]: sp.Rational(str(value))
+             for name, value in parameters.items() if name in bind(checked.truth)}), last).equivalent:
+        raise CardError(
+            f"solution refused: the answer {answer_text!r} is not what the last step reaches"
+        )
+
+    steps = []
+    for index, entry in enumerate(entries, start=1):
+        expression = texts[index - 1]
+        expr = (checked.steps + [checked.truth])[index - 1]
+        mathml, as_written = render(expression, expr)
+        steps.append({
+            "expression": expression,
+            "note": _text(entry.get("note"), f"step {index} note", MAX_TEXT, required=False),
+            "mathml": mathml, "as_written": as_written,
+        })
+    answer_mathml, answer_as_written = render(answer_text, answer_expr)
+    payload = {
+        "given": chips,
+        "steps": steps,
+        "answer": {"expression": answer_text, "unit": unit,
+                   "mathml": answer_mathml, "as_written": answer_as_written},
+        "verified": True,
+        "attempt_id": _text(content.get("attempt_id"), "attempt_id", 64, required=False),
+    }
+    netlist = content.get("schematic")
+    if netlist is not None:
+        if not isinstance(netlist, str) or not netlist.strip():
+            raise CardError("schematic must be a netlist")
+        try:
+            payload["schematic"] = {"netlist": netlist, "svg": schematic_svg(draw_schematic(netlist))}
+        except SchematicError as exc:
+            raise CardError(f"solution refused: {exc}") from exc
+    return payload
+
+
 _BUILDERS = {"formula": _formula, "walkthrough": _walkthrough, "vocabulary": _vocabulary,
-             "breadboard": _breadboard, "expected": _expected, "schematic": _schematic}
+             "breadboard": _breadboard, "expected": _expected, "schematic": _schematic,
+             "solution": _solution}
 
 
 def build_card(kind: str, title: str, content: Any) -> dict[str, Any]:
