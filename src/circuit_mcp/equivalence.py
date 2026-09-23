@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 import sympy as sp
 
+from .parsing import expand_sums
 from .symbols import assert_no_conflicts
 
 # Fixed, varied rationals so results are reproducible across runs. Values are
@@ -55,8 +56,12 @@ def _symbolic_bounds(*expressions: sp.Expr) -> set[sp.Symbol]:
 
 
 def _expanded_at(expressions: tuple[sp.Expr, sp.Expr], bound: sp.Symbol, terms: int) -> tuple[sp.Expr, sp.Expr]:
-    """Both sides with the bound set to a concrete term count, sums carried out."""
-    return tuple(expression.subs({bound: terms}).doit() for expression in expressions)  # type: ignore[return-value]
+    """Both sides with the bound set to a concrete term count, sums written out.
+
+    Written out rather than ``doit()``-ed: a per-resistor sum names ``RN_i``,
+    and until that is renamed per term every term is the same one.
+    """
+    return tuple(expand_sums(expression, bound, terms).doit() for expression in expressions)  # type: ignore[return-value]
 
 
 def equivalent(a: sp.Expr, b: sp.Expr) -> EquivalenceResult:

@@ -134,6 +134,55 @@ def _parallel(*values: object) -> object:
         raise ParseError("par() needs at least one value.")
     return sp.Pow(sp.Add(*(sp.Pow(value, -1) for value in values)), -1)
 
+class IndexError_(ParseError):
+    """A bounded sum whose indexed names cannot be expanded as written."""
+
+
+def _indexed_names(expression: object, index: object) -> dict:
+    """Symbols named for the index: ``RN_i`` under index ``i`` is one per term."""
+    suffix = f"_{index}"
+    return {symbol: str(symbol)[: -len(suffix)]
+            for symbol in expression.free_symbols
+            if str(symbol).endswith(suffix) and str(symbol) != suffix}
+
+
+def term_of(expression: object, index: object, value: int) -> object:
+    """Term ``value`` of a sum: the index takes it, and every name indexed by it follows.
+
+    ``sum_n(Rf/RN_i*vN_i, i, 1, n)`` at 2 is ``Rf/RN_2*vN_2``, not a second copy
+    of one shared ``RN_i``. Renaming happens before the index is substituted, or
+    ``RN_i`` would still be carrying an ``i`` that has already become a number.
+    """
+    stems = _indexed_names(expression, index)
+    present = {str(symbol) for symbol in expression.free_symbols}
+    renames = {}
+    for symbol, stem in stems.items():
+        name = f"{stem}_{value}"
+        if name in present:
+            raise IndexError_(
+                f"Expanding {symbol} would produce {name}, which this expression already "
+                f"names in its own right. Two different quantities would become one; "
+                f"rename one of them."
+            )
+        renames[symbol] = sp.Symbol(name, **symbol.assumptions0)
+    return expression.subs(renames).subs({index: value})
+
+
+def expand_sums(expression: object, bound: object, terms: int) -> object:
+    """Every bounded sum in an expression, written out at ``terms`` terms.
+
+    ``doit()`` alone would repeat one term ``terms`` times, because the symbols
+    a per-resistor sum names do not depend on the index until they are renamed.
+    """
+    for summation in sorted(expression.atoms(sp.Sum), key=sp.count_ops, reverse=True):
+        index, lower, upper = summation.limits[0]
+        last = terms if upper == bound else upper
+        written = sp.Add(*[term_of(summation.function, index, value)
+                           for value in range(int(lower), int(last) + 1)])
+        expression = expression.subs(summation, written)
+    return expression.subs({bound: terms})
+
+
 def _bounded_sum(expression: object, index: object, lower: object, upper: object) -> object:
     """``sum_n(f(i), i, lo, hi)``: the n-term sum a summing amplifier writes.
 
@@ -144,6 +193,12 @@ def _bounded_sum(expression: object, index: object, lower: object, upper: object
         raise ParseError(
             f"sum_n's index must be a name, not {index!r}. Write "
             f"sum_n(V/R^i, i, 1, n), where i is the name the summand varies over."
+        )
+    if index not in expression.free_symbols and not _indexed_names(expression, index):
+        raise ParseError(
+            f"sum_n's summand does not use its index {index}: every term would be the "
+            f"same, which is {index}-many copies rather than a sum. Write it as a "
+            f"product, or index a name in the summand, such as R_{index}."
         )
     return sp.Sum(expression, (index, lower, upper))
 

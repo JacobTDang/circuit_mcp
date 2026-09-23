@@ -517,3 +517,40 @@ def test_sum_n_needs_four_arguments():
 def test_sum_n_index_must_be_a_name():
     with pytest.raises(ParseError):
         parse_expression("sum_n(V/R^i, 2, 1, n)")
+
+
+# --- indexed names inside a bounded sum ---------------------------------------
+
+def test_an_indexed_name_expands_to_one_symbol_per_term():
+    """RN_i is the RN of that term, not one symbol shared by every term."""
+    from circuit_mcp.parsing import expand_sums
+
+    total = parse_expression("sum_n(Rf/RN_i*vN_i, i, 1, n)")
+    expanded = expand_sums(total, sp.Symbol("n"), 3)
+    names = {str(symbol) for symbol in expanded.free_symbols}
+    assert {"RN_1", "RN_2", "RN_3", "vN_1", "vN_2", "vN_3", "Rf"} == names
+
+
+@pytest.mark.parametrize("terms", [1, 2, 3, 4])
+def test_the_2_48a_sum_matches_the_spelled_out_form(terms):
+    """The per-resistor sum #42 could not express, checked against the written-out one."""
+    from circuit_mcp.parsing import expand_sums
+
+    total = expand_sums(parse_expression("sum_n(Rf/RN_i*vN_i, i, 1, n)"), sp.Symbol("n"), terms)
+    spelled = parse_expression(" + ".join(f"Rf/RN_{k}*vN_{k}" for k in range(1, terms + 1)))
+    assert equivalent(total, spelled).equivalent
+
+
+def test_an_indexed_name_that_collides_with_a_literal_one_is_refused():
+    """Expanding RN_i over a term that already names RN_1 would conflate the two."""
+    from circuit_mcp.parsing import IndexError_, expand_sums
+
+    clash = parse_expression("sum_n(RN_i + RN_1, i, 1, n)")
+    with pytest.raises(IndexError_, match="RN_1"):
+        expand_sums(clash, sp.Symbol("n"), 3)
+
+
+def test_a_sum_whose_summand_ignores_its_index_is_refused():
+    """n copies of one term is n*term, and writing it as a sum hides that."""
+    with pytest.raises(ParseError, match="index"):
+        parse_expression("sum_n(Rf*vN, i, 1, n)")
