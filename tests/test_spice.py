@@ -166,7 +166,9 @@ def test_noise_analysis_matches_resistor_johnson_noise_at_low_frequency():
 def test_distortion_analysis_produces_a_second_harmonic_for_a_biased_diode():
     result = simulate_spice(
         "V1 in 0 DC 1 AC 0.01 DISTOF1 0.01\nR1 in out 1k\nD1 out 0 DIO\n.model DIO D(Is=1e-14)",
-        "disto lin 1 1k 1k", ["v(out)"],
+        # Two points, not one: a one-point linear sweep underflows the step
+        # calculation in ngspice 42 and it tries to allocate a negative size.
+        "disto lin 2 1k 2k", ["v(out)"],
     )["points"][0]["v(out)"]
     assert math.hypot(result["real"], result["imag"]) > 0
 
