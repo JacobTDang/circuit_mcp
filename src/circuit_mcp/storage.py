@@ -727,7 +727,16 @@ class CommandCenterDB:
         values.append(max(1, min(int(limit), 500)))
         with self._connect() as connection:
             rows = connection.execute(f"SELECT * FROM problems WHERE {' AND '.join(clauses)} ORDER BY updated_at DESC LIMIT ?", values).fetchall()
-        return [dict(row) for row in rows]
+            counts: dict[str, dict[str, int]] = {}
+            for problem_id, verdict, count in connection.execute(
+                    "SELECT a.problem_id, t.verdict, count(*) FROM tool_calls t "
+                    "JOIN attempts a ON a.id=t.attempt_id WHERE t.verdict IS NOT NULL "
+                    "GROUP BY a.problem_id, t.verdict"):
+                counts.setdefault(problem_id, {})[verdict] = count
+        problems = [dict(row) for row in rows]
+        for problem in problems:
+            problem["checks"] = counts.get(problem["id"], {})
+        return problems
 
     def update_problem(self, identifier: str, circuit_interpretation: str, status: str) -> dict[str, Any]:
         if status not in STATUSES: raise StorageError("invalid problem status")
@@ -808,10 +817,13 @@ class CommandCenterDB:
             problem_rows = connection.execute("SELECT status,count(*) count FROM problems WHERE course_id=? GROUP BY status", (COURSE_ID,)).fetchall()
             attempt_rows = connection.execute("SELECT status,count(*) count FROM attempts GROUP BY status").fetchall()
             topics = connection.execute("SELECT topic,count(*) count FROM problems WHERE course_id=? GROUP BY topic ORDER BY topic", (COURSE_ID,)).fetchall()
+            check_rows = connection.execute(
+                "SELECT verdict,count(*) count FROM tool_calls WHERE verdict IS NOT NULL GROUP BY verdict").fetchall()
         return {"ok": True, "course": COURSE_CODE,
                 "problems": {row["status"]: row["count"] for row in problem_rows},
                 "attempts": {row["status"]: row["count"] for row in attempt_rows},
-                "topics": {row["topic"]: row["count"] for row in topics}}
+                "topics": {row["topic"]: row["count"] for row in topics},
+                "checks": {row["verdict"]: row["count"] for row in check_rows}}
 
     def study_context(self, query: str, limit: int = 10) -> dict[str, Any]:
         documents = self.list_documents(query=query, limit=limit)

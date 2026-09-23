@@ -261,3 +261,18 @@ def test_attempt_history_shows_each_check_verdict_and_its_arguments(tmp_path):
     assert [call["verdict"] for call in calls] == ["pass", "fail", "computed"]
     assert calls[0]["arguments"] == {"steps": ["R2/R1"], "truth": "R2/R1"}
     assert "arguments_json" not in calls[0]
+
+
+def test_problem_list_counts_checks_by_verdict(tmp_path):
+    """The board says what has been verified, without reading any stored result."""
+    db, data = database(tmp_path)
+    document = add_document(db, data)
+    problem = db.create_problem("Inverting gain", "op-amps", "Find vo/vi", document["id"])
+    attempt = db.create_attempt(problem["id"], "student")
+    db.record_tool_call("check_derivation", {}, {"ok": True, "kind": "ok"}, 1.0, attempt["id"])
+    db.record_tool_call("check_setup", {}, {"ok": True, "kind": "ok"}, 1.0, attempt["id"])
+    db.record_tool_call("check_setup", {}, {"ok": False, "kind": "not_satisfied"}, 1.0, attempt["id"])
+    db.record_tool_call("derive", {}, {"ok": True}, 1.0, None)  # unattached: counts against no problem
+
+    assert db.list_problems()[0]["checks"] == {"pass": 2, "fail": 1}
+    assert db.course_progress()["checks"] == {"pass": 2, "fail": 1, "computed": 1}
