@@ -317,6 +317,10 @@ as `s^2`, `2R`, and `0.5` is normalized, while attribute access, unknown functio
 calls, Python keywords, Unicode lookalikes, and other interpreter escape routes
 are rejected before parsing.
 
+Parallel combination is written `par(R1, R2, ...)`, not `R1 || R2`: SymPy overloads
+`|` as boolean `Or`, so admitting the operator would silently turn a resistance into
+a logical expression.
+
 Rendered expressions contain two forms:
 
 - `text`: readable and suitable for feeding into another MCP tool call.
