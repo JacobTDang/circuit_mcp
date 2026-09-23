@@ -13,7 +13,7 @@ verdicts.
 ## Status
 
 The linear-circuit MCP server is implemented and registered by [`.mcp.json`](.mcp.json).
-It currently provides forty-eight tools:
+It currently provides fifty-six tools:
 
 | Tool | Purpose |
 |---|---|
@@ -22,6 +22,12 @@ It currently provides forty-eight tools:
 | `check_derivation` | Locate the first invalid algebra transition, setup error, or wrong final answer; optional parameters support symbolic-to-numeric steps |
 | `circuit_equations` | Return lcapy's nodal system and solved circuit quantities |
 | `check_setup` | Check that submitted equations hold and have full rank; classify each equation's role |
+
+`derive`, `check_equivalence`, `check_derivation`, `check_setup`, and
+`simulate_spice` take an optional `attempt_id`. Pass one and the call is
+recorded against that attempt with the verdict it reached, which
+`attempt_history` and the problem board then show.
+| `compare_readings` | Check measured bench readings against a build's prediction and name the likeliest cause of each miss |
 | `workspace_status` | Check whether the macOS screenshot backend is available without capturing anything |
 | `capture_workspace` | Return the current visible iPad screen or selected region as an MCP PNG image |
 | `ipad_capture_status` | Report managed AirPlay and USB-C source health |
@@ -32,6 +38,7 @@ It currently provides forty-eight tools:
 | `configure_workspace` | Save an iPad screen rectangle without enabling unrelated full-display capture |
 | `ocr_status` | Report or warm the persistent UniMERNet worker and selected device |
 | `transcribe_image` | Convert one base64 PNG formula crop to local LaTeX |
+| `transcribe_page` | Convert each handwritten expression on one base64 PNG page to local LaTeX, with its box |
 | `transcribe_workspace` | Capture the configured region and return its image plus local LaTeX |
 | `simulate_spice` | Run a bounded local ngspice operating-point, DC-sweep, AC, or transient analysis |
 | `characterize_transfer` | Compute poles, zeros, explicit stability class, margins, bandwidth, step metrics, and optional unity-feedback closed-loop results |
@@ -42,7 +49,8 @@ It currently provides forty-eight tools:
 | `rectifier_metrics` | Analyze constant-drop half-wave conduction and DC average |
 | `bjt_emitter_follower` | Compute hybrid-pi gm, r-pi, and loaded voltage gain |
 | `relaxation_oscillator` | Compute symmetric Schmitt-RC period and frequency |
-| `dac_output` | Map ideal straight-binary DAC codes to voltages |
+| `dac_output` | Map codes of an ideal straight-binary span DAC to voltages; for a resistor summing-amplifier DAC use `summing_dac_output` |
+| `summing_dac_output` | Predict an inverting op-amp summing DAC's outputs from its actual resistors, with each code's error against ideal |
 | `alias_frequency` | Fold a sinusoid into the first Nyquist zone |
 | `transimpedance` | Compute ideal current-input inverting op-amp output |
 | `import_waveform_csv` | Parse bounded oscilloscope/DMM CSV payloads without filesystem access |
@@ -377,6 +385,19 @@ Expressions use an intentionally small ASCII SymPy syntax. Common notation such
 as `s^2`, `2R`, and `0.5` is normalized, while attribute access, unknown function
 calls, Python keywords, Unicode lookalikes, and other interpreter escape routes
 are rejected before parsing.
+
+One exception is spelled out rather than banned: `is`, the standard source-current
+name, is rewritten to `i_s` before the screen runs, and every result that parsed it
+reports `renamed_symbols` so the substitution is never silent. All other keywords
+stay rejected.
+
+Parallel combination is written `par(R1, R2, ...)`, not `R1 || R2`: SymPy overloads
+`|` as boolean `Or`, so admitting the operator would silently turn a resistance into
+a logical expression.
+
+An n-term sum is written `sum_n(V/R^i, i, 1, n)`. A summation bound is a term
+count rather than a continuous quantity, so `check_equivalence` expands it at
+n = 1 through 4 instead of substituting a random value for it.
 
 Rendered expressions contain two forms:
 

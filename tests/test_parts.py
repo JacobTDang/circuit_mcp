@@ -66,3 +66,9 @@ def test_opamp_subcircuit_clamps_with_named_headroom():
     assert ".subckt railamp inp inn out vp vn params: hi=1.5 lo=0.5" in text
     assert "{hi}" in text and "{lo}" in text
     assert text.strip().endswith(".ends railamp")
+
+
+def test_each_chip_pins_both_headroom_figures():
+    """Only the high side was pinned, so the low side could drift unnoticed."""
+    assert chip("LM324").headroom_low == 0.5     # approximate: the datasheet's figure is load-dependent
+    assert chip("LMC660").headroom_low <= 0.1    # rail-to-rail output

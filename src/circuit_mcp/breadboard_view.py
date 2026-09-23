@@ -16,7 +16,7 @@ from html import escape
 from typing import Any
 
 from . import parts as P
-from .breadboard import COLUMNS, GROUND, Layout, parse_build, place, strip_of
+from .breadboard import COLUMNS, GROUND, RAIL_ORDER, Layout, parse_build, place, strip_of
 
 Hole = tuple
 Box = tuple    # (x0, y0, x1, y1)
@@ -172,7 +172,10 @@ def steps(layout: Layout) -> list[Step]:
                     f" Set to {build.pot_positions[part['ref']]:.0%} of travel from the first end.")
         elif part["kind"] == "led":
             a, k = part["ends"]
-            text = f"{part['ref']} LED: anode (long leg) at {hole_name(a)}, cathode (flat side) at {hole_name(k)}."
+            # The value is the colour or part number, and it is on the drawing;
+            # a student wiring from the list alone should see it too.
+            named = f"{part['ref']} {part['value']} LED".replace("  ", " ") if part["value"] else f"{part['ref']} LED"
+            text = f"{named}: anode (long leg) at {hole_name(a)}, cathode (flat side) at {hole_name(k)}."
         else:
             text = f"{label}: {hole_name(part['ends'][0])} to {hole_name(part['ends'][1])}."
         listed.append(("part", part, text))
@@ -198,7 +201,7 @@ def wire_list(layout: Layout) -> list[str]:
 PITCH = 20.0
 ROWS = {"rail-top+": 0, "rail-top-": 1, "numbers-top": 2, "a": 3, "b": 4, "c": 5, "d": 6, "e": 7,
         "trench": 8, "f": 9, "g": 10, "h": 11, "i": 12, "j": 13, "numbers-bottom": 14, "rail-bot+": 15, "rail-bot-": 16}
-RAIL_ROWS = ("rail-top+", "rail-top-", "rail-bot+", "rail-bot-")
+RAIL_ROWS = tuple(f"rail-{name}" for name in RAIL_ORDER)   # one rail order, in breadboard.py
 STRIP_ROWS = {"top": "abcde", "bottom": "fghij"}
 LEFT, RIGHT, TOP, BOTTOM = 66.0, 40.0, 14.0, 14.0   # rail labels sit left; the ground bridge arcs right
 MIN_COLUMNS = 14
@@ -464,8 +467,22 @@ class _Labeller:
         centre = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
         return hits * 10_000 + crossed * 40 + math.hypot(centre[0] - anchor[0], centre[1] - anchor[1])
 
+    def _clamped(self, box: Box) -> Box:
+        """Shift a box inside the board, keeping its size.
+
+        The cost function already prefers a candidate that fits, but "prefers"
+        is not "guarantees": with every spot blocked, the cheapest one can still
+        sit off the edge, and a tag off the edge is a tag the student never
+        reads. Shifting keeps it legible where merely clipping would not.
+        """
+        left, top, right, bottom = box
+        width, height = right - left, bottom - top
+        left = min(max(left, self.bounds[0]), max(self.bounds[0], self.bounds[2] - width))
+        top = min(max(top, self.bounds[1]), max(self.bounds[1], self.bounds[3] - height))
+        return (left, top, left + width, top + height)
+
     def place(self, anchor: Point, candidates: list) -> Box:
-        best = min(candidates, key=lambda box: self._cost(box, anchor))
+        best = self._clamped(min(candidates, key=lambda box: self._cost(box, anchor)))
         self.placed.append(best)
         return best
 

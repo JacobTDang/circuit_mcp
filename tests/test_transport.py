@@ -55,6 +55,7 @@ async def _exercise_server(data_dir: Path) -> None:
                 "capture_ipad_screen",
                 "ocr_status",
                 "transcribe_image",
+                "transcribe_page",
                 "transcribe_workspace",
                 "configure_workspace",
                 "workspace_configuration",
@@ -95,6 +96,8 @@ async def _exercise_server(data_dir: Path) -> None:
                 "attempt_create",
                 "attempt_complete",
                 "problem_tag",
+                "compare_readings",
+                "summing_dac_output",
             }
 
             # Reachable without a renderer: both report honestly instead of pretending.

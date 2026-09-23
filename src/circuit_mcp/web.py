@@ -36,6 +36,7 @@ from .server import (
     check_equivalence,
     check_setup,
     circuit_equations,
+    compare_readings,
     converter_metrics,
     dac_output,
     derive,
@@ -48,6 +49,7 @@ from .server import (
     relaxation_oscillator,
     simulate_spice,
     spectrum_metrics,
+    summing_dac_output,
     transimpedance,
     configure_workspace,
     ocr_status,
@@ -180,14 +182,16 @@ def _extract(path: Path, extension: str) -> tuple[str, int | None]:
 TOOLS: dict[str, Callable[..., Any]] = {
     "derive": derive, "check_equivalence": check_equivalence,
     "check_derivation": check_derivation, "circuit_equations": circuit_equations,
-    "check_setup": check_setup, "simulate_spice": simulate_spice,
+    "check_setup": check_setup, "compare_readings": compare_readings,
+    "simulate_spice": simulate_spice,
     "characterize_transfer": characterize_transfer,
     "converter_metrics": converter_metrics, "quantize": quantize,
     "spectrum_metrics": spectrum_metrics, "opamp_limits": opamp_limits,
     "rectifier_metrics": rectifier_metrics,
     "bjt_emitter_follower": bjt_emitter_follower,
     "relaxation_oscillator": relaxation_oscillator,
-    "dac_output": dac_output, "alias_frequency": alias_frequency,
+    "dac_output": dac_output, "summing_dac_output": summing_dac_output,
+    "alias_frequency": alias_frequency,
     "transimpedance": transimpedance,
     "import_waveform_csv": import_waveform_csv,
     "workspace_status": workspace_status,
@@ -578,6 +582,10 @@ def run_tool(name: str, request: ToolRequest) -> Any:
     tool = TOOLS.get(name)
     if tool is None:
         raise HTTPException(404, "tool is not exposed in the command center")
+    if "attempt_id" in request.arguments:
+        # This path records the call itself. A tool that recorded a second one
+        # would double-count a single check on the board.
+        raise HTTPException(422, "pass attempt_id beside arguments, not inside them")
     started = time.monotonic()
     try:
         result = tool(**request.arguments)

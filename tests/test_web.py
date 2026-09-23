@@ -29,6 +29,10 @@ def test_dashboard_and_real_tool_execution(tmp_path, monkeypatch):
         assert result["equivalent"] is True
 
 
+def test_the_bench_check_tools_are_exposed_in_the_command_center():
+    assert {"compare_readings", "summing_dac_output"} <= set(web.TOOLS)
+
+
 def test_dashboard_starts_as_a_manual_blank_spatial_workspace(tmp_path, monkeypatch):
     with client(tmp_path, monkeypatch) as browser:
         page = browser.get("/")
@@ -74,8 +78,11 @@ def test_workspace_canvas_grows_to_contain_its_cards_instead_of_clipping(tmp_pat
         assert "205px" not in rule
         app_script = browser.get("/assets/app.js").text
         assert "canvas.style.height=''" in app_script
-        assert "maxBottom=Math.max(maxBottom,item.y+el.offsetHeight)" in app_script
-        assert "canvas.style.height=`${maxBottom+40}px`" in app_script
+        # The height is measured from the rendered cards, in one place, so it can
+        # be measured again after hydration replaces a placeholder body.
+        fit = app_script.split("function fitCanvasHeight()", 1)[1].split("\n", 1)[0]
+        assert "el.offsetTop+el.offsetHeight" in fit
+        assert "canvas.style.height=`${bottom+40}px`" in fit
 
 
 def test_app_js_surfaces_upstream_errors_and_guards_optional_fields(tmp_path, monkeypatch):
@@ -364,3 +371,14 @@ def _visual_count(store) -> int:
         return 0
     with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
         return connection.execute("SELECT count(*) FROM visual_assets").fetchone()[0]
+
+
+def test_posting_attempt_id_inside_arguments_is_refused(tmp_path, monkeypatch):
+    """The web path records the call itself; a tool that also recorded it would double-count."""
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.post(
+            "/api/tools/check_equivalence",
+            json={"arguments": {"expr_a": "a", "expr_b": "a", "attempt_id": "x"}},
+        )
+    assert response.status_code == 422
+    assert "attempt_id" in response.json()["detail"]

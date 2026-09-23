@@ -30,6 +30,7 @@
 .card-verified{margin:12px 0 0;color:#86b59a;font:10px ui-monospace,monospace;letter-spacing:.06em}.card-verified code{color:#b7c9bf;font:inherit}
 .card-terms dt{margin-top:10px;color:var(--ink);font-weight:600}.card-terms dd{margin:2px 0 0;color:var(--muted);font-size:13px;line-height:1.5}
 .card-empty{color:#768079;font:10px ui-monospace,monospace;letter-spacing:.08em;text-transform:uppercase}
+.card-error{margin:0;color:#b3261e;font-size:13px;line-height:1.5}
 /* breadboard and expected cards */
 .workspace-item[data-kind="breadboard"]{min-height:320px}.card-board{overflow-x:auto;border:1px solid #2a2f2c;background:#ECEEE9;border-radius:6px}.card-board svg{display:block;min-width:560px}
 .card-wires{margin:12px 0 0;padding-left:22px;color:var(--muted);font-size:13px;line-height:1.5}.card-wires li{margin-bottom:4px}

@@ -16,6 +16,7 @@ fail *quietly* and both produce a confident wrong verdict on correct work:
   finishes.
 """
 import asyncio
+import base64
 import json
 import os
 import signal
@@ -33,9 +34,11 @@ from circuit_mcp.server import (
     check_derivation,
     check_equivalence,
     check_setup,
+    compare_readings,
     configure_workspace,
     ocr_status,
     transcribe_image,
+    transcribe_page,
     transcribe_workspace,
     workspace_status,
     workspace_configuration,
@@ -43,8 +46,11 @@ from circuit_mcp.server import (
     characterize_transfer,
     derive,
     simulate_spice,
+    summing_dac_output,
 )
+from circuit_mcp.storage import StorageError
 from circuit_mcp.symbols import SymbolConflictError
+from tests.fixtures import lab1
 
 INVERTING = """
 Vs 1 0 {V}
@@ -91,6 +97,7 @@ TOOL_NAMES = {
     "canvas_card_list",
     "canvas_card_remove",
     "transcribe_image",
+    "transcribe_page",
     "transcribe_workspace",
     "configure_workspace",
     "workspace_configuration",
@@ -119,6 +126,8 @@ TOOL_NAMES = {
     "import_waveform_csv",
     "instrument_status",
     "instrument_query",
+    "compare_readings",
+    "summing_dac_output",
 }
 
 
@@ -534,6 +543,35 @@ def test_transcribe_image_rejects_non_base64_without_starting_ocr_worker():
     assert result.structured_content["ok"] is False
     assert result.structured_content["error"] == "bad_image"
     assert server_module.OCR_WORKER.pid == before
+
+
+def test_transcribe_page_rejects_a_non_png_without_starting_ocr_worker():
+    before = server_module.OCR_WORKER.pid
+    result = transcribe_page(base64.b64encode(b"GIF89a").decode("ascii"))
+    assert result.structured_content["ok"] is False
+    assert result.structured_content["error"] == "bad_image"
+    assert server_module.OCR_WORKER.pid == before
+
+
+def test_transcribe_page_reads_the_page_box_by_box_with_the_page_budget(monkeypatch):
+    """The tool hands the page to the client's loop, which releases the worker between boxes."""
+    seen = {}
+
+    def read_page(png, timeout=None):
+        seen.update(png=png, timeout=timeout)
+        return {"ok": True, "expressions": [{"index": 0, "bbox": [0, 0, 10, 10], "latex": "x"}],
+                "expression_count": 1, "truncated": False}
+
+    def refuse_call(*args, **kwargs):
+        raise AssertionError("the whole page must not be one request")
+
+    monkeypatch.setattr(server_module.OCR_WORKER, "transcribe_page", read_page)
+    monkeypatch.setattr(server_module.OCR_WORKER, "call", refuse_call)
+    page = b"\x89PNG\r\n\x1a\npage"
+    result = transcribe_page(base64.b64encode(page).decode("ascii"))
+    assert seen["png"] == page
+    assert seen["timeout"] == server_module.PAGE_OCR_TIMEOUT_SECONDS
+    assert result.structured_content["expressions"][0]["latex"] == "x"
 
 
 def test_workspace_transcription_returns_exact_frame_and_local_ocr_metadata(monkeypatch):
@@ -995,3 +1033,125 @@ def test_a_worker_that_cannot_start_is_reported_rather_than_retried_forever():
     assert elapsed < 10, f"took {elapsed:.1f}s -- it kept retrying"
     # And a real worker still starts afterwards.
     assert check_equivalence("Rf/Ri", "Rf/Ri")["equivalent"] is True
+
+
+def test_compare_readings_tool_flags_a_dropped_minus_sign():
+    result = compare_readings(lab1.EXP7_DAC, {"vo": 5.0})
+    assert result["ok"] is True
+    assert result["readings"][0]["hint"]["kind"] == "sign"
+
+
+def test_compare_readings_tool_names_an_unknown_probe_as_a_compare_error():
+    result = compare_readings(lab1.EXP7_DAC, {"CH9": 1.0})
+    assert result["ok"] is False
+    assert result["error"] == "compare_error"
+    assert "CH9" in result["message"]
+
+
+def test_summing_dac_output_tool_reports_each_code():
+    result = summing_dac_output([5], 3, 9.78, [2.39, 4.87, 9.79])
+    assert result["ok"] is True
+    assert result["outputs"][0]["output_v"] == pytest.approx(-5.091, abs=0.001)
+
+
+def test_summing_dac_output_tool_names_bad_input_as_a_metrics_error():
+    result = summing_dac_output([1], 3, 10e3, [2.5e3, 5e3])
+    assert result["ok"] is False
+    assert result["error"] == "metrics_error"
+
+
+def test_check_derivation_reports_the_rename():
+    """'is' parses, and the result says what it was read as -- a silent rename is its own trap."""
+    result = check_derivation(["is*R1", "R1*is"], "is*R1")
+    assert result["ok"] is True
+    assert result["renamed_symbols"] == {"is": "i_s"}
+
+
+def test_check_equivalence_reports_the_rename():
+    result = check_equivalence("is*R1", "R1*is")
+    assert result["equivalent"] is True
+    assert result["renamed_symbols"] == {"is": "i_s"}
+
+
+def test_a_derivation_without_a_reserved_name_reports_no_rename():
+    result = check_derivation(["Rf/Ri"], "Rf/Ri")
+    assert result["renamed_symbols"] == {}
+
+def test_check_equivalence_confirms_a_bounded_sum_against_its_closed_form():
+    """The n-term sum a summing amplifier writes, checked at n = 1 through 4."""
+    result = check_equivalence("sum_n(V/R^i, i, 1, n)", "V*(1 - R^(-n))/(R - 1)")
+    assert result["ok"] is True
+    assert result["equivalent"] is True
+    assert "n = 1, 2, 3, 4" in result["detail"]
+
+# --------------------------------------------------------------------------
+# verification filed against an attempt
+# --------------------------------------------------------------------------
+
+def _open_attempt(tmp_path, monkeypatch):
+    """A problem with one open attempt, in a throwaway store."""
+    data = tmp_path / "command_center"
+    monkeypatch.setattr(server_module, "default_data_dir", lambda: data)
+    database = server_module._storage()
+    problem = database.create_problem("Inverting gain", "op-amps", "Find vo/vi")
+    return database, problem, database.create_attempt(problem["id"], "student")
+
+
+def test_derive_with_attempt_id_records_arguments_and_result(tmp_path, monkeypatch):
+    database, problem, attempt = _open_attempt(tmp_path, monkeypatch)
+
+    result = derive(INVERTING, 1, 0, 3, 0, "finite", attempt_id=attempt["id"])
+
+    assert result["ok"] is True
+    assert result["evidence_id"]
+    assert result["verdict"] == "computed"
+    call = database.attempt_history(problem["id"])[0]["tool_calls"][0]
+    assert call["tool_name"] == "derive"
+    assert call["arguments"]["netlist"] == INVERTING
+    assert json.loads(json.dumps(result["transfer_function"]))  # the result round-tripped as stored
+
+
+def test_attempt_history_shows_a_passed_and_a_failed_check(tmp_path, monkeypatch):
+    database, problem, attempt = _open_attempt(tmp_path, monkeypatch)
+
+    check_derivation(["Rf/Ri", "Rf/Ri"], "Rf/Ri", None, attempt_id=attempt["id"])
+    check_derivation(["Rf/Ri", "Rf/Ri + 1"], "Rf/Ri", None, attempt_id=attempt["id"])
+    check_equivalence("Rf/Ri", "Ri/Rf", attempt_id=attempt["id"])
+
+    calls = database.attempt_history(problem["id"])[0]["tool_calls"]
+    assert [call["verdict"] for call in calls] == ["pass", "fail", "fail"]
+
+
+def test_unknown_attempt_fails_before_the_tool_runs(tmp_path, monkeypatch):
+    database, _, _ = _open_attempt(tmp_path, monkeypatch)
+
+    result = check_equivalence("a+b", "b+a", attempt_id="nope")
+
+    assert result["ok"] is False
+    assert result["error"] == "storage_error"
+    with database._connect() as connection:
+        assert connection.execute("SELECT count(*) FROM tool_calls").fetchone()[0] == 0
+
+
+def test_calls_without_attempt_id_record_nothing(tmp_path, monkeypatch):
+    database, _, _ = _open_attempt(tmp_path, monkeypatch)
+
+    result = check_equivalence("a+b", "b+a")
+
+    assert result["ok"] is True
+    assert "evidence_id" not in result and "verdict" not in result
+    with database._connect() as connection:
+        assert connection.execute("SELECT count(*) FROM tool_calls").fetchone()[0] == 0
+
+
+def test_a_storage_failure_keeps_the_result_and_warns(tmp_path, monkeypatch):
+    _, _, attempt = _open_attempt(tmp_path, monkeypatch)
+
+    def refuse(*args, **kwargs):
+        raise StorageError("disk is full")
+
+    monkeypatch.setattr(server_module.CommandCenterDB, "record_tool_call", refuse)
+    result = check_equivalence("a+b", "b+a", attempt_id=attempt["id"])
+
+    assert result["ok"] is True and result["equivalent"] is True
+    assert "disk is full" in result["evidence_warning"]

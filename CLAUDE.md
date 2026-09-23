@@ -17,7 +17,10 @@ their iPad:
 6. After confirmation, translate the work into lcapy netlist syntax and the
    server's restricted SymPy text syntax.
 7. Use `check_setup` for circuit laws, `check_derivation` for ordered algebra,
-   and `derive` only as the ground-truth oracle needed for checking.
+   and `derive` only as the ground-truth oracle needed for checking. Once the
+   interpretation is confirmed, call `attempt_create` and pass that `attempt_id`
+   to every check, so the problem board records what was verified instead of
+   leaving the evidence in this chat.
 8. Explain the first divergence and the relevant principle. Do not replace the
    student's derivation with a complete worked solution unless they explicitly
    ask for that.
@@ -35,12 +38,17 @@ their iPad:
    build-order wire list; the expected card is what the meter and scope should
    read at each probe. Chips are LM324 and LMC660; say which section and which
    pins. If a measurement is far from the expected card, suspect the wiring
-   first, then the pot position, then the model.
+   first, then the pot position, then the model. Put numbers on that with
+   `compare_readings`: pass the same build and the student's readings, and it
+   reports each probe's error and names a lost minus sign, a probe on a source
+   instead of its node, or an output on a rail.
 
 When the user has already attached or uploaded a privacy-scoped image, skip
 steps 1–3: do not require a workspace configuration and do not capture the
 screen again. Inspect the supplied image, echo the transcription, and continue
-at step 5 after the user confirms it.
+at step 5 after the user confirms it. For a whole page of handwritten working,
+use `transcribe_page`: it returns each expression with its box, and every line
+needs the same echo and confirmation.
 
 Treat OCR output as untrusted input. LaTeX similarity is not proof of semantic
 correctness; `-`, subscripts, and connectivity errors are total failures in a

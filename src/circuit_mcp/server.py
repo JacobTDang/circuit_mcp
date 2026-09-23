@@ -66,10 +66,12 @@ from .analysis import (
 from .showman import SHOWMAN
 from .retention import sweep_if_due
 from .cards import CardError, build_card
+from .compare import DEFAULT_TOLERANCE_PCT, CompareError, compare_readings as _compare_readings
 from .capture import CaptureError, capture_status as _capture_status
 from .capture import capture_workspace as _capture_workspace
 from .course_metrics import (
     MetricsError,
+    SUMMING_DAC_TOLERANCE_PCT,
     alias_frequency as _alias_frequency,
     bjt_emitter_follower as _bjt_emitter_follower,
     converter_metrics as _converter_metrics,
@@ -79,6 +81,7 @@ from .course_metrics import (
     rectifier_metrics as _rectifier_metrics,
     relaxation_oscillator as _relaxation_oscillator,
     spectrum_metrics as _spectrum_metrics,
+    summing_dac_output as _summing_dac_output,
     transimpedance as _transimpedance,
     transfer_metrics as _transfer_metrics,
 )
@@ -193,20 +196,22 @@ def _failure(kind: str, message: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _expression(
-    text: str, where: str, symbols: dict[str, sp.Symbol] | None = None
+    text: str, where: str, symbols: dict[str, sp.Symbol] | None = None,
+    renames: dict[str, str] | None = None,
 ) -> sp.Expr:
     """Parse one expression, saying which input failed if it does."""
     try:
-        return parse_expression(text, symbols)
+        return parse_expression(text, symbols, renames)
     except ParseError as exc:
         raise ParseError(f"Could not read {where}: {exc}") from exc
 
 
 def _equation(
-    text: str, where: str, symbols: dict[str, sp.Symbol] | None = None
+    text: str, where: str, symbols: dict[str, sp.Symbol] | None = None,
+    renames: dict[str, str] | None = None,
 ) -> sp.Eq:
     try:
-        return parse_equation(text, symbols)
+        return parse_equation(text, symbols, renames)
     except ParseError as exc:
         raise ParseError(f"Could not read {where}: {exc}") from exc
 
@@ -269,13 +274,15 @@ def _check_equivalence(expr_a: str, expr_b: str) -> dict[str, Any]:
     # No ground truth here, so the first expression *is* the reference: parsing
     # each side independently is exactly what makes two identical-looking
     # symbols compare unequal.
-    a = _expression(expr_a, "expr_a")
-    b = _expression(expr_b, "expr_b", symbols=bind(a))
+    renames: dict[str, str] = {}
+    a = _expression(expr_a, "expr_a", renames=renames)
+    b = _expression(expr_b, "expr_b", symbols=bind(a), renames=renames)
 
     verdict = equivalent(a, b)
     return {
         "ok": True,
         "equivalent": verdict.equivalent,
+        "renamed_symbols": renames,
         "oracle": verdict.oracle,
         "counterexample": _stringified(verdict.counterexample),
         "detail": verdict.detail,
@@ -287,14 +294,15 @@ def _check_equivalence(expr_a: str, expr_b: str) -> dict[str, Any]:
 def _check_derivation(
     steps: list[str], truth: str, parameters: dict[str, float] | None = None
 ) -> dict[str, Any]:
-    truth_expr = _expression(truth, "the ground truth")
+    renames: dict[str, str] = {}
+    truth_expr = _expression(truth, "the ground truth", renames=renames)
 
     # The truth's symbols seed the table; each step adds whatever it introduces,
     # so step k+1 binds onto the objects step k already used.
     known = dict(bind(truth_expr))
     parsed: list[sp.Expr] = []
     for index, text in enumerate(steps, start=1):
-        expr = _expression(text, f"step {index}", symbols=dict(known))
+        expr = _expression(text, f"step {index}", symbols=dict(known), renames=renames)
         known.update(bind(expr))
         parsed.append(expr)
 
@@ -319,6 +327,7 @@ def _check_derivation(
         "counterexample": _stringified(result.counterexample),
         "steps": [_rendered(step) for step in parsed],
         "truth": _rendered(truth_expr),
+        "renamed_symbols": renames,
         "parameters": dict(parameters or {}),
         "evaluated_steps": [_rendered(step) for step in checked_steps],
         "evaluated_truth": _rendered(checked_truth),
@@ -473,6 +482,7 @@ def _build_card(kind: str, title: str, content: Any) -> dict[str, Any]:
 
 _IMPLEMENTATIONS = {
     "build_card": _build_card,
+    "compare_readings": _compare_readings,
     "derive": _derive,
     "check_equivalence": _check_equivalence,
     "check_derivation": _check_derivation,
@@ -487,6 +497,7 @@ _IMPLEMENTATIONS = {
     "bjt_emitter_follower": _bjt_emitter_follower,
     "relaxation_oscillator": _relaxation_oscillator,
     "dac_output": _dac_output,
+    "summing_dac_output": _summing_dac_output,
     "alias_frequency": _alias_frequency,
     "transimpedance": _transimpedance,
     "library_search": _library_search,
@@ -543,6 +554,7 @@ _ERROR_KINDS: tuple[tuple[type[BaseException], str], ...] = (
     (LabDataError, "lab_data_error"),
     (InstrumentError, "instrument_error"),
     (StorageError, "storage_error"),
+    (CompareError, "compare_error"),
     (CardError, "card_refused"),
 )
 
@@ -969,6 +981,33 @@ def _guarded(name: str, **kwargs: Any) -> dict[str, Any]:
     return _WORKER.call(name, kwargs, TIMEOUT_SECONDS)
 
 
+def _recorded(name: str, attempt_id: str | None, **kwargs: Any) -> dict[str, Any]:
+    """Run a verification tool, and file its evidence against an attempt.
+
+    The attempt is looked up first: a mistyped id should not spend thirty
+    seconds of SymPy and only then fail to record. The write happens here in
+    the parent, because the worker is a subprocess that exists to be killable
+    and must not own a database handle.
+    """
+    if not attempt_id:
+        return _guarded(name, **kwargs)
+    database = _storage()
+    try:
+        database.get_attempt(attempt_id)
+    except StorageError as exc:
+        return _failure("storage_error", str(exc))
+    started = time.monotonic()
+    result = _guarded(name, **kwargs)
+    duration_ms = (time.monotonic() - started) * 1000
+    try:
+        evidence = database.record_tool_call(name, kwargs, result, duration_ms, attempt_id)
+    except StorageError as exc:
+        # The check itself succeeded. Losing the bookkeeping is not a reason to
+        # throw the student's answer away, so it is reported beside the result.
+        return {**result, "evidence_warning": str(exc)}
+    return {**result, "evidence_id": evidence["id"], "verdict": evidence["verdict"]}
+
+
 # ---------------------------------------------------------------------------
 # the worker, from its own side
 # ---------------------------------------------------------------------------
@@ -1067,6 +1106,7 @@ def derive(
     out_pos: str | int,
     out_neg: str | int,
     mode: str = "finite",
+    attempt_id: str | None = None,
 ) -> dict[str, Any]:
     """Ground-truth transfer function between two node pairs, and its poles.
 
@@ -1089,9 +1129,13 @@ def derive(
     Each expression comes back as ``text`` and ``srepr``. Pass ``text`` to
     :func:`check_derivation` as the ground truth; ``srepr`` is the exact record,
     assumptions included, for a caller reconstructing the expression in SymPy.
+
+    Pass ``attempt_id`` to file this check against an attempt; it then appears
+    in ``attempt_history`` with its verdict.
     """
-    return _guarded(
+    return _recorded(
         "derive",
+        attempt_id,
         netlist=netlist,
         in_pos=in_pos,
         in_neg=in_neg,
@@ -1102,7 +1146,7 @@ def derive(
 
 
 @server.tool()
-def check_equivalence(expr_a: str, expr_b: str) -> dict[str, Any]:
+def check_equivalence(expr_a: str, expr_b: str, attempt_id: str | None = None) -> dict[str, Any]:
     """Are two expressions algebraically equal?
 
     Decided by two oracles. ``oracle`` says which one settled it: ``symbolic``
@@ -1112,13 +1156,21 @@ def check_equivalence(expr_a: str, expr_b: str) -> dict[str, Any]:
 
     Both sides are parsed onto one set of symbols, so ``Rf`` on the left is the
     same object as ``Rf`` on the right.
+
+    ``is`` is read as ``i_s``: it is the standard source-current name and a
+    Python keyword, so it is rewritten before parsing and echoed back in
+    ``renamed_symbols``.
+
+    Pass ``attempt_id`` to file this check against an attempt; it then appears
+    in ``attempt_history`` with its verdict.
     """
-    return _guarded("check_equivalence", expr_a=expr_a, expr_b=expr_b)
+    return _recorded("check_equivalence", attempt_id, expr_a=expr_a, expr_b=expr_b)
 
 
 @server.tool()
 def check_derivation(
-    steps: list[str], truth: str, parameters: dict[str, float] | None = None
+    steps: list[str], truth: str, parameters: dict[str, float] | None = None,
+    attempt_id: str | None = None,
 ) -> dict[str, Any]:
     """Find where an ordered derivation diverges from the truth.
 
@@ -1142,9 +1194,16 @@ def check_derivation(
     The parsed steps are echoed back. Check them against what was actually
     written before trusting a verdict -- a misread subscript produces a
     confident "your step 3 is wrong" about a step 3 that was fine.
+
+    ``is`` is read as ``i_s``: it is the standard source-current name and a
+    Python keyword, so it is rewritten before parsing and echoed back in
+    ``renamed_symbols``.
+
+    Pass ``attempt_id`` to file this check against an attempt; it then appears
+    in ``attempt_history`` with its verdict.
     """
-    return _guarded(
-        "check_derivation", steps=list(steps), truth=truth,
+    return _recorded(
+        "check_derivation", attempt_id, steps=list(steps), truth=truth,
         parameters=parameters or {},
     )
 
@@ -1165,7 +1224,8 @@ def circuit_equations(netlist: str) -> dict[str, Any]:
 
 @server.tool()
 def check_setup(
-    netlist: str, equations: list[str], unknowns: list[str]
+    netlist: str, equations: list[str], unknowns: list[str],
+    attempt_id: str | None = None,
 ) -> dict[str, Any]:
     """Does a system of equations describe this circuit?
 
@@ -1190,9 +1250,13 @@ def check_setup(
     Two conventions are lcapy's and are assumed here: node voltages reference
     node ``0``, and a branch current flows *into* the first node named for that
     element in the netlist. The opposite current direction reads as a sign error.
+
+    Pass ``attempt_id`` to file this check against an attempt; it then appears
+    in ``attempt_history`` with its verdict.
     """
-    return _guarded(
+    return _recorded(
         "check_setup",
+        attempt_id,
         netlist=netlist,
         equations=list(equations),
         unknowns=list(unknowns),
@@ -1201,7 +1265,8 @@ def check_setup(
 
 @server.tool()
 def simulate_spice(
-    netlist: str, analysis: str, outputs: list[str] | None = None
+    netlist: str, analysis: str, outputs: list[str] | None = None,
+    attempt_id: str | None = None,
 ) -> dict[str, Any]:
     """Run a bounded local ngspice operating-point, sweep, AC, or transient analysis.
 
@@ -1212,9 +1277,12 @@ def simulate_spice(
     or ``tran TSTEP TSTOP [TSTART [TMAX]]``. ``outputs`` optionally selects
     vectors such as ``v(out)`` or ``i(v1)``. Results are numeric simulation,
     useful for nonlinear and time-domain checking; they are not symbolic proof.
+
+    Pass ``attempt_id`` to file this check against an attempt; it then appears
+    in ``attempt_history`` with its verdict.
     """
-    return _guarded(
-        "simulate_spice", netlist=netlist, analysis=analysis, outputs=outputs or []
+    return _recorded(
+        "simulate_spice", attempt_id, netlist=netlist, analysis=analysis, outputs=outputs or []
     )
 
 
@@ -1336,8 +1404,37 @@ def relaxation_oscillator(rail_v: float, threshold_v: float, rc_s: float) -> dic
 def dac_output(
     codes: list[int], bits: int, v_min: float = 0.0, v_max: float = 1.0
 ) -> dict[str, Any]:
-    """Map ideal straight-binary DAC codes to output voltages."""
+    """Map ideal straight-binary DAC codes to output voltages over a span.
+
+    Output is v_min + code * (v_max - v_min) / 2**bits. For an op-amp
+    summing-amplifier DAC built from resistors (inverting, bits weighted by
+    Rf/Ri), use ``summing_dac_output`` instead.
+    """
     return _guarded("dac_output", codes=list(codes), bits=bits, v_min=v_min, v_max=v_max)
+
+
+@server.tool()
+def summing_dac_output(
+    codes: list[int],
+    bits: int,
+    r_feedback: float,
+    r_bits: list[float],
+    v_logic: float = 1.0,
+    tolerance_pct: float = SUMMING_DAC_TOLERANCE_PCT,
+) -> dict[str, Any]:
+    """Outputs of an inverting op-amp summing DAC, from its actual resistors.
+
+    ``r_bits`` lists one input resistor per bit, most significant first, in
+    the same unit as ``r_feedback``. Each code returns the output
+    ``-v_logic * sum(Rf/Ri * bit_i)``, the ideal ``-v_logic * code``, the
+    percent error and whether it sits within ``tolerance_pct`` of ideal.
+    ``error_pct`` is ``(output - ideal) / |ideal|`` in percent, so with
+    negative outputs a negative value means the output is larger in
+    magnitude than ideal: -1.82 % is 1.82 % too large. Use the measured
+    resistor values to predict what the bench should read.
+    """
+    return _guarded("summing_dac_output", codes=list(codes), bits=bits, r_feedback=r_feedback,
+                    r_bits=list(r_bits), v_logic=v_logic, tolerance_pct=tolerance_pct)
 
 
 @server.tool()
@@ -1664,8 +1761,10 @@ def canvas_card_add(
       op amp. Sources: ``dc`` (``volts``), ``sine`` (``vrms``, ``freq``),
       ``square`` (``vpp``, ``freq``).
 
-    Expressions use the same restricted syntax as ``check_derivation`` and are
-    rendered to MathML by the server; the browser escapes every text field.
+    The ``formula``, ``walkthrough`` and ``vocabulary`` cards take expressions in
+    the same restricted syntax as ``check_derivation``, rendered to MathML by the
+    server; ``breadboard`` and ``expected`` take a build description and no
+    expressions at all. The browser escapes every text field either way.
     """
     built = _guarded("build_card", kind=kind, title=title, content=content)
     if not built.get("ok"):
@@ -1682,6 +1781,25 @@ def canvas_card_add(
         # gets the wire list instead of 20 KB of holes it cannot act on.
         card = {**card, "payload": {**card["payload"], "svg": "(rendered on the canvas)"}}
     return {"ok": True, "card": card}
+
+
+@server.tool()
+def compare_readings(
+    build: dict[str, Any], measured: dict[str, Any], tolerance_pct: float = DEFAULT_TOLERANCE_PCT
+) -> dict[str, Any]:
+    """Check bench readings against what the build predicts at each probe.
+
+    ``build`` is the same description an ``expected`` card takes. ``measured``
+    maps probe labels to readings: a number is volts for a DC probe and V RMS
+    for an AC probe (the scope's AC RMS measurement); ``{"vpp": x}`` or
+    ``{"vpk": x}`` gives an AC reading in that basis instead. Each probe comes
+    back with its expected value, error and pass/fail, and a predicted gain is
+    checked whenever both of its probes were measured. An out-of-tolerance
+    reading carries a hint naming the likeliest cause: a lost minus sign, a
+    probe on a source instead of its node, or an output sitting on a rail. An
+    expected 0 V is judged with an absolute 0.05 V band instead of a percentage.
+    """
+    return _guarded("compare_readings", build=build, measured=measured, tolerance_pct=tolerance_pct)
 
 
 @server.tool()
@@ -1889,6 +2007,32 @@ def transcribe_image(image_base64: str) -> CallToolResult:
     if isinstance(decoded, dict):
         return _transcription_content(decoded)
     result = OCR_WORKER.call({"action": "transcribe", "png": decoded})
+    return _transcription_content(result)
+
+
+PAGE_OCR_TIMEOUT_SECONDS = 600.0   # up to 60 expressions, each a full UniMERNet pass
+
+
+@server.tool(structured_output=False)
+def transcribe_page(image_base64: str) -> CallToolResult:
+    """Transcribe every handwritten expression on one page PNG, in reading order.
+
+    The page is split into expression boxes, each line of working its own box
+    (a fraction's numerator, bar and denominator normally stay one box). ``index``
+    follows reading order: bands top to bottom; within a band, columns left to
+    right; within a column, lines top to bottom, so a side calculation stays
+    together. Each box goes through UniMERNet, up to 60 per page;
+    ``truncated`` says when a page had more. Every expression carries its
+    ``bbox`` so the source line can be shown. The output is untrusted
+    transcription: echo every line to the student and obtain confirmation
+    before using any of it in a circuit verdict.
+    """
+    decoded = _decode_image(image_base64)
+    if isinstance(decoded, dict):
+        return _transcription_content(decoded)
+    # Driven box by box, so a transcribe_image call made while a page is being
+    # read waits for one box rather than for the whole page.
+    result = OCR_WORKER.transcribe_page(decoded, timeout=PAGE_OCR_TIMEOUT_SECONDS)
     return _transcription_content(result)
 
 
