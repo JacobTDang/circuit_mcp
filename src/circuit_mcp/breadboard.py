@@ -22,7 +22,13 @@ LEFT_POOL = (10, 8, 6, 4, 2)
 RIGHT_POOL = (20, 22, 24, 26, 28)
 CHIPLESS_RIGHT_POOL = (12, 14, 16, 18, 20, 22, 24, 26, 28)   # with no chip, the middle is free
 GROUND = "gnd"
-CROSSED_RAIL = {"top+": "top-", "bot-": "bot+"}   # the near rail a lead to the far rail lies over
+# The four rails, top to bottom as the board is drawn. Everything that depends
+# on rail order derives from this: the collision model below, and the renderer's
+# row numbers. Two hand-kept copies drifted apart once already.
+RAIL_ORDER = ("top+", "top-", "bot+", "bot-")
+# The near rail a lead to the far rail lies over: on each side, the outer rail's
+# lead crosses the inner one.
+CROSSED_RAIL = {RAIL_ORDER[0]: RAIL_ORDER[1], RAIL_ORDER[3]: RAIL_ORDER[2]}
 # A wire between two strips starts one row in, leaving the outer row for leads that
 # run straight to a rail and for probes.
 JUMPER_ROWS = {"top": "bcdae", "bottom": "ihgjf"}
@@ -34,6 +40,10 @@ PART_KINDS = {"resistor": 2, "capacitor": 2, "inductor": 2, "led": 2, "pot": 3}
 SOURCE_KINDS = {"dc", "sine", "square"}
 MAX_PARTS = 24
 MAX_PROBES = 12
+# A tag longer than this cannot be placed on the board beside what it names:
+# at 16 the Lab 1 tags all fit, at 24 two of them overlap.
+MAX_PROBE_LABEL = 16
+MAX_LED_VALUE = 16
 BUILD_FIELDS = {"supply", "chips", "parts", "opamps", "sources", "probes", "pot_positions"}
 
 Hole = tuple  # ("top"|"bottom", column, row) or ("rail", name, column)
@@ -100,6 +110,23 @@ class Build:
 
 # --- parsing -----------------------------------------------------------------
 
+def _entries(content: dict, key: str, what: str) -> list:
+    """The list stored under ``key``, checked to be a list of objects.
+
+    Five of these guards were written out by hand and differed only in the noun
+    they name, which is five places for the wording to drift.
+    """
+    raw = content.get(key)
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise BuildError(f"{key} must be a list")
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise BuildError(f"each {what} must be an object")
+    return raw
+
+
 def _node(name: Any, where: str) -> str:
     if not isinstance(name, str) or not name.strip():
         raise BuildError(f"{where}: node name must be text")
@@ -107,7 +134,9 @@ def _node(name: Any, where: str) -> str:
     if name.lower() in GROUND_ALIASES:
         return GROUND
     if not NET_NAME.match(name):
-        raise BuildError(f"{where}: node name {name!r} must be letters, digits, or underscore")
+        raise BuildError(
+            f"{where}: node name {name!r} must start with a letter and continue "
+            f"with letters, digits, or underscore")
     if name.lower() in ("vplus", "vminus"):
         raise BuildError(f"{where}: {name!r} is reserved for the supply rails")
     return name
@@ -146,12 +175,7 @@ def parse_build(content: Any) -> Build:
 
     seen: set[str] = set()
     chips: dict[str, P.Chip] = {}
-    raw_chips = content.get("chips")
-    if raw_chips is not None and not isinstance(raw_chips, list):
-        raise BuildError("chips must be a list")
-    for entry in raw_chips or []:
-        if not isinstance(entry, dict):
-            raise BuildError("each chip must be an object")
+    for entry in _entries(content, "chips", "chip"):
         ref = _ref(entry.get("ref"), "chip", seen)
         try:
             chips[ref] = P.chip(str(entry.get("part", "")))
@@ -161,12 +185,7 @@ def parse_build(content: Any) -> Build:
         raise BuildError("one chip per build; a quad op amp has four sections")
 
     parts: list[Part] = []
-    raw_parts = content.get("parts")
-    if raw_parts is not None and not isinstance(raw_parts, list):
-        raise BuildError("parts must be a list")
-    for entry in raw_parts or []:
-        if not isinstance(entry, dict):
-            raise BuildError("each part must be an object")
+    for entry in _entries(content, "parts", "part"):
         ref = _ref(entry.get("ref"), "part", seen)
         kind = str(entry.get("kind", ""))
         if kind not in PART_KINDS:
@@ -174,8 +193,17 @@ def parse_build(content: Any) -> Build:
         nodes = entry.get("nodes")
         if not isinstance(nodes, list) or len(nodes) != PART_KINDS[kind]:
             raise BuildError(f"{ref}: a {kind} needs exactly {PART_KINDS[kind]} nodes")
-        value = str(entry.get("value", "")).strip()
-        if kind != "led":
+        raw_value = entry.get("value", "")
+        if kind == "led":
+            # An LED's value is a colour or a part number, so it is not parsed as
+            # a quantity -- but it is still drawn, so it has to be short text.
+            if not isinstance(raw_value, str):
+                raise BuildError(f"{ref}: an LED value must be text, like 'red' or 'HLMP-3750'")
+            value = raw_value.strip()
+            if len(value) > MAX_LED_VALUE:
+                raise BuildError(f"{ref}: an LED value must be {MAX_LED_VALUE} characters or fewer")
+        else:
+            value = str(raw_value).strip()
             try:
                 P.parse_value(value)
             except P.PartError as exc:
@@ -190,12 +218,7 @@ def parse_build(content: Any) -> Build:
         raise BuildError(f"at most {MAX_PARTS} parts per build")
 
     opamps: list[OpAmpUse] = []
-    raw_opamps = content.get("opamps")
-    if raw_opamps is not None and not isinstance(raw_opamps, list):
-        raise BuildError("opamps must be a list")
-    for entry in raw_opamps or []:
-        if not isinstance(entry, dict):
-            raise BuildError("each opamp must be an object")
+    for entry in _entries(content, "opamps", "opamp"):
         ref = _ref(entry.get("ref"), "opamp", seen)
         chip_ref = str(entry.get("chip", ""))
         if chip_ref not in chips:
@@ -218,12 +241,7 @@ def parse_build(content: Any) -> Build:
     known = {n for p in parts for n in p.nodes} | {n for o in opamps for n in (o.inp, o.inn, o.out)}
 
     sources: list[Source] = []
-    raw_sources = content.get("sources")
-    if raw_sources is not None and not isinstance(raw_sources, list):
-        raise BuildError("sources must be a list")
-    for entry in raw_sources or []:
-        if not isinstance(entry, dict):
-            raise BuildError("each source must be an object")
+    for entry in _entries(content, "sources", "source"):
         ref = _ref(entry.get("ref"), "source", seen)
         kind = str(entry.get("kind", ""))
         if kind not in SOURCE_KINDS:
@@ -241,15 +259,10 @@ def parse_build(content: Any) -> Build:
         sources.append(Source(ref, kind, node, amplitude, freq))
 
     probes: list[Probe] = []
-    raw_probes = content.get("probes")
-    if raw_probes is not None and not isinstance(raw_probes, list):
-        raise BuildError("probes must be a list")
-    for entry in raw_probes or []:
-        if not isinstance(entry, dict):
-            raise BuildError("each probe must be an object")
+    for entry in _entries(content, "probes", "probe"):
         label = str(entry.get("label", "")).strip()
-        if not label or len(label) > 40:
-            raise BuildError("probe label must be 1 to 40 characters")
+        if not label or len(label) > MAX_PROBE_LABEL:
+            raise BuildError(f"probe label must be 1 to {MAX_PROBE_LABEL} characters")
         node = _node(entry.get("node"), f"probe {label}")
         if node not in known:
             raise BuildError(f"probe {label!r}: node {node!r} is not in the build")
@@ -661,6 +674,39 @@ def place(build: Build) -> Layout:
     return layout
 
 
+def body(part: dict) -> set:
+    """Every hole a placed part lies over, not just the two it is wired into.
+
+    A resistor bridging a strip to a rail covers the rows between them, and its
+    lead over the near rail covers that too. Anything placed under it cannot be
+    reached with the part in the way, so the verifier refuses it rather than
+    drawing a board that cannot be built.
+    """
+    ends = part["ends"]
+    rails = [end for end in ends if end[0] == "rail"]
+    if len(rails) == 1 and len(ends) == 2:
+        rail = rails[0]
+        strip = ends[0] if ends[1] == rail else ends[1]
+        if rail[2] != strip[1]:
+            raise BuildError(
+                f"layout error: {part['ref']} runs diagonally from {strip} to {rail}")
+        side, column, row = strip
+        rows = TOP_ROWS if side == "top" else BOTTOM_ROWS
+        covered = rows[:rows.index(row) + 1] if side == "top" else rows[rows.index(row):]
+        covered_holes = {(side, column, r) for r in covered} | {rail}
+        crossed = CROSSED_RAIL.get(rail[1])
+        if crossed is not None:
+            covered_holes.add(("rail", crossed, column))
+        return covered_holes
+    (side_a, column_a, row_a), (side_b, column_b, row_b) = ends[0], ends[-1]
+    if side_a == side_b and row_a == row_b:
+        return {(side_a, column, row_a) for column in range(min(column_a, column_b), max(column_a, column_b) + 1)}
+    if side_a != side_b and column_a == column_b and {row_a, row_b} == {TOP_ROWS[0], BOTTOM_ROWS[-1]}:
+        return ({("top", column_a, row) for row in TOP_ROWS}
+                | {("bottom", column_a, row) for row in BOTTOM_ROWS})
+    return set(ends)
+
+
 def verify(layout: Layout) -> None:
     """Every net is one connected group of strips, and no two nets touch."""
     parent: dict[tuple, tuple] = {}
@@ -685,6 +731,22 @@ def verify(layout: Layout) -> None:
             claims.setdefault(strip_of(hole), net)
             if claims[strip_of(hole)] != net:
                 raise BuildError(f"layout error: {part['ref']} end for {net} landed on a strip carrying {claims[strip_of(hole)]}")
+    # A hole a part lies over cannot be reached with the part in place, so the
+    # board would be undrawable from. A part's own ends are of course exempt.
+    bodies = {part["ref"]: (body(part), set(part["ends"])) for part in layout.placed}
+    for ref, (covered, ends) in bodies.items():
+        for other, (other_covered, _) in bodies.items():
+            if other > ref and covered & other_covered:
+                raise BuildError(
+                    f"layout error: {ref} and {other} lie over the same holes "
+                    f"{sorted(covered & other_covered)}")
+        for jumper in layout.jumpers:
+            for end in jumper["ends"]:
+                if end in covered and end not in ends:
+                    raise BuildError(f"layout error: the jumper for {jumper['net']} sits under {ref}")
+        for item in layout.attachments:
+            if item["hole"] in covered and item["hole"] not in ends:
+                raise BuildError(f"layout error: {item['label']} sits under {ref}")
     for jumper in layout.jumpers:
         union(strip_of(jumper["ends"][0]), strip_of(jumper["ends"][1]))
     for item in layout.attachments:
