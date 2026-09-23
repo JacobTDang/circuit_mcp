@@ -13,20 +13,12 @@ import Foundation
 /// Every rule here is one `AppDelegate` cannot state twice: the delegate keeps no server state of
 /// its own, so what these tests drive is what the app runs.
 ///
-/// **Main thread only.** None of this is synchronised, and a caller on another thread would race
-/// exactly the bookkeeping that exists to stop two servers running at once: `beginStop` reads
-/// `workInFlight` and writes it, so two of them interleaved both return `.stop` for the same
-/// controller. The app is safe today because every path into it is on the main thread -- the
-/// delegate's menu actions and view callbacks, and `ServerController`, which hops every event,
-/// exit and stop completion to the main queue before calling back -- but that is stated over in
-/// `ServerController`, not here, and nothing stops a new caller from reaching this from a
-/// `DispatchQueue.global()` block. If you add one, hop to the main queue first.
-///
-/// `@MainActor` would say this to the compiler rather than to the reader, and it is the right
-/// answer eventually. It cannot be applied on its own: under this package's Swift 5 language mode
-/// it makes `AppDelegate` fail to compile until it is `@MainActor` too, and that in turn makes
-/// `main.swift` fail on `AppDelegate()` and turns the non-`Sendable` captures in the delegate's
-/// background blocks into warnings. That is a whole-target change, not this type's.
+/// **Main thread only**, and `@MainActor` states that to the compiler. None of this is
+/// synchronised, and a caller on another thread would race exactly the bookkeeping that exists to
+/// stop two servers running at once: `beginStop` reads `workInFlight` and writes it, so two of
+/// them interleaved both return `.stop` for the same controller. Work that runs off the main
+/// thread -- stopping a server, copying a notebook -- hops back before it touches any of this.
+@MainActor
 public final class ServerLifecycle {
     /// Work that has to finish before a server may start or the app may quit.
     public enum Work {

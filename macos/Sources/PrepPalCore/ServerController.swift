@@ -61,6 +61,11 @@ public enum StopOutcome: Equatable {
 
 /// Starts the command-center server as its own process-group leader, reads its protocol
 /// line, writes all of its output to the launch log, and stops it with escalation.
+/// Stopping a server runs off the main thread, so this type is handed between threads by design.
+/// Every mutable field below is guarded by `lock`, which is what makes that safe; the conformance
+/// is unchecked because the compiler cannot see a lock, not because the rule is being waived.
+extension ServerController: @unchecked Sendable {}
+
 public final class ServerController {
     /// How long `stop()` waits for a force-killed process to report its exit.
     private static let killExitWait: TimeInterval = 5

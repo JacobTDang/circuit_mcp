@@ -6,6 +6,9 @@ import XCTest
 /// The delegate itself is in the executable target and cannot be imported here, so the rules live
 /// in `ServerLifecycle` and the delegate does nothing else with them; the model below is the
 /// delegate's three server paths reduced to the calls it makes.
+/// These drive the app's main-thread paths, which is where `ServerLifecycle` lives, so the whole
+/// case is main-actor isolated rather than each test hopping on its own.
+@MainActor
 final class ServerLifecycleTests: XCTestCase {
     private var logDirectory: URL!
 
@@ -27,6 +30,7 @@ final class ServerLifecycleTests: XCTestCase {
 
     // MARK: - The app's server paths, minus AppKit and the dispatch queues
 
+    @MainActor
     private final class AppModel {
         let lifecycle = ServerLifecycle()
         /// Every server the app would have spawned, in order.

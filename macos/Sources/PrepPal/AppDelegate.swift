@@ -1,6 +1,10 @@
 import AppKit
 import PrepPalCore
 
+/// AppKit calls every delegate method on the main thread, and `ServerLifecycle` requires it.
+/// `NSApplicationDelegate` does not carry that isolation into this target under the package's
+/// Swift 5 language mode, so it is stated here.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static let displayName = "Andrew's PrepPal"
 
@@ -268,7 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// What a stop is worth writing into the server's own log. No number is quoted: the stop
     /// escalates through several waits, and the one the user sees is `worstCaseStopSeconds`.
-    static func logNote(for outcome: StopOutcome) -> String? {
+    nonisolated static func logNote(for outcome: StopOutcome) -> String? {
         switch outcome {
         case .notRunning, .stoppedGracefully:
             return nil
@@ -291,7 +295,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             """)
     }
 
-    private static func appendToLog(_ log: URL, _ line: String) {
+    nonisolated private static func appendToLog(_ log: URL, _ line: String) {
         do {
             let handle = try FileHandle(forWritingTo: log)
             defer { try? handle.close() }
@@ -520,7 +524,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// A refusal never gets that far, so it is answered first and on its own terms. The refusals
     /// used to arrive here as Swift source -- the alert really did read `sourceInUse("41273")` at
     /// a student who had only forgotten to quit `run_ui.py`.
-    static func importFailureDetail(_ failure: Error, importer: DataImporter, destination: URL) -> String {
+    nonisolated static func importFailureDetail(_ failure: Error, importer: DataImporter, destination: URL) -> String {
         // A refusal is raised by the checks that run before the destination is moved or a byte is
         // copied, so there is no recovery to report and nothing on disk to read: every sentence
         // below about data being moved aside or put back would be untrue of it. `DataImportError`

@@ -65,6 +65,11 @@ public struct ImportRecovery: Equatable {
 
 /// One-time copy of an existing command-center folder into the app's data folder.
 /// Nothing is ever deleted: existing app data is moved aside first.
+/// The import copy runs off the main thread. This is a value type whose only stored property is a
+/// `FileManager`, and the calls made on it here -- `fileExists`, `moveItem`, `copyItem`,
+/// `createDirectory` -- are the ones Apple documents as safe to use from multiple threads.
+extension DataImporter: @unchecked Sendable {}
+
 public struct DataImporter {
     private static let log = Logger(subsystem: "io.github.jacobtdang.preppal", category: "DataImporter")
 
