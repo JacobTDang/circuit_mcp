@@ -71,3 +71,22 @@ def test_laplace_variable_assumption_mismatch_is_caught():
     import pytest
     with pytest.raises(SymbolConflictError):
         equivalent(1 / (1 + sp.Symbol("s")), 1 / (1 + sp.Symbol("s", positive=True)))
+
+
+def test_a_sum_with_a_symbolic_bound_is_confirmed_term_by_term():
+    """A summation bound is not a continuous symbol; random substitution hangs on it."""
+    from circuit_mcp.parsing import parse_expression
+
+    total = parse_expression("sum_n(V/R^i, i, 1, n)")
+    closed = parse_expression("V*(1 - R^(-n))/(R - 1)")
+    verdict = equivalent(total, closed)
+    assert verdict.equivalent is True
+    assert "n = 1" in verdict.detail
+
+
+def test_a_sum_that_disagrees_at_one_n_is_rejected():
+    from circuit_mcp.parsing import parse_expression
+
+    total = parse_expression("sum_n(V/R^i, i, 1, n)")
+    verdict = equivalent(total, parse_expression("V/R"))
+    assert verdict.equivalent is False
