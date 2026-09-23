@@ -14,6 +14,7 @@ and Showman.
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import fcntl
 import os
 import signal
@@ -95,12 +96,26 @@ def _serve(listener: socket.socket) -> None:
         def handle_exit(self, sig, frame):
             """Exit 0 on a graceful stop instead of dying from the signal.
 
+            The first signal also kills any tool call still running. The window
+            that asked for it is closing, and a check_equivalence that has
+            nineteen seconds of SymPy left would otherwise hold the quit for all
+            of them -- the app's grace period runs out and SIGKILLs the server,
+            so every quit looks like a failed stop.
+
+            Anything else that stalls writes its stacks to the log seven seconds
+            in, so the next one is diagnosable rather than merely slow.
+
             uvicorn records each signal it handles and, once it has restored the
             original handlers, re-raises them -- which would leave this process
             killed by SIGTERM rather than exiting 0. Not recording the signal
             here is what stops that re-raise. The app reads the exit status to
             tell a clean stop from a crash.
             """
+            if not self.should_exit:
+                from .server import _WORKER
+
+                _WORKER.abort()
+                faulthandler.dump_traceback_later(7, exit=False)
             if self.should_exit and sig == signal.SIGINT:
                 self.force_exit = True
             self.should_exit = True
@@ -108,7 +123,11 @@ def _serve(listener: socket.socket) -> None:
     # access_log=False keeps stdout carrying only the protocol lines: uvicorn's access
     # handler streams to stdout, while everything else it logs goes to stderr, which the
     # app captures into the same log file.
-    ReadyServer(uvicorn.Config(web.app, lifespan="on", log_level="info", access_log=False)).run(sockets=[listener])
+    # Without a bound, uvicorn waits for in-flight connections forever, and a
+    # client that stopped reading a download holds the stop until the app's own
+    # grace period runs out and SIGKILLs the server.
+    ReadyServer(uvicorn.Config(web.app, lifespan="on", log_level="info", access_log=False,
+                               timeout_graceful_shutdown=3)).run(sockets=[listener])
 
 
 def main(argv: list[str] | None = None) -> int:

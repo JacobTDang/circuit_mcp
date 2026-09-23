@@ -1,6 +1,7 @@
 """The server entry point the macOS app runs: lock, free port, READY, graceful stop."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import queue
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.request
 from pathlib import Path
 from typing import TextIO
@@ -223,3 +225,64 @@ def test_the_listener_can_rebind_after_a_restart(monkeypatch):
         assert second.getsockname()[1] == app_server.PREFERRED_PORT
     finally:
         second.close()
+
+
+def test_sigterm_during_a_runaway_tool_call_exits_promptly(tmp_path):
+    """A quit must not wait out a check the window that asked for it is closing on."""
+    process, lines = _launch(tmp_path / "data")
+    port = int(_protocol_line(lines).split()[1])
+
+    def runaway() -> None:
+        with contextlib.suppress(Exception):
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    f"http://127.0.0.1:{port}/api/tools/check_equivalence",
+                    data=json.dumps({"arguments": {"expr_a": "9^(9^9)", "expr_b": "1"}}).encode(),
+                    headers={"Content-Type": "application/json", "Host": "localhost:2300"},
+                ), timeout=60)
+
+    caller = threading.Thread(target=runaway, daemon=True)
+    caller.start()
+    time.sleep(2.0)
+
+    started = time.monotonic()
+    process.terminate()
+    status = process.wait(timeout=30)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 8, f"the stop took {elapsed:.1f}s; the app's grace period is 10s"
+    assert status == 0, f"exited {status}: a bounded stop must still report a clean one"
+
+
+def test_a_client_that_stops_reading_cannot_hold_the_stop(tmp_path):
+    """An abandoned download holds an in-flight connection, which uvicorn waits on."""
+    data = tmp_path / "data"
+    process, lines = _launch(data)
+    port = int(_protocol_line(lines).split()[1])
+    payload = b"x" * 12_000_000
+    boundary = "----circuitmcp"
+    body = (
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"big.txt\"\r\n"
+        f"Content-Type: text/plain\r\n\r\n".encode() + payload +
+        f"\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"category\"\r\n\r\nhomework\r\n"
+        f"--{boundary}--\r\n".encode()
+    )
+    uploaded = urllib.request.urlopen(urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/library", data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}", "Host": "localhost:2300"},
+    ), timeout=60)
+    identifier = json.loads(uploaded.read())["item"]["id"]
+
+    # Start the download and read one byte of it, then walk away without closing.
+    reading = urllib.request.urlopen(urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/library/{identifier}/file",
+        headers={"Host": "localhost:2300"}), timeout=30)
+    reading.read(1)
+
+    started = time.monotonic()
+    process.terminate()
+    status = process.wait(timeout=30)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 8, f"the stop took {elapsed:.1f}s; the app's grace period is 10s"
+    assert status == 0

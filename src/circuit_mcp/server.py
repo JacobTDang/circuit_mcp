@@ -42,6 +42,7 @@ import json
 import os
 import pickle
 import selectors
+import contextlib
 import signal
 import struct
 import subprocess
@@ -847,6 +848,9 @@ class _Worker:
         self._lock = threading.RLock()
         self._process: subprocess.Popen | None = None
         self._stderr = None
+        # Set by abort() from a signal handler, without the lock: once the
+        # window that asked for the work is closing, no call may start another.
+        self._closing = False
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -958,8 +962,27 @@ class _Worker:
         (size,) = _HEADER.unpack(_read_exactly_before(out, _HEADER.size, deadline))
         return pickle.loads(_read_exactly_before(out, size, deadline))
 
+    def abort(self) -> None:
+        """Kill the worker now, from a signal handler, without taking the lock.
+
+        The lock is held by whichever call is in flight, and that call is the
+        thing being aborted -- waiting for it would be waiting for exactly what
+        is stuck. Killing the group is what unblocks it: the read fails, the
+        call returns a failure, and the flag stops it starting another worker.
+        """
+        self._closing = True
+        process, self._process = self._process, None
+        if process is not None and process.poll() is None:
+            with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+                os.killpg(process.pid, signal.SIGKILL)
+
     def call(self, name: str, kwargs: dict[str, Any], limit: float) -> dict[str, Any]:
         request = pickle.dumps((name, kwargs), protocol=pickle.HIGHEST_PROTOCOL)
+        if self._closing:
+            return _failure(
+                "shutting_down",
+                f"The server is stopping, so the {name} worker was not started.",
+            )
 
         with self._lock:
             # Two attempts, and only for a worker that was already gone. A tool
@@ -969,6 +992,11 @@ class _Worker:
             # a crash.
             for attempt in (0, 1):
                 deadline = time.monotonic() + limit
+                if self._closing:
+                    return _failure(
+                        "shutting_down",
+                        f"The server is stopping, so the {name} call was cut short.",
+                    )
                 try:
                     process = self._ensure()
                 except OSError as exc:
