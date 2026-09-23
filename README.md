@@ -426,6 +426,13 @@ An n-term sum is written `sum_n(V/R^i, i, 1, n)`. A summation bound is a term
 count rather than a continuous quantity, so `check_equivalence` expands it at
 n = 1 through 4 instead of substituting a random value for it.
 
+A name ending in the index is that term's own: `sum_n(Rf/RN_i*vN_i, i, 1, n)`
+expands to `Rf/RN_1*vN_1 + Rf/RN_2*vN_2 + …`, which is the shape a summing
+amplifier has. Expanding a name onto one the expression already uses is refused
+rather than silently conflating two quantities, and a summand that never
+mentions its index is refused too -- that is n copies of one term, which is a
+product written as a sum.
+
 Rendered expressions contain two forms:
 
 - `text`: readable and suitable for feeding into another MCP tool call.

@@ -1282,3 +1282,15 @@ def test_abort_reaches_a_worker_that_is_busy(monkeypatch):
         _wait_for_group_to_go(group)
     finally:
         worker.shutdown()
+
+
+def test_check_equivalence_confirms_a_per_resistor_sum_against_its_written_out_form():
+    """2.48(a): the summing amplifier's own shape, which #42 could not express."""
+    result = check_equivalence(
+        "sum_n(Rf/RN_i*vN_i, i, 1, n)",
+        "Rf/RN_1*vN_1 + Rf/RN_2*vN_2 + Rf/RN_3*vN_3 + Rf/RN_4*vN_4",
+    )
+    assert result["ok"] is True
+    # It holds only at four inputs, and the oracle says which n disagreed.
+    assert result["equivalent"] is False
+    assert "n = 1" in result["detail"]
