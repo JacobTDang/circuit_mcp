@@ -838,9 +838,12 @@ def test_a_timeout_leaves_nothing_of_the_worker_running(monkeypatch):
     the runaway it forked. Asserting the *group* is gone is what distinguishes
     a real kill from letting go of a pipe.
     """
-    monkeypatch.setattr(server_module, "TIMEOUT_SECONDS", 2.0)
-    check_equivalence("Rf/Ri", "Rf/Ri")  # warm, so there is a group to kill
+    # Warm it on the real budget first. Under the two-second one, a cold start
+    # that has to import SymPy times out on a slow machine, and the worker this
+    # test means to kill is already gone before it begins.
+    check_equivalence("Rf/Ri", "Rf/Ri")
     group = server_module._WORKER.pid
+    monkeypatch.setattr(server_module, "TIMEOUT_SECONDS", 2.0)
     assert group is not None
 
     assert check_equivalence("9^(9^9)", "1")["error"] == "timeout"

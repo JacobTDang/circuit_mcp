@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -143,8 +144,14 @@ async def _exercise_server(data_dir: Path) -> None:
 
             status = await session.call_tool("workspace_status", {})
             assert status.is_error is False
-            assert status.structured_content["ok"] is True
-            assert status.structured_content["platform"] == "macos"
+            if sys.platform == "darwin":
+                assert status.structured_content["ok"] is True
+                assert status.structured_content["platform"] == "macos"
+            else:
+                # Screen capture is macOS-only. Off it, the tool has to say so
+                # rather than claim a workspace it cannot read.
+                assert status.structured_content["ok"] is False
+                assert status.structured_content["platform"] != "macos"
 
             refused = await session.call_tool(
                 "capture_workspace", {"display": 0}
