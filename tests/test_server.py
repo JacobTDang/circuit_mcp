@@ -552,18 +552,23 @@ def test_transcribe_page_rejects_a_non_png_without_starting_ocr_worker():
     assert server_module.OCR_WORKER.pid == before
 
 
-def test_transcribe_page_sends_the_page_to_the_worker_with_the_page_timeout(monkeypatch):
+def test_transcribe_page_reads_the_page_box_by_box_with_the_page_budget(monkeypatch):
+    """The tool hands the page to the client's loop, which releases the worker between boxes."""
     seen = {}
 
-    def call(request, timeout=None):
-        seen.update(request=request, timeout=timeout)
+    def read_page(png, timeout=None):
+        seen.update(png=png, timeout=timeout)
         return {"ok": True, "expressions": [{"index": 0, "bbox": [0, 0, 10, 10], "latex": "x"}],
                 "expression_count": 1, "truncated": False}
 
-    monkeypatch.setattr(server_module.OCR_WORKER, "call", call)
+    def refuse_call(*args, **kwargs):
+        raise AssertionError("the whole page must not be one request")
+
+    monkeypatch.setattr(server_module.OCR_WORKER, "transcribe_page", read_page)
+    monkeypatch.setattr(server_module.OCR_WORKER, "call", refuse_call)
     page = b"\x89PNG\r\n\x1a\npage"
     result = transcribe_page(base64.b64encode(page).decode("ascii"))
-    assert seen["request"] == {"action": "transcribe_page", "png": page}
+    assert seen["png"] == page
     assert seen["timeout"] == server_module.PAGE_OCR_TIMEOUT_SECONDS
     assert result.structured_content["expressions"][0]["latex"] == "x"
 

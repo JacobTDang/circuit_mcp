@@ -165,3 +165,48 @@ def test_a_frame_is_painted_out_before_the_crop_is_recognized(monkeypatch):
     # The answer's ink survives; the frame's does not reach the recognizer.
     assert (crops[0] == 0).any()
     assert crops[0][:3, :].min() == 255 and crops[0][-3:, :].min() == 255
+
+
+def test_a_page_is_opened_once_and_read_one_box_at_a_time(engine):
+    """The worker holds the page so the client can take one box per request."""
+    page = np.full((300, 400), 255, np.uint8)
+    page[40:70, 50:150] = 0
+    page[130:160, 60:200] = 0
+
+    opened = engine.page_open(png(page))
+
+    assert opened["ok"] is True
+    assert opened["expression_count"] == 2
+    assert opened["page_id"]
+    assert (opened["image_width"], opened["image_height"]) == (400, 300)
+    assert engine.seen == []  # opening transcribes nothing
+
+    first = engine.page_expression(opened["page_id"], 0)
+    second = engine.page_expression(opened["page_id"], 1)
+
+    assert [first["latex"], second["latex"]] == ["expr1", "expr2"]
+    assert first["bbox"][1] < second["bbox"][1]
+    assert first["index"] == 0 and second["index"] == 1
+
+
+def test_a_page_id_the_worker_no_longer_holds_is_refused(engine):
+    page = np.full((300, 400), 255, np.uint8)
+    page[40:70, 50:150] = 0
+    opened = engine.page_open(png(page))
+    engine.page_open(png(page))  # a second page replaces the first
+
+    stale = engine.page_expression(opened["page_id"], 0)
+
+    assert stale["ok"] is False
+    assert stale["error"] == "page_expired"
+
+
+def test_an_out_of_range_box_is_refused(engine):
+    page = np.full((300, 400), 255, np.uint8)
+    page[40:70, 50:150] = 0
+    opened = engine.page_open(png(page))
+
+    result = engine.page_expression(opened["page_id"], 5)
+
+    assert result["ok"] is False
+    assert result["error"] == "no_such_expression"
