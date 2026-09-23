@@ -14,7 +14,7 @@ public enum MCPCommand {
                 "circuit": [
                     "command": AppLocations.bundledPython(in: appBundle).path,
                     "args": ["-m", "circuit_mcp.server"],
-                    "env": ServerEnvironment.clientVariables(locations: locations),
+                    "env": ServerEnvironment.clientVariables(locations: locations, appBundle: appBundle),
                 ],
             ],
         ]

@@ -150,7 +150,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = ServerController(configuration: ServerConfiguration(
             executable: python,
             arguments: ["-m", "circuit_mcp.app_server", "--data-dir", locations.commandCenterDirectory.path],
-            environment: ServerEnvironment.variables(locations: locations, secrets: serverSecrets),
+            environment: ServerEnvironment.variables(locations: locations, secrets: serverSecrets,
+                                                     appBundle: Bundle.main.bundleURL),
             logFile: log
         ))
         controller.onExit = { [weak self] exitStatus in

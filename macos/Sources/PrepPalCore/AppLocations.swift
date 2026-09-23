@@ -42,6 +42,11 @@ public struct AppLocations: Equatable {
         bundle.appendingPathComponent("Contents/Resources/python/bin/python3")
     }
 
+    /// The simulator the app carries, staged by `macos/stage_ngspice.sh`.
+    public static func bundledNgspice(in bundle: URL) -> URL {
+        bundle.appendingPathComponent("Contents/Resources/ngspice/bin/ngspice")
+    }
+
     /// macOS runs a quarantined app from a randomized read-only copy until the user moves it.
     public static func isTranslocated(_ bundle: URL) -> Bool {
         bundle.path.contains("/AppTranslocation/")
