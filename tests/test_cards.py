@@ -306,3 +306,15 @@ def test_a_solution_needs_a_step_and_an_answer():
         build_card("solution", "empty", {"given": [], "answer": {"expression": "1", "unit": "V"}})
     with pytest.raises(CardError, match="answer"):
         build_card("solution", "no answer", {"given": [], "steps": SOLUTION["steps"]})
+
+
+def test_a_single_step_solution_is_a_stated_answer_with_nothing_to_check():
+    """One line of working has no transition; the answer must still match it."""
+    card = build_card("solution", "stated", {
+        "given": [], "steps": [{"expression": "16", "note": "read off the datasheet"}],
+        "answer": {"expression": "16", "unit": "V/V"}})
+    assert card["payload"]["verified"] is True
+    with pytest.raises(CardError, match="answer"):
+        build_card("solution", "stated", {
+            "given": [], "steps": [{"expression": "16"}],
+            "answer": {"expression": "17", "unit": "V/V"}})

@@ -467,3 +467,50 @@ def test_the_sheet_stylesheet_prints_on_us_letter(tmp_path, monkeypatch):
     assert "header.sheet button { display: none; }" in css, "the export button must not print"
     assert "background: #fff" in css, "a dark ground prints as a black rectangle"
     assert "break-inside: avoid" in css, "a problem split across pages is hard to grade"
+
+
+def test_the_sheet_shows_the_checks_that_stand_behind_an_answer(tmp_path, monkeypatch):
+    """The evidence line is the point of recording tool calls against an attempt."""
+    with client(tmp_path, monkeypatch) as browser:
+        database = web._db()
+        problem = database.create_problem("Exp 1 gain", "op-amps", "find the gain", source_page=1)
+        database.tag_problem(problem["id"], "m2-evidence")
+        attempt = database.create_attempt(problem["id"], "student")
+        database.record_tool_call("check_derivation", {"steps": ["1 + R2/R1"], "truth": "16"},
+                                  {"ok": True, "kind": "ok"}, 12.0, attempt["id"])
+        database.record_tool_call("check_equivalence", {"expr_a": "a", "expr_b": "b"},
+                                  {"ok": True, "equivalent": False, "oracle": "numeric"}, 8.0, attempt["id"])
+        database.record_tool_call("simulate_spice", {"netlist": "R1 1 0 1k"},
+                                  {"ok": True, "points": []}, 40.0, attempt["id"])
+        card = build_card("solution", "Exp 1 gain", {
+            "given": [{"name": "R1", "value": 1000, "unit": "Ω"},
+                      {"name": "R2", "value": 15000, "unit": "Ω"}],
+            "steps": [{"expression": "1 + R2/R1"}, {"expression": "16"}],
+            "answer": {"expression": "16", "unit": "V/V"},
+            "attempt_id": attempt["id"],
+        })
+        database.create_card(card["kind"], card["title"], card["payload"], problem["id"])
+
+        page = browser.get("/solutions?tag=m2-evidence").text
+
+    assert "checked with" in page
+    assert "check_derivation" in page and "check_equivalence" in page and "simulate_spice" in page
+    assert page.count(">pass<") == 1 and page.count(">fail<") == 1 and page.count(">computed<") == 1
+    assert "no checks recorded" not in page
+
+
+def test_a_solution_whose_attempt_has_no_checks_says_so(tmp_path, monkeypatch):
+    """Silence would read as verified; the sheet has to say nothing was recorded."""
+    with client(tmp_path, monkeypatch) as browser:
+        database = web._db()
+        problem = database.create_problem("Exp 2 gain", "op-amps", "find the gain", source_page=1)
+        database.tag_problem(problem["id"], "m2-silent")
+        attempt = database.create_attempt(problem["id"], "student")
+        card = build_card("solution", "Exp 2 gain", {
+            "given": [], "steps": [{"expression": "16"}],
+            "answer": {"expression": "16", "unit": "V/V"}, "attempt_id": attempt["id"]})
+        database.create_card(card["kind"], card["title"], card["payload"], problem["id"])
+
+        page = browser.get("/solutions?tag=m2-silent").text
+
+    assert "no checks recorded against this attempt" in page
