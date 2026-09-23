@@ -241,3 +241,23 @@ def test_numeric_oracle_equivalence_counts_as_pass():
     """Strong evidence still counts; result_json keeps the oracle that settled it."""
     result = {"ok": True, "equivalent": True, "oracle": "numeric", "counterexample": None}
     assert verdict_for("check_equivalence", result) == "pass"
+
+
+def test_attempt_history_shows_each_check_verdict_and_its_arguments(tmp_path):
+    """Evidence is only reusable if the reader can see what was checked, and how it came out."""
+    db, data = database(tmp_path)
+    document = add_document(db, data)
+    problem = db.create_problem("Inverting gain", "op-amps", "Find vo/vi", document["id"])
+    attempt = db.create_attempt(problem["id"], "student")
+    db.record_tool_call("check_derivation", {"steps": ["R2/R1"], "truth": "R2/R1"},
+                        {"ok": True, "kind": "ok"}, 12.0, attempt["id"])
+    db.record_tool_call("check_equivalence", {"expr_a": "a", "expr_b": "b"},
+                        {"ok": True, "equivalent": False, "oracle": "numeric"}, 8.0, attempt["id"])
+    db.record_tool_call("derive", {"netlist": "R1 1 0 {R}"},
+                        {"ok": True, "transfer_function": {"text": "1"}}, 30.0, attempt["id"])
+
+    calls = db.attempt_history(problem["id"])[0]["tool_calls"]
+
+    assert [call["verdict"] for call in calls] == ["pass", "fail", "computed"]
+    assert calls[0]["arguments"] == {"steps": ["R2/R1"], "truth": "R2/R1"}
+    assert "arguments_json" not in calls[0]

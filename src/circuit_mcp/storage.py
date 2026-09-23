@@ -792,8 +792,15 @@ class CommandCenterDB:
             attempts = [dict(row) for row in connection.execute(
                 "SELECT * FROM attempts WHERE problem_id=? ORDER BY created_at DESC LIMIT ?", (problem_id, max(1, min(limit, 500))))]
             for attempt in attempts:
-                attempt["tool_calls"] = [dict(row) for row in connection.execute(
-                    "SELECT id,tool_name,ok,error_kind,duration_ms,created_at FROM tool_calls WHERE attempt_id=? ORDER BY created_at", (attempt["id"],))]
+                calls = []
+                for row in connection.execute(
+                        "SELECT id,tool_name,ok,verdict,error_kind,duration_ms,created_at,arguments_json "
+                        "FROM tool_calls WHERE attempt_id=? ORDER BY created_at", (attempt["id"],)):
+                    call = dict(row)
+                    # The arguments are what make a recorded check reproducible.
+                    call["arguments"] = json.loads(call.pop("arguments_json"))
+                    calls.append(call)
+                attempt["tool_calls"] = calls
         return attempts
 
     def course_progress(self) -> dict[str, Any]:
