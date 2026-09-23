@@ -301,3 +301,11 @@ def test_app_js_rasterises_a_schematic_on_a_white_ground(tmp_path, monkeypatch):
         assert "fillStyle='#ffffff'" in png
         assert "color:#111" in png
         assert "toBlob" in png
+
+
+def test_app_js_never_puts_a_solution_on_the_desk(tmp_path, monkeypatch):
+    """Closing a desk card deletes it, and that must never reach finished homework."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        kinds = app_script.split("const CARD_KINDS=", 1)[1].split(";", 1)[0]
+        assert "solution" not in kinds

@@ -381,3 +381,18 @@ def test_posting_attempt_id_inside_arguments_is_refused(tmp_path, monkeypatch):
         )
     assert response.status_code == 422
     assert "attempt_id" in response.json()["detail"]
+
+
+def test_the_canvas_feed_leaves_solutions_off_the_desk(tmp_path, monkeypatch):
+    """A solution is homework; the board deletes what it closes, so it never sees one."""
+    with client(tmp_path, monkeypatch) as browser:
+        database = web._db()
+        problem = database.create_problem("Exp 1 gain", "op-amps", "find the gain")
+        database.create_card("solution", "Exp 1 gain", {"given": [], "steps": [], "answer": {}},
+                             problem["id"])
+        database.create_card("formula", "gain", {"items": []}, problem["id"])
+
+        served = browser.get("/api/canvas").json()["items"]
+
+    assert [card["kind"] for card in served] == ["formula"]
+    assert [card["kind"] for card in database.list_cards()] == ["formula", "solution"]

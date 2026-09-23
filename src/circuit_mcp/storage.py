@@ -31,7 +31,8 @@ CATEGORIES = {"homework", "lecture", "reference", "solution"}
 STATUSES = {"draft", "confirmed", "solved", "needs_review"}
 ATTEMPT_STATUSES = {"working", "correct", "incorrect", "partial", "gap"}
 UUID_RE = re.compile(r"^[0-9a-f]{32}$")
-CARD_KINDS = ("formula", "walkthrough", "vocabulary", "breadboard", "expected", "schematic")
+CARD_KINDS = ("formula", "walkthrough", "vocabulary", "breadboard", "expected", "schematic",
+              "solution")
 
 
 def default_data_dir() -> Path:
@@ -689,12 +690,19 @@ class CommandCenterDB:
             raise StorageError("card not found")
         return _card(row)
 
-    def list_cards(self, problem_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    def list_cards(self, problem_id: str | None = None, limit: int = 50,
+                   kind: str | None = None, without_kind: str | None = None) -> list[dict[str, Any]]:
         clause, params = "", [COURSE_ID]
         if problem_id:
             if not UUID_RE.fullmatch(problem_id):
                 raise StorageError("problem not found")
             clause, params = " AND problem_id=?", [COURSE_ID, problem_id]
+        if kind:
+            clause, params = clause + " AND kind=?", [*params, kind]
+        if without_kind:
+            # A solution is homework, not a desk card: closing a card on the
+            # board deletes it, and that must never reach finished work.
+            clause, params = clause + " AND kind<>?", [*params, without_kind]
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM canvas_cards WHERE course_id=? AND deleted_at IS NULL" + clause +

@@ -99,7 +99,7 @@ from .mna import check_setup as _mna_check_setup
 from .mna import circuit_equations as _mna_circuit_equations
 from .ocr_client import OCR_WORKER
 from .parsing import ParseError, parse_equation, parse_expression
-from .steps import check_steps
+from .steps import check_steps, check_written
 from .spice import SpiceError, simulate_spice as _simulate_spice
 from .symbols import SubstitutionError, SymbolConflictError, bind
 from .storage import CommandCenterDB, StorageError, default_data_dir
@@ -352,42 +352,23 @@ def _check_derivation(
     steps: list[str], truth: str, parameters: dict[str, float] | None = None
 ) -> dict[str, Any]:
     renames: dict[str, str] = {}
-    truth_expr = _expression(truth, "the ground truth", renames=renames)
 
-    # The truth's symbols seed the table; each step adds whatever it introduces,
-    # so step k+1 binds onto the objects step k already used.
-    known = dict(bind(truth_expr))
-    parsed: list[sp.Expr] = []
-    for index, text in enumerate(steps, start=1):
-        expr = _expression(text, f"step {index}", symbols=dict(known), renames=renames)
-        known.update(bind(expr))
-        parsed.append(expr)
+    def parse(text: Any, where: str, symbols: dict[str, sp.Symbol] | None) -> sp.Expr:
+        return _expression(text, where, symbols=symbols, renames=renames)
 
-    substitutions: dict[sp.Symbol, float] = {}
-    for name, value in (parameters or {}).items():
-        if name not in known:
-            raise SubstitutionError(f"parameter {name!r} is not present in the derivation")
-        if not isinstance(value, (int, float)) or not sp.Float(value).is_finite:
-            raise SubstitutionError(f"parameter {name!r} must be a finite number")
-        # JSON numbers arrive as binary floats. Treat their shortest decimal
-        # spelling as the student's intended exact value; otherwise 0.000001
-        # becomes a nearby Float and exact algebra reports phantom errors.
-        substitutions[known[name]] = sp.Rational(str(value))
-    checked_steps = [step.subs(substitutions) for step in parsed]
-    checked_truth = truth_expr.subs(substitutions)
-    result = check_steps(checked_steps, checked_truth)
+    checked = check_written(parse, list(steps), truth, parameters)
     return {
-        "ok": result.ok,
-        "kind": result.kind,
-        "message": result.message,
-        "step_index": result.step_index,
-        "counterexample": _stringified(result.counterexample),
-        "steps": [_rendered(step) for step in parsed],
-        "truth": _rendered(truth_expr),
+        "ok": checked.result.ok,
+        "kind": checked.result.kind,
+        "message": checked.result.message,
+        "step_index": checked.result.step_index,
+        "counterexample": _stringified(checked.result.counterexample),
+        "steps": [_rendered(step) for step in checked.steps],
+        "truth": _rendered(checked.truth),
         "renamed_symbols": renames,
-        "parameters": dict(parameters or {}),
-        "evaluated_steps": [_rendered(step) for step in checked_steps],
-        "evaluated_truth": _rendered(checked_truth),
+        "parameters": dict(checked.parameters),
+        "evaluated_steps": [_rendered(step) for step in checked.evaluated_steps],
+        "evaluated_truth": _rendered(checked.evaluated_truth),
     }
 
 
@@ -1860,9 +1841,21 @@ def canvas_card_add(
     server; ``breadboard`` and ``expected`` take a build description, and
     ``schematic`` takes ``{"netlist": ...}`` -- the same lcapy netlist ``derive``
     was given, so the drawing and the maths cannot describe different circuits.
+    ``solution`` is a finished problem for the solutions sheet rather than the
+    desk: ``given`` values with units, ``steps`` checked with those values
+    substituted, an ``answer`` that must equal the last step, an optional
+    ``schematic`` netlist, and the ``attempt_id`` whose recorded checks are its
+    evidence. It needs a ``problem_id``, and closing a desk card never reaches
+    it.
     The drawing is read back out of its own geometry and refused unless it still
     says that netlist. The browser escapes every text field either way.
     """
+    if kind == "solution" and not problem_id:
+        return _failure(
+            "bad_card",
+            "a solution belongs to a problem: pass the problem_id it answers, so the "
+            "sheet can group it with the rest of that assignment.",
+        )
     built = _guarded("build_card", kind=kind, title=title, content=content)
     if not built.get("ok"):
         return built

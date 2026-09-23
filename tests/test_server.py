@@ -32,6 +32,7 @@ from circuit_mcp.analysis import transfer
 from circuit_mcp.equivalence import equivalent
 from circuit_mcp.equivalence import equivalent
 from circuit_mcp.server import (
+    canvas_card_add,
     check_derivation,
     check_equivalence,
     check_setup,
@@ -1219,3 +1220,12 @@ def test_port_impedance_refuses_a_shorted_port():
     assert result["ok"] is False
     assert result["error"] == "port_error"
     assert "short" in result["message"]
+
+
+def test_a_solution_card_without_a_problem_is_refused(tmp_path, monkeypatch):
+    """A solution the sheet cannot group with its assignment is not worth storing."""
+    monkeypatch.setattr(server_module, "default_data_dir", lambda: tmp_path / "command_center")
+    result = canvas_card_add("solution", "Exp 1", {
+        "given": [], "steps": [{"expression": "16"}], "answer": {"expression": "16", "unit": "V/V"}})
+    assert result["ok"] is False
+    assert result["error"] == "bad_card"
