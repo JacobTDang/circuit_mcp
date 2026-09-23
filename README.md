@@ -322,6 +322,10 @@ name, is rewritten to `i_s` before the screen runs, and every result that parsed
 reports `renamed_symbols` so the substitution is never silent. All other keywords
 stay rejected.
 
+Parallel combination is written `par(R1, R2, ...)`, not `R1 || R2`: SymPy overloads
+`|` as boolean `Or`, so admitting the operator would silently turn a resistance into
+a logical expression.
+
 Rendered expressions contain two forms:
 
 - `text`: readable and suitable for feeding into another MCP tool call.
