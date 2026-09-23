@@ -140,7 +140,7 @@ def test_more_than_max_parts_is_refused():
 
 # --- placement -----------------------------------------------------------------
 
-from circuit_mcp.breadboard import CHIP_COL0, place, strip_of, verify  # noqa: E402
+from circuit_mcp.breadboard import BOTTOM_ROWS, CHIP_COL0, TOP_ROWS, place, strip_of, verify  # noqa: E402
 from tests.fixtures import lab1  # noqa: E402
 
 
@@ -188,9 +188,11 @@ def test_every_two_terminal_part_lands_on_distinct_real_holes():
             if end[0] == "rail":
                 assert 1 <= end[2] <= 30
             else:
+                # The row has to belong to the side: ("top", 4, "f") names a
+                # hole on neither half of the board.
                 assert end[0] in ("top", "bottom")
                 assert 1 <= end[1] <= 30
-                assert end[2] in "abcdefghij"
+                assert end[2] in (TOP_ROWS if end[0] == "top" else BOTTOM_ROWS)
 
 
 def test_verify_refuses_a_short_between_two_nets():
