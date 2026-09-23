@@ -85,6 +85,14 @@ def _settle_time(build: Build, period: float) -> tuple[float, float]:
     integrator starts pinned at a rail and needs five of its own time constants
     to come back, not two periods of the input. The time constant comes back
     with the window so the caller can name it when the window is unusable.
+
+    Two assumptions, both deliberately pessimistic. Inductors are ignored, since
+    no Lab 1 build has one and an L/R corner would only ever shorten this window.
+    And tau is the largest resistance times the largest capacitance anywhere in
+    the build, whether or not they share a branch: finding the real dominant
+    pole means solving the circuit, which is what this window exists to set up.
+    An over-long window costs simulation time; a short one would report a
+    transient as a steady-state reading.
     """
     resistances = [P.parse_value(p.value) for p in build.parts if p.kind in ("resistor", "pot")]
     capacitances = [P.parse_value(p.value) for p in build.parts if p.kind == "capacitor"]
@@ -191,6 +199,13 @@ def expectations(content: Any) -> dict[str, Any]:
     for r in readings:
         if r.get("clipped"):
             notes.append(f"{r['label']} is clipping: the op amp output cannot go beyond about {lo_limit:g} V to {hi_limit:g} V on this supply.")
+    for ref, position in build.pot_positions.items():
+        if position <= 0.0 or position >= 1.0:
+            # The deck clamps a pot's end section to 1 ohm, because a 0 ohm
+            # resistor is a short ngspice will not solve. Said out loud, because
+            # a reading taken there is a model's answer, not the circuit's.
+            end = "first" if position <= 0.0 else "second"
+            notes.append(f"{ref} is at its {end} end; that section is modelled as 1 ohm, not 0.")
     return {"analysis": result["analysis"], "readings": readings, "gains": gains,
             "swing": {"low": lo_limit, "high": hi_limit}, "notes": notes,
             "pots": dict(build.pot_positions), "deck": netlist}

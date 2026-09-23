@@ -20,6 +20,15 @@ def reading(result, label):
     return next(r for r in result["readings"] if r["label"] == label)
 
 
+def part(build, ref):
+    """A part by its ref. Indexing by position breaks the moment a fixture gains a part."""
+    return next(entry for entry in build["parts"] if entry["ref"] == ref)
+
+
+def probe(build, label):
+    return next(entry for entry in build["probes"] if entry["label"] == label)
+
+
 def test_the_deck_for_exp1_is_complete_and_deterministic():
     text = deck(parse_build(lab1.EXP1_NONINVERTING))
     assert ".subckt railamp" in text
@@ -110,9 +119,9 @@ def test_a_build_without_probes_or_sources_is_refused():
 def test_an_upper_case_node_name_is_read_back_from_ngspice():
     """ngspice lower-cases its vector names; a build may capitalise a net."""
     shouty = copy.deepcopy(lab1.EXP1_NONINVERTING)
-    shouty["parts"][2]["nodes"] = ["Out", "fb"]
+    part(shouty, "R2")["nodes"] = ["Out", "fb"]
     shouty["opamps"][0]["out"] = "Out"
-    shouty["probes"][1]["node"] = "Out"
+    probe(shouty, "CH2 vo")["node"] = "Out"
     result = expectations(shouty)
     assert math.isclose(result["gains"][0]["gain"], 16.0, rel_tol=0.02)
     assert reading(result, "CH2 vo")["node"] == "Out"
@@ -121,7 +130,7 @@ def test_an_upper_case_node_name_is_read_back_from_ngspice():
 def test_a_settle_window_the_simulation_cannot_resolve_is_refused():
     """A huge RC used to stretch the step until the capture window held two points."""
     slow = copy.deepcopy(lab1.EXP5_INTEGRATOR)
-    slow["parts"][1]["value"] = "10meg"   # tau = 1 s, so a 5 s settle at 500 Hz
+    part(slow, "R2")["value"] = "10meg"   # tau = 1 s, so a 5 s settle at 500 Hz
     with pytest.raises(ExpectError, match="settle window"):
         expectations(slow)
 
@@ -151,7 +160,7 @@ def test_a_flat_reading_is_not_called_quadrature():
     """A trace that never moves has no phase. The correlation denominator used to
     fall back to 1, which made zero over zero look like a quarter period apart."""
     held = copy.deepcopy(lab1.EXP6_DIFFERENCE)
-    held["probes"][1] = {"label": "CH2 vb", "node": "vb", "role": "output"}
+    probe(held, "CH2 vo").update(label="CH2 vb", node="vb", role="output")
     gain = expectations(held)["gains"][0]
     assert gain["phase"] == "flat"
     assert gain["gain"] == 0.0
@@ -160,3 +169,24 @@ def test_a_flat_reading_is_not_called_quadrature():
 def test_the_expectation_names_the_pot_positions_its_numbers_depend_on():
     assert expectations(lab1.EXP1_NONINVERTING)["pots"] == {"R3": 0.5}
     assert expectations(lab1.EXP7_DAC)["pots"] == {}
+
+
+def test_a_pot_at_either_end_says_it_is_modelled_as_one_ohm():
+    """The clamp used to be silent, so a reading taken at an end looked exact."""
+    build = copy.deepcopy(lab1.EXP1_NONINVERTING)
+    build["pot_positions"]["R3"] = 0.0
+    notes = expectations(build)["notes"]
+    assert any("R3" in note and "1" in note for note in notes), notes
+
+    build["pot_positions"]["R3"] = 1.0
+    assert any("R3" in note for note in expectations(build)["notes"])
+
+
+def test_a_pot_off_its_ends_says_nothing_about_the_clamp():
+    assert not [note for note in expectations(lab1.EXP1_NONINVERTING)["notes"] if "1 " in note and "R3" in note]
+
+
+def test_a_dc_build_with_no_input_probe_reports_no_gains():
+    """The front end renders an empty gains list; this pins that shape."""
+    result = expectations(lab1.EXP7_DAC)
+    assert result["gains"] == []
