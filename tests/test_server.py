@@ -1229,3 +1229,51 @@ def test_a_solution_card_without_a_problem_is_refused(tmp_path, monkeypatch):
         "given": [], "steps": [{"expression": "16"}], "answer": {"expression": "16", "unit": "V/V"}})
     assert result["ok"] is False
     assert result["error"] == "bad_card"
+
+
+def test_an_aborted_worker_fails_fast_and_starts_nothing():
+    """A quit is closing the window that asked, so a call must not outlive it."""
+    worker = server_module._Worker()
+    try:
+        worker.prewarm()
+        assert worker.pid is not None
+
+        worker.abort()
+
+        assert worker.pid is None
+        result = worker.call("check_equivalence", {"expr_a": "a", "expr_b": "a"}, 5.0)
+        assert result["ok"] is False
+        assert result["error"] == "shutting_down"
+        assert worker.pid is None, "an aborted worker must not start another"
+    finally:
+        worker.shutdown()
+
+
+def test_abort_reaches_a_worker_that_is_busy(monkeypatch):
+    """The point of abort: it does not wait for the lock the busy call is holding."""
+    import threading
+
+    worker = server_module._Worker()
+    try:
+        worker.prewarm()
+        group = worker.pid
+        done: list[dict] = []
+
+        def run() -> None:
+            done.append(worker.call("check_equivalence", {"expr_a": "9^(9^9)", "expr_b": "1"}, 60.0))
+
+        busy = threading.Thread(target=run)
+        busy.start()
+        time.sleep(1.0)
+        started = time.monotonic()
+        worker.abort()
+        busy.join(timeout=10)
+        elapsed = time.monotonic() - started
+
+        assert not busy.is_alive(), "the blocked call never returned"
+        assert elapsed < 5, f"abort took {elapsed:.1f}s"
+        assert done and done[0]["ok"] is False
+        with pytest.raises(ProcessLookupError):
+            os.killpg(group, 0)
+    finally:
+        worker.shutdown()
