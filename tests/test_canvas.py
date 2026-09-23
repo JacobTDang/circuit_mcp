@@ -234,3 +234,50 @@ def test_app_js_draws_the_net_legend_and_links_each_step_to_the_board(tmp_path, 
             assert f"document.addEventListener('{event}',e=>{{const[card,t]=boardTarget(e)" in app_script, event
         css = browser.get("/assets/canvas.css").text
         assert ".card-board.is-focusing-step" in css and ".card-board.is-focusing-net" in css
+
+
+def test_app_js_retries_a_poll_whose_render_failed(tmp_path, monkeypatch):
+    """The signature was stamped before the render, so a render that threw was never retried."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        poll = app_script.split("async function pollCanvasCards()", 1)[1].split("pollCanvasCards();", 1)[0]
+        before, after = poll.split("cardsSignature=signature", 1)
+        assert "renderCanvas()" not in after.split("catch", 1)[0] or "renderCanvas()" in before, \
+            "the signature must not be stamped until the render has run"
+        assert "cardsSignature=''" in poll, "a failed poll must clear the signature so the next one retries"
+
+
+def test_app_js_survives_a_card_it_cannot_render(tmp_path, monkeypatch):
+    """One malformed reading used to abort renderCanvas mid-loop, losing every later card."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        body = app_script.split("function cardBody(item)", 1)[1].split("const baseCardBody", 1)[0]
+        assert "try{" in body and "catch" in body, "cardBody must not let one card take down the render"
+        assert "card-error" in body, "a card that cannot render should say so in its place"
+        assert "r.volts.toFixed(3)" not in body, "a missing or non-numeric reading must not throw"
+
+
+def test_app_js_measures_the_canvas_after_hydration(tmp_path, monkeypatch):
+    """Height was measured while server cards still showed 'loading card…'."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        poll = app_script.split("async function pollCanvasCards()", 1)[1].split("pollCanvasCards();", 1)[0]
+        hydration = poll.split("hydrated.forEach", 1)[1]
+        assert "fitCanvasHeight()" in hydration, "the canvas must be re-measured once the real bodies are in"
+
+
+def test_app_js_states_the_output_swing_as_approximate(tmp_path, monkeypatch):
+    """The LM324 headroom figure is a datasheet approximation, and the card said it as fact."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        assert "output swing about" in app_script
+
+
+def test_app_js_stores_no_server_card_payload_locally(tmp_path, monkeypatch):
+    """A server card's payload is re-fetched; keeping it would serve a stale card after a republish."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        save = app_script.split("function saveCanvas()", 1)[1].split("function componentBody", 1)[0]
+        server_branch, local_branch = save.split("server?", 1)[1].split(":", 1)
+        assert "card" not in server_branch, "a server card must be stored by id and position only"
+        assert "card" in local_branch, "a local card carries its own content"
