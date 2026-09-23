@@ -1857,8 +1857,11 @@ def canvas_card_add(
 
     The ``formula``, ``walkthrough`` and ``vocabulary`` cards take expressions in
     the same restricted syntax as ``check_derivation``, rendered to MathML by the
-    server; ``breadboard`` and ``expected`` take a build description and no
-    expressions at all. The browser escapes every text field either way.
+    server; ``breadboard`` and ``expected`` take a build description, and
+    ``schematic`` takes ``{"netlist": ...}`` -- the same lcapy netlist ``derive``
+    was given, so the drawing and the maths cannot describe different circuits.
+    The drawing is read back out of its own geometry and refused unless it still
+    says that netlist. The browser escapes every text field either way.
     """
     built = _guarded("build_card", kind=kind, title=title, content=content)
     if not built.get("ok"):

@@ -14,7 +14,7 @@ MATH = '<math xmlns="http://www.w3.org/1998/Math/MathML"'
 
 
 def test_the_kinds_are_exactly_the_ones_the_canvas_renders():
-    assert KINDS == ("formula", "walkthrough", "vocabulary", "breadboard", "expected")
+    assert KINDS == ("formula", "walkthrough", "vocabulary", "breadboard", "expected", "schematic")
 
 
 # --- formula ------------------------------------------------------------------
@@ -230,3 +230,27 @@ def test_a_bad_build_is_refused_naming_the_field():
         build_card("breadboard", "x", {"parts": []})
     with pytest.raises(CardError, match="at least one probe"):
         build_card("expected", "x", {**lab1.EXP7_DAC, "probes": []})
+
+
+# --- schematic ----------------------------------------------------------------
+
+INVERTING_NETLIST = "Vs 1 0 {V}\nRi 1 2 10e3\nRf 2 3 100e3\nE1 3 0 opamp 0 2 {A}"
+
+
+def test_a_schematic_card_draws_the_netlist_and_keeps_it():
+    card = build_card("schematic", "inverting amplifier", {"netlist": INVERTING_NETLIST})
+    payload = card["payload"]
+    assert payload["netlist"] == INVERTING_NETLIST
+    assert payload["svg"].startswith("<svg")
+    assert "100 kΩ" in payload["svg"] and "10 kΩ" in payload["svg"]
+    assert {element["name"] for element in payload["elements"]} == {"Vs", "Ri", "Rf", "E1"}
+
+
+def test_a_schematic_card_needs_a_netlist():
+    with pytest.raises(CardError, match="netlist"):
+        build_card("schematic", "nothing", {})
+
+
+def test_a_netlist_the_drawer_refuses_never_becomes_a_card():
+    with pytest.raises(CardError, match="F1"):
+        build_card("schematic", "controlled", {"netlist": "Vs 1 0 {V}\nF1 2 0 Vs 2"})

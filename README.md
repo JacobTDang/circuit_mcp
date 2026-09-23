@@ -162,6 +162,17 @@ as native MathML -- no library, no CDN -- laid out in the order it was written
 rather than SymPy's canonical order. Cards are draggable and resizable like
 everything else on the desk; closing one in the browser removes it for the agent.
 
+A `schematic` card takes `{"netlist": ...}` -- the same lcapy netlist `derive`
+was given -- and draws the circuit from it: op-amp stages left to right, the
+inverting input on top, feedback on a track above the triangle, and everything
+tied to ground dropped onto a ground symbol. The drawing is then read back out
+of its own geometry, with wires joined where they share an end, where a dot
+marks a junction and where they run over one another, and nowhere else; it is
+refused unless the connections it shows are the ones the netlist declares. A
+card can therefore never show a circuit other than the one the maths was done
+on. A netlist it cannot place is refused by name rather than drawn
+approximately, and the browser can save the drawing as a PNG.
+
 Two more kinds turn a confirmed circuit into a bench session. `breadboard` draws
 the build on the columns of a 30-column board it uses: the chip across the
 trench with each pin's number and job, each part between named holes, the supply
