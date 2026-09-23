@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from circuit_mcp.storage import SCHEMA_VERSION, CommandCenterDB, StorageError
+from circuit_mcp.storage import SCHEMA_VERSION, CommandCenterDB, StorageError, verdict_for
 
 
 def database(tmp_path):
@@ -224,3 +224,20 @@ def test_a_card_kind_outside_the_known_set_is_refused_at_the_store(tmp_path):
     db, _ = database(tmp_path)
     with pytest.raises(StorageError, match="kind"):
         db.create_card("diagram", "t", {"items": []})
+
+
+def test_verdict_names_what_each_tool_proved():
+    assert verdict_for("check_derivation", {"ok": True, "kind": "ok"}) == "pass"
+    assert verdict_for("check_derivation", {"ok": False, "kind": "algebra"}) == "fail"
+    assert verdict_for("check_setup", {"ok": False, "kind": "not_satisfied"}) == "fail"
+    assert verdict_for("check_equivalence", {"ok": True, "equivalent": True, "oracle": "symbolic"}) == "pass"
+    assert verdict_for("check_equivalence", {"ok": True, "equivalent": False, "oracle": "numeric"}) == "fail"
+    assert verdict_for("derive", {"ok": True, "transfer_function": {}}) == "computed"
+    assert verdict_for("simulate_spice", {"ok": True, "points": []}) == "computed"
+    assert verdict_for("derive", {"ok": False, "error": "circuit_error", "message": "bad netlist"}) == "error"
+
+
+def test_numeric_oracle_equivalence_counts_as_pass():
+    """Strong evidence still counts; result_json keeps the oracle that settled it."""
+    result = {"ok": True, "equivalent": True, "oracle": "numeric", "counterexample": None}
+    assert verdict_for("check_equivalence", result) == "pass"
