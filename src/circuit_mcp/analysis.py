@@ -12,6 +12,9 @@ from __future__ import annotations
 import sympy as sp
 from lcapy import Circuit, s as _lcapy_s
 
+# lcapy reports a port nothing reaches by failing to invert its MNA matrix.
+_DISJOINT_ERRORS = (ValueError, RuntimeError, AttributeError, TypeError)
+
 from .symbols import SubstitutionError, bind, safe_subs
 
 # lcapy's own Laplace variable, not a hand-made one. It carries complex/finite,
@@ -29,9 +32,82 @@ class AssumptionError(ValueError):
     """A symbol carries assumptions that would silently distort the result."""
 
 
-def transfer(netlist: str, in_pos, in_neg, out_pos, out_neg) -> sp.Expr:
-    """Symbolic transfer function between two node pairs."""
-    return Circuit(netlist).transfer(in_pos, in_neg, out_pos, out_neg).sympy
+class PortError(ValueError):
+    """A port that cannot be driven or measured as asked."""
+
+
+def transfer(netlist: str, in_pos, in_neg, out_pos, out_neg, kind: str = "voltage") -> sp.Expr:
+    """Symbolic transfer function between two node pairs.
+
+    ``kind`` says what drives the input pair. ``voltage`` applies
+    ``V(in_pos) - V(in_neg)`` and returns a dimensionless gain. ``current``
+    drives a current *into* ``in_pos`` and *out of* ``in_neg`` and returns a
+    transresistance in ohms -- which is what a photodiode, a DAC's summing
+    node, or any other current source needs. Writing such a circuit as a
+    voltage source behind a series resistor and mapping the source current by
+    hand is a sign error waiting to happen, which is the whole reason this
+    takes a kind.
+    """
+    if kind not in ("voltage", "current"):
+        raise ValueError(
+            f"Unknown input kind {kind!r}. Use 'voltage' for a voltage between "
+            f"the input nodes, or 'current' for a current into in_pos."
+        )
+    circuit = Circuit(netlist)
+    if kind == "voltage":
+        return circuit.transfer(in_pos, in_neg, out_pos, out_neg).sympy
+    return circuit.transimpedance(in_pos, in_neg, out_pos, out_neg).sympy
+
+
+def _without_sources_across(netlist: str, pos, neg) -> str:
+    """The netlist with any independent source wired straight across the port dropped.
+
+    Impedance is measured with the independent sources killed, and a killed
+    voltage source is a short. Left in place, a source across the port would
+    make every answer zero -- and a source across the port is exactly how a
+    student draws the input they are measuring.
+    """
+    kept = []
+    port = {str(pos), str(neg)}
+    for line in netlist.splitlines():
+        fields = line.split()
+        if len(fields) >= 3 and fields[0][:1] in ("V", "I") and {fields[1], fields[2]} == port:
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
+def port_impedance(netlist: str, pos, neg) -> sp.Expr:
+    """Impedance looking into a port, with the independent sources killed.
+
+    Section 1.5 of the course text treats input resistance as a core quantity,
+    and nothing symbolic here could produce one: it was being measured
+    numerically in ngspice instead.
+
+    A port shorted by a wire answers zero, and a port the rest of the circuit
+    does not reach has no answer at all. Both are refused rather than returned,
+    because both are a netlist that does not say what its author meant. A port
+    whose impedance merely *tends* to zero as the open-loop gain grows -- the
+    virtual ground of an inverting amplifier -- is a real answer and is kept.
+    """
+    try:
+        impedance = Circuit(_without_sources_across(netlist, pos, neg)).impedance(pos, neg).sympy
+    except _DISJOINT_ERRORS as exc:
+        raise PortError(
+            f"Nothing connects the port ({pos}, {neg}) to the rest of the circuit, "
+            f"so there is no impedance to report: {exc}"
+        ) from exc
+    if impedance == 0:
+        raise PortError(
+            f"The port ({pos}, {neg}) is a short circuit, so its impedance is zero "
+            f"by construction. Measure across the component you meant, or remove "
+            f"the wire joining these nodes."
+        )
+    if impedance.has(sp.oo, sp.zoo, sp.nan):
+        raise PortError(
+            f"The port ({pos}, {neg}) is open, so no current can be driven into it."
+        )
+    return impedance
 
 
 def _gain_symbol(expr: sp.Expr, name: str) -> sp.Symbol:

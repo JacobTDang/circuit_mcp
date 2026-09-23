@@ -40,6 +40,7 @@ from .server import (
     dac_output,
     derive,
     import_waveform_csv,
+    port_impedance,
     instrument_query,
     instrument_status,
     opamp_limits,
@@ -180,7 +181,8 @@ def _extract(path: Path, extension: str) -> tuple[str, int | None]:
 
 
 TOOLS: dict[str, Callable[..., Any]] = {
-    "derive": derive, "check_equivalence": check_equivalence,
+    "derive": derive, "port_impedance": port_impedance,
+    "check_equivalence": check_equivalence,
     "check_derivation": check_derivation, "circuit_equations": circuit_equations,
     "check_setup": check_setup, "compare_readings": compare_readings,
     "simulate_spice": simulate_spice,

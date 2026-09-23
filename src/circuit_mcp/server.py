@@ -58,8 +58,10 @@ from mcp.types import CallToolResult, ImageContent, TextContent
 
 from .analysis import (
     AssumptionError,
+    PortError,
     ideal_limit,
     poles,
+    port_impedance as port_impedance_of,
     transfer,
     with_finite_gbw,
 )
@@ -117,6 +119,7 @@ TIMEOUT_SECONDS = 20.0
 _GAIN = "A"
 
 _MODES = ("finite", "ideal", "gbw")
+_INPUT_KINDS = ("voltage", "current")
 
 # lcapy's failure modes when a netlist is unbuildable or unsolvable. Mirrors
 # ``mna._LCAPY_ERRORS``: ``OSError`` is in the list because lcapy reads a
@@ -220,17 +223,34 @@ def _equation(
 # implementations
 # ---------------------------------------------------------------------------
 
-def _transfer(netlist: str, in_pos, in_neg, out_pos, out_neg) -> sp.Expr:
+def _transfer(netlist: str, in_pos, in_neg, out_pos, out_neg, kind: str = "voltage") -> sp.Expr:
     """``analysis.transfer``, with lcapy's failures named as circuit errors."""
     try:
-        return transfer(netlist, in_pos, in_neg, out_pos, out_neg)
+        return transfer(netlist, in_pos, in_neg, out_pos, out_neg, kind)
     except _LCAPY_ERRORS as exc:
         raise CircuitError(
             f"lcapy could not derive a transfer function from this netlist: {exc}"
         ) from exc
 
 
-def _derive(netlist: str, in_pos, in_neg, out_pos, out_neg, mode: str) -> dict[str, Any]:
+def _sources_across(netlist: str, pos, neg) -> list[str]:
+    """The independent sources wired straight across a port, by name."""
+    port = {str(pos), str(neg)}
+    return [
+        fields[0] for fields in (line.split() for line in netlist.splitlines())
+        if len(fields) >= 3 and fields[0][:1] in ("V", "I") and {fields[1], fields[2]} == port
+    ]
+
+
+def _derive(netlist: str, in_pos, in_neg, out_pos, out_neg, mode: str,
+            input_kind: str = "voltage") -> dict[str, Any]:
+    if input_kind not in _INPUT_KINDS:
+        return _failure(
+            "bad_input",
+            f"Unknown input kind {input_kind!r}. Use 'voltage' for a voltage "
+            f"across the input pair, or 'current' for a current driven into "
+            f"in_pos and out of in_neg.",
+        )
     if mode not in _MODES:
         return _failure(
             "bad_mode",
@@ -239,7 +259,7 @@ def _derive(netlist: str, in_pos, in_neg, out_pos, out_neg, mode: str) -> dict[s
             f"single-pole finite gain-bandwidth.",
         )
 
-    result = _transfer(netlist, in_pos, in_neg, out_pos, out_neg)
+    result = _transfer(netlist, in_pos, in_neg, out_pos, out_neg, input_kind)
 
     if mode != "finite":
         # ``sp.limit`` against a symbol the expression does not contain returns
@@ -264,8 +284,45 @@ def _derive(netlist: str, in_pos, in_neg, out_pos, out_neg, mode: str) -> dict[s
     return {
         "ok": True,
         "mode": mode,
+        "input": input_kind,
+        # Dimensionless for a voltage input, ohms for a current one. Saying so
+        # is what stops a transresistance being read as a gain.
+        "units": "V/V" if input_kind == "voltage" else "V/A",
         "transfer_function": _rendered(result),
         "poles": [_rendered(pole) for pole in poles(result)],
+        "symbols": sorted(bind(result)),
+    }
+
+
+def _port_impedance(netlist: str, pos, neg, mode: str) -> dict[str, Any]:
+    if mode not in _MODES:
+        return _failure(
+            "bad_mode",
+            f"Unknown mode {mode!r}. Use 'finite', 'ideal', or 'gbw'.",
+        )
+    try:
+        result = port_impedance_of(netlist, pos, neg)
+    except PortError as exc:
+        return _failure("port_error", str(exc))
+    except _LCAPY_ERRORS as exc:
+        raise CircuitError(f"lcapy could not measure this port: {exc}") from exc
+
+    if mode != "finite":
+        if _GAIN not in bind(result):
+            return _failure(
+                "missing_gain",
+                f"No symbol named {_GAIN!r} in this impedance "
+                f"({sorted(bind(result))}), so there is no open-loop gain to take "
+                f"a limit in. Use mode 'finite'.",
+            )
+        result = (
+            ideal_limit(result, _GAIN) if mode == "ideal" else with_finite_gbw(result, _GAIN)
+        )
+    return {
+        "ok": True,
+        "mode": mode,
+        "impedance": _rendered(result),
+        "removed_sources": _sources_across(netlist, pos, neg),
         "symbols": sorted(bind(result)),
     }
 
@@ -484,6 +541,7 @@ _IMPLEMENTATIONS = {
     "build_card": _build_card,
     "compare_readings": _compare_readings,
     "derive": _derive,
+    "port_impedance": _port_impedance,
     "check_equivalence": _check_equivalence,
     "check_derivation": _check_derivation,
     "circuit_equations": _circuit_equations,
@@ -1106,6 +1164,7 @@ def derive(
     out_pos: str | int,
     out_neg: str | int,
     mode: str = "finite",
+    input: str = "voltage",
     attempt_id: str | None = None,
 ) -> dict[str, Any]:
     """Ground-truth transfer function between two node pairs, and its poles.
@@ -1121,6 +1180,14 @@ def derive(
     * ``ideal`` -- ``A`` taken to infinity, i.e. the textbook result.
     * ``gbw`` -- ``A`` replaced by ``A0 / (1 + s/wp)``, whose pole is the
       gain-bandwidth tradeoff.
+
+    ``input`` says what drives the input pair. ``voltage`` (the default) applies
+    ``V(in_pos) - V(in_neg)`` and returns a dimensionless gain. ``current``
+    drives a current *into* ``in_pos`` and out of ``in_neg`` and returns a
+    transresistance in ohms -- for a photodiode, a summing node, or any other
+    current-driven input. ``units`` in the result says which you got. Writing a
+    current source as a voltage source behind a resistor and mapping the current
+    by hand is a sign error waiting to happen, and this is here to avoid it.
 
     ``ideal`` and ``gbw`` require the open-loop gain to be named ``A`` in the
     netlist and are refused otherwise, because substituting a symbol that is not
@@ -1142,7 +1209,34 @@ def derive(
         out_pos=out_pos,
         out_neg=out_neg,
         mode=mode,
+        input_kind=input,
     )
+
+
+@server.tool()
+def port_impedance(
+    netlist: str, pos: str | int, neg: str | int, mode: str = "finite",
+    attempt_id: str | None = None,
+) -> dict[str, Any]:
+    """Impedance looking into a port, with the independent sources killed.
+
+    This is the input or output resistance a circuits course asks for, derived
+    symbolically rather than measured in a simulation.
+
+    Any independent source wired straight across the port is *removed* first,
+    not killed: killing a voltage source shorts it, and a source across the
+    port is exactly how the input being measured is drawn. ``removed_sources``
+    names what went, so a surprising answer can be traced to it.
+
+    ``mode`` works as it does in :func:`derive`. A port shorted by a wire, or
+    one nothing else in the circuit reaches, is refused rather than answered
+    with zero or infinity. A virtual ground whose impedance merely tends to
+    zero as ``A`` grows is a real answer and is returned.
+
+    Pass ``attempt_id`` to file this check against an attempt; it then appears
+    in ``attempt_history`` with its verdict.
+    """
+    return _recorded("port_impedance", attempt_id, netlist=netlist, pos=pos, neg=neg, mode=mode)
 
 
 @server.tool()
