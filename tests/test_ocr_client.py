@@ -6,6 +6,8 @@ import sys
 import tempfile
 import time
 
+import pytest
+
 from circuit_mcp.ocr_client import MAX_IMAGE_BYTES, OCRWorker
 
 
@@ -19,6 +21,7 @@ def _configuration(tmp_path: Path):
     return Path(sys.executable), model, "cpu"
 
 
+@pytest.mark.spawns_workers
 def test_status_protocol_reuses_one_persistent_worker(tmp_path, monkeypatch):
     worker = OCRWorker()
     monkeypatch.setattr(worker, "_configuration", lambda: _configuration(tmp_path))
@@ -71,6 +74,7 @@ def test_an_oversized_page_is_refused_before_worker_start(monkeypatch):
     assert worker.pid is None
 
 
+@pytest.mark.spawns_workers
 def test_dead_worker_is_restarted_and_request_retried(tmp_path, monkeypatch):
     worker = OCRWorker()
     monkeypatch.setattr(worker, "_configuration", lambda: _configuration(tmp_path))

@@ -35,3 +35,6 @@ build-backend = "hatchling.build"
 testpaths = ["tests"]
 pythonpath = [".", "src"]
 filterwarnings = ["ignore::SyntaxWarning", "ignore::UserWarning"]
+markers = [
+  "spawns_workers: needs a real Showman or OCR worker, rather than a stub of one",
+]
