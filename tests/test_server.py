@@ -1057,3 +1057,21 @@ def test_summing_dac_output_tool_names_bad_input_as_a_metrics_error():
     result = summing_dac_output([1], 3, 10e3, [2.5e3, 5e3])
     assert result["ok"] is False
     assert result["error"] == "metrics_error"
+
+
+def test_check_derivation_reports_the_rename():
+    """'is' parses, and the result says what it was read as -- a silent rename is its own trap."""
+    result = check_derivation(["is*R1", "R1*is"], "is*R1")
+    assert result["ok"] is True
+    assert result["renamed_symbols"] == {"is": "i_s"}
+
+
+def test_check_equivalence_reports_the_rename():
+    result = check_equivalence("is*R1", "R1*is")
+    assert result["equivalent"] is True
+    assert result["renamed_symbols"] == {"is": "i_s"}
+
+
+def test_a_derivation_without_a_reserved_name_reports_no_rename():
+    result = check_derivation(["Rf/Ri"], "Rf/Ri")
+    assert result["renamed_symbols"] == {}
