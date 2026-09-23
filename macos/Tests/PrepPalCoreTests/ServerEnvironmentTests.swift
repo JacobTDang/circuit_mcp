@@ -52,3 +52,49 @@ final class ServerEnvironmentTests: XCTestCase {
         XCTAssertEqual(variables["CIRCUIT_MCP_RUNTIME_DIR"], "/tmp/pp/Application Support/PrepPal/runtime")
     }
 }
+
+/// The simulator the app carries. A Mac that never installed Homebrew has no `ngspice` on PATH,
+/// so without this every `simulate_spice`, every `expected` card and every `compare_readings`
+/// fails on the machine the app was built for.
+extension ServerEnvironmentTests {
+    private func bundle(withSimulator: Bool) throws -> URL {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("preppal-ngspice-\(UUID().uuidString)/PrepPal.app", isDirectory: true)
+        let binary = AppLocations.bundledNgspice(in: root)
+        try FileManager.default.createDirectory(at: binary.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        if withSimulator {
+            FileManager.default.createFile(atPath: binary.path, contents: Data("#!/bin/sh\n".utf8),
+                                           attributes: [.posixPermissions: 0o755])
+        }
+        addTeardownBlock { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
+        return root
+    }
+
+    func testTheBundledSimulatorIsNamedWhenTheAppCarriesOne() throws {
+        let app = try bundle(withSimulator: true)
+        let variables = ServerEnvironment.variables(locations: locations, secrets: [:],
+                                                    home: "/Users/someone", appBundle: app)
+        XCTAssertEqual(variables["CIRCUIT_MCP_NGSPICE"],
+                       app.appendingPathComponent("Contents/Resources/ngspice/bin/ngspice").path)
+    }
+
+    /// Naming a binary that is not there is worse than naming none: `paths.ngspice()` refuses a
+    /// variable it cannot run, so every simulation would fail with a broken-bundle message on a
+    /// machine whose own ngspice was sitting on PATH the whole time.
+    func testNoSimulatorVariableWhenTheBundleCarriesNone() throws {
+        let app = try bundle(withSimulator: false)
+        let variables = ServerEnvironment.variables(locations: locations, secrets: [:],
+                                                    home: "/Users/someone", appBundle: app)
+        XCTAssertNil(variables["CIRCUIT_MCP_NGSPICE"])
+    }
+
+    /// An MCP client started from the generated config runs the same tools against the same
+    /// install, so it needs the same simulator the app's own server uses.
+    func testTheGeneratedMCPConfigNamesTheBundledSimulator() throws {
+        let app = try bundle(withSimulator: true)
+        let json = try MCPCommand.configJSON(appBundle: app, locations: locations)
+        XCTAssertTrue(json.contains("\"CIRCUIT_MCP_NGSPICE\""), json)
+        XCTAssertTrue(json.contains("Contents/Resources/ngspice/bin/ngspice"), json)
+    }
+}
