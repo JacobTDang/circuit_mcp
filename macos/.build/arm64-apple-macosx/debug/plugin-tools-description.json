@@ -1,0 +1,1277 @@
+{
+  "builtTestProducts" : [
+    {
+      "binaryPath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.xctest/Contents/MacOS/PrepPalPackageTests",
+      "packagePath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos",
+      "productName" : "PrepPalPackageTests"
+    }
+  ],
+  "copyCommands" : {
+    "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal_PrepPalCoreTests.bundle/Fixtures" : {
+      "inputs" : [
+        {
+          "kind" : "directory",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/Fixtures"
+        }
+      ],
+      "outputs" : [
+        {
+          "kind" : "directory",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal_PrepPalCoreTests.bundle/Fixtures"
+        }
+      ]
+    }
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.PrepPal-arm64-apple-macosx-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build/sources",
+      "importPath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPal/AppDelegate.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPal/StatusView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPal/WebWindow.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPal/main.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules/PrepPalCore.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build/sources"
+        }
+      ],
+      "isLibrary" : false,
+      "moduleName" : "PrepPal",
+      "moduleOutputPath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules/PrepPal.swiftmodule",
+      "objects" : [
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build/AppDelegate.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build/StatusView.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build/WebWindow.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build/main.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx14.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j14",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-Xfrontend",
+        "-entry-point-function-name",
+        "-Xfrontend",
+        "PrepPal_main",
+        "-swift-version",
+        "5",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "macos"
+      ],
+      "outputFileMapPath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build/AppDelegate.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build/StatusView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build/WebWindow.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build/main.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules/PrepPal.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPal/AppDelegate.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPal/StatusView.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPal/WebWindow.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPal/main.swift"
+      ],
+      "tempsPath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.PrepPalCore-arm64-apple-macosx-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/sources",
+      "importPath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/AppLocations.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/DataImporter.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/HealthCheck.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/LogFiles.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/MCPCommand.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/SecretsStore.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/ServerController.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/ServerEnvironment.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/ServerLifecycle.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/ServerLine.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "PrepPalCore",
+      "moduleOutputPath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules/PrepPalCore.swiftmodule",
+      "objects" : [
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/AppLocations.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/DataImporter.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/HealthCheck.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/LogFiles.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/MCPCommand.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/SecretsStore.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/ServerController.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/ServerEnvironment.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/ServerLifecycle.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/ServerLine.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx14.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j14",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/include/PrepPalCore-Swift.h",
+        "-swift-version",
+        "5",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "macos"
+      ],
+      "outputFileMapPath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/AppLocations.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/DataImporter.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/HealthCheck.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/LogFiles.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/MCPCommand.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/SecretsStore.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/ServerController.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/ServerEnvironment.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/ServerLifecycle.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/ServerLine.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules/PrepPalCore.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/AppLocations.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/DataImporter.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/HealthCheck.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/LogFiles.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/MCPCommand.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/SecretsStore.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/ServerController.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/ServerEnvironment.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/ServerLifecycle.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/ServerLine.swift"
+      ],
+      "tempsPath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.PrepPalCoreTests-arm64-apple-macosx-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/sources",
+      "importPath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/AppLocationsTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/DataImporterTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/HealthCheckTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/LogFilesTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/MCPCommandTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/SecretsStoreTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/ServerControllerTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/ServerEnvironmentTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/ServerLifecycleTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/ServerLineTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/DerivedSources/resource_bundle_accessor.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "virtual",
+          "name" : "<PrepPalCoreTests-arm64-apple-macosx-debug.module-resources>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules/PrepPalCore.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "PrepPalCoreTests",
+      "moduleOutputPath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules/PrepPalCoreTests.swiftmodule",
+      "objects" : [
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/AppLocationsTests.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/DataImporterTests.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/HealthCheckTests.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/LogFilesTests.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/MCPCommandTests.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/SecretsStoreTests.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/ServerControllerTests.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/ServerEnvironmentTests.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/ServerLifecycleTests.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/ServerLineTests.swift.o",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/resource_bundle_accessor.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx14.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-Xfrontend",
+        "-enable-cross-import-overlays",
+        "-j14",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_AVAILABLE",
+        "-module-cache-path",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-swift-version",
+        "5",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "macos"
+      ],
+      "outputFileMapPath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/AppLocationsTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/DataImporterTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/HealthCheckTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/LogFilesTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/MCPCommandTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/SecretsStoreTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/ServerControllerTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/ServerEnvironmentTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/ServerLifecycleTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/ServerLineTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/resource_bundle_accessor.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules/PrepPalCoreTests.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/AppLocationsTests.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/DataImporterTests.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/HealthCheckTests.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/LogFilesTests.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/MCPCommandTests.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/SecretsStoreTests.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/ServerControllerTests.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/ServerEnvironmentTests.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/ServerLifecycleTests.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/ServerLineTests.swift",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/DerivedSources/resource_bundle_accessor.swift"
+      ],
+      "tempsPath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.PrepPalPackageTests-arm64-apple-macosx-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.build/sources",
+      "importPath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.derived/runner.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules/PrepPalCoreTests.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "PrepPalPackageTests",
+      "moduleOutputPath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules/PrepPalPackageTests.swiftmodule",
+      "objects" : [
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.build/runner.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx14.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-Xfrontend",
+        "-enable-cross-import-overlays",
+        "-j14",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.build/include/PrepPalPackageTests-Swift.h",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "macos"
+      ],
+      "outputFileMapPath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.build/runner.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules/PrepPalPackageTests.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.derived/runner.swift"
+      ],
+      "tempsPath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.build",
+      "wholeModuleOptimization" : false
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "PrepPal" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "PrepPal",
+      "-package-name",
+      "macos",
+      "-c",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPal/AppDelegate.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPal/StatusView.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPal/WebWindow.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPal/main.swift",
+      "-I",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx14.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j14",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-Xfrontend",
+      "-entry-point-function-name",
+      "-Xfrontend",
+      "PrepPal_main",
+      "-swift-version",
+      "5",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "macos",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "PrepPalCore" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "PrepPalCore",
+      "-package-name",
+      "macos",
+      "-c",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/AppLocations.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/DataImporter.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/HealthCheck.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/LogFiles.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/MCPCommand.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/SecretsStore.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/ServerController.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/ServerEnvironment.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/ServerLifecycle.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/ServerLine.swift",
+      "-I",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx14.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j14",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/include/PrepPalCore-Swift.h",
+      "-swift-version",
+      "5",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "macos",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "PrepPalCoreTests" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "PrepPalCoreTests",
+      "-package-name",
+      "macos",
+      "-c",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/AppLocationsTests.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/DataImporterTests.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/HealthCheckTests.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/LogFilesTests.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/MCPCommandTests.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/SecretsStoreTests.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/ServerControllerTests.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/ServerEnvironmentTests.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/ServerLifecycleTests.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/ServerLineTests.swift",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/DerivedSources/resource_bundle_accessor.swift",
+      "-I",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx14.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-Xfrontend",
+      "-enable-cross-import-overlays",
+      "-j14",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_AVAILABLE",
+      "-module-cache-path",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-swift-version",
+      "5",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "macos",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "PrepPalPackageTests" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "PrepPalPackageTests",
+      "-package-name",
+      "macos",
+      "-c",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.derived/runner.swift",
+      "-I",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx14.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-Xfrontend",
+      "-enable-cross-import-overlays",
+      "-j14",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.build/include/PrepPalPackageTests-Swift.h",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "macos",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "PrepPal" : [
+      "PrepPalCore"
+    ],
+    "PrepPalCore" : [
+
+    ],
+    "PrepPalCoreTests" : [
+      "PrepPalCore"
+    ],
+    "PrepPalPackageTests" : [
+      "PrepPalCoreTests",
+      "PrepPalCore"
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+    "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.derived/runner.swift" : {
+      "inputs" : [
+
+      ],
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.derived/runner.swift"
+        }
+      ]
+    }
+  },
+  "traitConfiguration" : {
+    "default" : {
+
+    }
+  },
+  "writeCommands" : {
+    "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal-entitlement.plist" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<entitlement-plist>"
+        },
+        {
+          "kind" : "virtual",
+          "name" : "<com.apple.security.get-task-allow>"
+        }
+      ],
+      "outputFilePath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal-entitlement.plist"
+    },
+    "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPal/AppDelegate.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPal/StatusView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPal/WebWindow.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPal/main.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build/sources"
+    },
+    "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build/AppDelegate.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build/StatusView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build/WebWindow.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.build/main.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/AppLocations.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/DataImporter.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/HealthCheck.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/LogFiles.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/MCPCommand.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/SecretsStore.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/ServerController.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/ServerEnvironment.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/ServerLifecycle.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/ServerLine.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPal.product/Objects.LinkFileList"
+    },
+    "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/AppLocations.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/DataImporter.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/HealthCheck.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/LogFiles.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/MCPCommand.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/SecretsStore.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/ServerController.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/ServerEnvironment.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/ServerLifecycle.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Sources/PrepPalCore/ServerLine.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/sources"
+    },
+    "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/AppLocationsTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/DataImporterTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/HealthCheckTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/LogFilesTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/MCPCommandTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/SecretsStoreTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/ServerControllerTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/ServerEnvironmentTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/ServerLifecycleTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/Tests/PrepPalCoreTests/ServerLineTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/DerivedSources/resource_bundle_accessor.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/sources"
+    },
+    "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.derived/runner.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.build/sources"
+    },
+    "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/AppLocations.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/DataImporter.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/HealthCheck.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/LogFiles.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/MCPCommand.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/SecretsStore.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/ServerController.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/ServerEnvironment.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/ServerLifecycle.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCore.build/ServerLine.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/AppLocationsTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/DataImporterTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/HealthCheckTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/LogFilesTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/MCPCommandTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/SecretsStoreTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/ServerControllerTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/ServerEnvironmentTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/ServerLifecycleTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/ServerLineTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalCoreTests.build/resource_bundle_accessor.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.build/runner.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/PrepPalPackageTests.product/Objects.LinkFileList"
+    },
+    "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Users/jacobdang/Desktop/tools/circuit_mcp/macos/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+    }
+  }
+}
