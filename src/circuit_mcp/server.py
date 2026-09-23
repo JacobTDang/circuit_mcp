@@ -1966,7 +1966,9 @@ def transcribe_page(image_base64: str) -> CallToolResult:
     decoded = _decode_image(image_base64)
     if isinstance(decoded, dict):
         return _transcription_content(decoded)
-    result = OCR_WORKER.call({"action": "transcribe_page", "png": decoded}, timeout=PAGE_OCR_TIMEOUT_SECONDS)
+    # Driven box by box, so a transcribe_image call made while a page is being
+    # read waits for one box rather than for the whole page.
+    result = OCR_WORKER.transcribe_page(decoded, timeout=PAGE_OCR_TIMEOUT_SECONDS)
     return _transcription_content(result)
 
 
