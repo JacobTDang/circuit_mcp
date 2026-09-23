@@ -1075,3 +1075,10 @@ def test_check_equivalence_reports_the_rename():
 def test_a_derivation_without_a_reserved_name_reports_no_rename():
     result = check_derivation(["Rf/Ri"], "Rf/Ri")
     assert result["renamed_symbols"] == {}
+
+def test_check_equivalence_confirms_a_bounded_sum_against_its_closed_form():
+    """The n-term sum a summing amplifier writes, checked at n = 1 through 4."""
+    result = check_equivalence("sum_n(V/R^i, i, 1, n)", "V*(1 - R^(-n))/(R - 1)")
+    assert result["ok"] is True
+    assert result["equivalent"] is True
+    assert "n = 1, 2, 3, 4" in result["detail"]
