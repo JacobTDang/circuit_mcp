@@ -1761,8 +1761,10 @@ def canvas_card_add(
       op amp. Sources: ``dc`` (``volts``), ``sine`` (``vrms``, ``freq``),
       ``square`` (``vpp``, ``freq``).
 
-    Expressions use the same restricted syntax as ``check_derivation`` and are
-    rendered to MathML by the server; the browser escapes every text field.
+    The ``formula``, ``walkthrough`` and ``vocabulary`` cards take expressions in
+    the same restricted syntax as ``check_derivation``, rendered to MathML by the
+    server; ``breadboard`` and ``expected`` take a build description and no
+    expressions at all. The browser escapes every text field either way.
     """
     built = _guarded("build_card", kind=kind, title=title, content=content)
     if not built.get("ok"):

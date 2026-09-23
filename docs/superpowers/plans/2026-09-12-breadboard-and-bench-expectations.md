@@ -1,5 +1,10 @@
 # Breadboard Build and Bench Expectations Implementation Plan
 
+> **The code listings below are the starting point, not the merged code.**
+> The review loops on #39 changed `_place_two_terminal`, `_free_hole`, `svg()` and
+> `expect.py`, and #40 changed more. Read `src/circuit_mcp/breadboard.py`,
+> `breadboard_view.py` and `expect.py` for what is actually there.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** From a confirmed circuit description, put two cards on the desk: a breadboard layout you can wire from (chip, parts, jumpers, rails, where the generator and probes go) and the readings the bench should show at each probe (DC volts, AC peak/rms, waveform, clipping, gain and phase).

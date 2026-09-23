@@ -140,7 +140,7 @@ def test_more_than_max_parts_is_refused():
 
 # --- placement -----------------------------------------------------------------
 
-from circuit_mcp.breadboard import CHIP_COL0, place, strip_of, verify  # noqa: E402
+from circuit_mcp.breadboard import BOTTOM_ROWS, CHIP_COL0, TOP_ROWS, place, strip_of, verify  # noqa: E402
 from tests.fixtures import lab1  # noqa: E402
 
 
@@ -188,9 +188,11 @@ def test_every_two_terminal_part_lands_on_distinct_real_holes():
             if end[0] == "rail":
                 assert 1 <= end[2] <= 30
             else:
+                # The row has to belong to the side: ("top", 4, "f") names a
+                # hole on neither half of the board.
                 assert end[0] in ("top", "bottom")
                 assert 1 <= end[1] <= 30
-                assert end[2] in "abcdefghij"
+                assert end[2] in (TOP_ROWS if end[0] == "top" else BOTTOM_ROWS)
 
 
 def test_verify_refuses_a_short_between_two_nets():
@@ -207,37 +209,13 @@ def test_verify_refuses_a_net_split_in_two():
         verify(layout)
 
 
-CROSSED_RAIL = {"top+": "top-", "bot-": "bot+"}   # the near rail a lead to the far rail passes over
-
-
-def _body(part):
-    """Every hole a placed part's body lies over, not just its ends."""
-    ends = part["ends"]
-    rails = [e for e in ends if e[0] == "rail"]
-    if len(rails) == 1 and len(ends) == 2:
-        rail = rails[0]
-        strip = ends[0] if ends[1] == rail else ends[1]
-        assert rail[2] == strip[1], f"{part['ref']} runs diagonally from {strip} to {rail}"
-        side, col, row = strip
-        rows = "abcde" if side == "top" else "fghij"
-        covered = rows[:rows.index(row) + 1] if side == "top" else rows[rows.index(row):]
-        body = {(side, col, r) for r in covered} | {rail}
-        crossed = CROSSED_RAIL.get(rail[1])
-        if crossed is not None:
-            body.add(("rail", crossed, col))
-        return body
-    (s1, c1, r1), (s2, c2, r2) = ends[0], ends[-1]
-    if s1 == s2 and r1 == r2:
-        return {(s1, c, r1) for c in range(min(c1, c2), max(c1, c2) + 1)}
-    if s1 != s2 and c1 == c2 and {r1, r2} == {"a", "j"}:
-        return {("top", c1, r) for r in "abcde"} | {("bottom", c1, r) for r in "fghij"}
-    return set(ends)
-
-
 @pytest.mark.parametrize("name", sorted(lab1.ALL))
 def test_nothing_is_placed_under_a_component_body(name):
+    """The same body model the verifier uses, applied to every real build."""
+    from circuit_mcp.breadboard import body
+
     layout = place(parse_build(lab1.ALL[name]))
-    bodies = {part["ref"]: _body(part) for part in layout.placed}
+    bodies = {part["ref"]: body(part) for part in layout.placed}
     for ref, body in bodies.items():
         for other, other_body in bodies.items():
             if other != ref:
@@ -729,3 +707,71 @@ CROWDED = [
 @pytest.mark.parametrize("build", CROWDED, ids=["cross-trench-onto-a-spare", "cross-trench-onto-a-rail-route"])
 def test_a_part_never_lands_on_a_strip_another_net_already_holds(build):
     place(parse_build(build))   # verify() inside place refuses a short loudly
+
+
+# --- follow-ups from the #39 review -------------------------------------------
+
+def test_the_node_message_says_a_name_starts_with_a_letter():
+    """The old wording allowed a leading digit that the pattern then refused."""
+    build = copy.deepcopy(lab1.EXP1_NONINVERTING)
+    build["parts"][1]["nodes"] = ["1fb", "gnd"]
+    with pytest.raises(BuildError, match="start with a letter"):
+        parse_build(build)
+
+
+def test_an_led_value_must_be_short_text():
+    build = copy.deepcopy(lab1.EXP1_NONINVERTING)
+    build["parts"].append({"ref": "D1", "kind": "led", "value": {"colour": "red"}, "nodes": ["out", "gnd"]})
+    with pytest.raises(BuildError, match="D1"):
+        parse_build(build)
+    build["parts"][-1]["value"] = "a" * 17
+    with pytest.raises(BuildError, match="16 characters"):
+        parse_build(build)
+
+
+def test_the_rail_order_drives_the_collision_model_and_the_renderer():
+    """One ordered tuple, so the model and the drawing cannot drift apart."""
+    from circuit_mcp.breadboard import RAIL_ORDER, CROSSED_RAIL
+    from circuit_mcp import breadboard_view
+
+    assert CROSSED_RAIL == {RAIL_ORDER[0]: RAIL_ORDER[1], RAIL_ORDER[3]: RAIL_ORDER[2]}
+    assert breadboard_view.RAIL_ROWS == tuple(f"rail-{name}" for name in RAIL_ORDER)
+
+
+def test_a_probe_label_over_the_limit_is_refused():
+    build = copy.deepcopy(lab1.EXP1_NONINVERTING)
+    build["probes"][0]["label"] = "x" * 17
+    with pytest.raises(BuildError, match="1 to 16 characters"):
+        parse_build(build)
+
+
+def test_a_long_probe_label_stays_on_the_board():
+    """A 40-character tag used to be placed off the left edge, at x = -114."""
+    build = copy.deepcopy(lab1.EXP1_NONINVERTING)
+    build["probes"][0]["label"] = "x" * 16
+    drawing = draw(place(parse_build(build)))
+    for box in drawing.labels:
+        assert 0 <= box[0] and box[2] <= drawing.width, f"{box} is off the board"
+        assert 0 <= box[1] and box[3] <= drawing.height, f"{box} is off the board"
+
+
+def test_verify_refuses_a_jumper_under_a_part_body():
+    """The body model was only in this test file, so the verifier could not use it."""
+    from circuit_mcp.breadboard import body
+
+    layout = place(parse_build(lab1.EXP1_NONINVERTING))
+    part = next(p for p in layout.placed if len(p["ends"]) == 2)
+    under = sorted(body(part) - set(part["ends"]))
+    assert under, "this part covers holes between its ends"
+    layout.jumpers.append({"net": "gnd", "ends": (under[0], ("rail", "top-", 1)), "colour": "#000"})
+    with pytest.raises(BuildError, match="under"):
+        verify(layout)
+
+
+def test_an_led_value_reaches_the_wire_list():
+    """The colour was drawn on the board but missing from the steps you wire from."""
+    build = copy.deepcopy(lab1.EXP1_NONINVERTING)
+    build["parts"].append({"ref": "D1", "kind": "led", "value": "red", "nodes": ["out", "gnd"]})
+    steps = wire_list(place(parse_build(build)))
+    led = next(step for step in steps if "D1" in step)
+    assert "red" in led
