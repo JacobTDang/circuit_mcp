@@ -440,3 +440,31 @@ def test_parse_as_written_runs_the_same_screen_as_the_checker():
         parse_as_written("R.__class__")
     with pytest.raises(ParseError):
         parse_as_written("")
+
+
+# --- the source-current name -------------------------------------------------
+
+def test_is_is_read_as_i_s():
+    """'is' is the standard source-current name and a Python keyword; it is renamed, not banned."""
+    renames = {}
+    expr = parse_expression("is*R1", renames=renames)
+    assert {str(symbol) for symbol in expr.free_symbols} == {"i_s", "R1"}
+    assert renames == {"is": "i_s"}
+
+
+def test_the_rename_only_matches_a_whole_word():
+    expr = parse_expression("island + is")
+    assert {str(symbol) for symbol in expr.free_symbols} == {"island", "i_s"}
+
+
+def test_an_equation_reports_the_rename_from_either_side():
+    renames = {}
+    equation = parse_equation("vo = is*R1", renames=renames)
+    assert renames == {"is": "i_s"}
+    assert {str(symbol) for symbol in equation.free_symbols} == {"vo", "i_s", "R1"}
+
+
+def test_every_other_keyword_is_still_banned():
+    for text in ("lambda*R", "class*R", "import*R", "None + R"):
+        with pytest.raises(ParseError):
+            parse_expression(text)
