@@ -19,11 +19,12 @@ from sympy.printing.mathml import MathMLPresentationPrinter
 from .breadboard import BuildError
 from .breadboard_view import layout_payload
 from .expect import ExpectError, expectations
+from .schematic import SchematicError, draw as draw_schematic, svg as schematic_svg
 from .parsing import ParseError, parse_as_written, parse_expression
 from .steps import check_steps
 from .symbols import bind
 
-KINDS = ("formula", "walkthrough", "vocabulary", "breadboard", "expected")
+KINDS = ("formula", "walkthrough", "vocabulary", "breadboard", "expected", "schematic")
 MAX_ITEMS = 24
 MAX_TITLE = 120
 MAX_TEXT = 600
@@ -178,8 +179,31 @@ def _expected(content: dict[str, Any]) -> dict[str, Any]:
         raise CardError(f"expectation refused: {exc}") from exc
 
 
+def _schematic(content: dict[str, Any]) -> dict[str, Any]:
+    """The circuit itself, drawn from the netlist derive verified.
+
+    The drawing is checked against that netlist before it is returned, so a card
+    can never show a circuit other than the one the maths was done on.
+    """
+    netlist = content.get("netlist")
+    if not isinstance(netlist, str) or not netlist.strip():
+        raise CardError("a schematic card needs a netlist")
+    try:
+        drawing = draw_schematic(netlist)
+    except SchematicError as exc:
+        raise CardError(f"schematic refused: {exc}") from exc
+    return {
+        "netlist": netlist,
+        "svg": schematic_svg(drawing),
+        "elements": [
+            {"name": element.name, "kind": element.kind, "nodes": list(element.nodes)}
+            for element in drawing.elements
+        ],
+    }
+
+
 _BUILDERS = {"formula": _formula, "walkthrough": _walkthrough, "vocabulary": _vocabulary,
-             "breadboard": _breadboard, "expected": _expected}
+             "breadboard": _breadboard, "expected": _expected, "schematic": _schematic}
 
 
 def build_card(kind: str, title: str, content: Any) -> dict[str, Any]:

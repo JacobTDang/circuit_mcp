@@ -31,7 +31,7 @@ CATEGORIES = {"homework", "lecture", "reference", "solution"}
 STATUSES = {"draft", "confirmed", "solved", "needs_review"}
 ATTEMPT_STATUSES = {"working", "correct", "incorrect", "partial", "gap"}
 UUID_RE = re.compile(r"^[0-9a-f]{32}$")
-CARD_KINDS = ("formula", "walkthrough", "vocabulary", "breadboard", "expected")
+CARD_KINDS = ("formula", "walkthrough", "vocabulary", "breadboard", "expected", "schematic")
 
 
 def default_data_dir() -> Path:

@@ -281,3 +281,23 @@ def test_app_js_stores_no_server_card_payload_locally(tmp_path, monkeypatch):
         server_branch, local_branch = save.split("server?", 1)[1].split(":", 1)
         assert "card" not in server_branch, "a server card must be stored by id and position only"
         assert "card" in local_branch, "a local card carries its own content"
+
+
+def test_app_js_renders_and_keeps_the_schematic_card(tmp_path, monkeypatch):
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        read = app_script.split("function readCanvas()", 1)[1].split("function saveCanvas()", 1)[0]
+        assert "schematic" in read, "readCanvas drops schematic; layout resets on reload"
+        assert "'schematic'" in app_script.split("const CARD_KINDS=", 1)[1].split(";", 1)[0]
+        body = app_script.split("function cardBodyFor(item)", 1)[1].split("const baseCardBody", 1)[0]
+        assert "data-schematic" in body and "card-netlist" in body
+
+
+def test_app_js_rasterises_a_schematic_on_a_white_ground(tmp_path, monkeypatch):
+    """A drawing that inherits the dark canvas would export as dark ink on dark."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        png = app_script.split("window.schematicPng=", 1)[1].split("const baseCardBody", 1)[0]
+        assert "fillStyle='#ffffff'" in png
+        assert "color:#111" in png
+        assert "toBlob" in png
