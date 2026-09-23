@@ -54,6 +54,31 @@ def acquire_data_lock(data_dir: Path) -> TextIO:
     return handle
 
 
+PREFERRED_PORT = 2300
+
+
+def open_listener() -> socket.socket:
+    """Bind the port the browser remembers, or any free one.
+
+    The desk layout lives in the browser's localStorage, which is keyed by
+    origin. Binding port 0 gave a different origin on every launch, so every
+    launch opened an empty desk and the cards came back stacked at the default
+    spot. One port keeps one origin.
+
+    A port can be held by something else -- run_ui.py serves on this one too --
+    and the app starting matters more than the layout, so that falls back to an
+    ephemeral port rather than refusing to start. SO_REUSEADDR is what stops the
+    restart-on-save path from falling back over its own socket in TIME_WAIT.
+    """
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        listener.bind(("127.0.0.1", PREFERRED_PORT))
+    except OSError:
+        listener.bind(("127.0.0.1", 0))
+    return listener
+
+
 def _serve(listener: socket.socket) -> None:
     import uvicorn
 
@@ -101,8 +126,7 @@ def main(argv: list[str] | None = None) -> int:
         print(refused, file=sys.stderr, flush=True)
         return EXIT_LOCKED
     try:
-        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        listener.bind(("127.0.0.1", 0))
+        listener = open_listener()
         _serve(listener)
     finally:
         lock.close()

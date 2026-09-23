@@ -5,6 +5,7 @@ import json
 import os
 import queue
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -15,7 +16,7 @@ from typing import TextIO
 
 import pytest
 
-from circuit_mcp import paths
+from circuit_mcp import app_server, paths
 from circuit_mcp.app_server import EXIT_LOCKED, LOCK_NAME, DataFolderLocked, acquire_data_lock
 
 # The spawned servers run the web lifespan, whose shutdown stops Showman. Point
@@ -173,3 +174,52 @@ def test_stdout_carries_only_the_protocol_line_while_requests_are_served(tmp_pat
     stdout_lines.extend(_rest_of(out))
     assert stdout_lines == [f"READY {port}\n"]
     assert _rest_of(errors), "uvicorn's own logging still belongs on stderr"
+
+
+# --- the port the browser remembers -------------------------------------------
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def test_the_server_binds_the_port_the_browser_remembers(monkeypatch):
+    """localStorage is keyed by origin, so a new port each launch is an empty desk each launch."""
+    monkeypatch.setattr(app_server, "PREFERRED_PORT", _free_port())
+    listener = app_server.open_listener()
+    try:
+        assert listener.getsockname()[1] == app_server.PREFERRED_PORT
+    finally:
+        listener.close()
+
+
+def test_a_taken_port_falls_back_to_any_free_one(monkeypatch):
+    """Something else holding the port must not stop the app from starting."""
+    taken = _free_port()
+    monkeypatch.setattr(app_server, "PREFERRED_PORT", taken)
+    holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    holder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    holder.bind(("127.0.0.1", taken))
+    holder.listen(1)
+    try:
+        listener = app_server.open_listener()
+        try:
+            assert listener.getsockname()[1] not in (0, taken)
+        finally:
+            listener.close()
+    finally:
+        holder.close()
+
+
+def test_the_listener_can_rebind_after_a_restart(monkeypatch):
+    """The app restarts the server whenever settings are saved; TIME_WAIT must not force a fallback."""
+    monkeypatch.setattr(app_server, "PREFERRED_PORT", _free_port())
+    first = app_server.open_listener()
+    first.listen(1)
+    first.close()
+    second = app_server.open_listener()
+    try:
+        assert second.getsockname()[1] == app_server.PREFERRED_PORT
+    finally:
+        second.close()
