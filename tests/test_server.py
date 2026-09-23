@@ -835,6 +835,23 @@ def test_a_pathological_expression_times_out_instead_of_hanging(monkeypatch):
     assert elapsed < 30, f"took {elapsed:.1f}s -- the bound did not hold"
 
 
+def _wait_for_group_to_go(group: int, within: float = 5.0) -> None:
+    """A killed process is a zombie until its parent gets to it.
+
+    On Linux the runaway the worker forked is re-parented to init first, so the
+    group outlives the kill by a moment. This still fails a worker that was
+    merely let go of; it only gives the kernel the moment it needs.
+    """
+    deadline = time.monotonic() + within
+    while True:
+        try:
+            os.killpg(group, 0)
+        except ProcessLookupError:
+            return
+        assert time.monotonic() < deadline, f"process group {group} is still alive after {within}s"
+        time.sleep(0.05)
+
+
 def test_a_timeout_leaves_nothing_of_the_worker_running(monkeypatch):
     """Killed, not merely abandoned to keep a core busy.
 
@@ -852,18 +869,7 @@ def test_a_timeout_leaves_nothing_of_the_worker_running(monkeypatch):
 
     assert check_equivalence("9^(9^9)", "1")["error"] == "timeout"
 
-    # The group goes when the last of it is reaped, and a killed process is a
-    # zombie until its parent gets to it -- on Linux the runaway the worker
-    # forked is re-parented to init first, which takes a moment. Waiting for
-    # the group to disappear still fails on a worker that was merely let go of.
-    deadline = time.monotonic() + 5
-    while True:
-        try:
-            os.killpg(group, 0)
-        except ProcessLookupError:
-            break
-        assert time.monotonic() < deadline, f"process group {group} is still alive 5s after the timeout"
-        time.sleep(0.05)
+    _wait_for_group_to_go(group)
 
 
 def test_a_timeout_does_not_wedge_the_next_call(monkeypatch):
@@ -1273,7 +1279,6 @@ def test_abort_reaches_a_worker_that_is_busy(monkeypatch):
         assert not busy.is_alive(), "the blocked call never returned"
         assert elapsed < 5, f"abort took {elapsed:.1f}s"
         assert done and done[0]["ok"] is False
-        with pytest.raises(ProcessLookupError):
-            os.killpg(group, 0)
+        _wait_for_group_to_go(group)
     finally:
         worker.shutdown()
