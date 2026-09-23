@@ -42,11 +42,16 @@ class EvalError(ValueError):
 
 @dataclass(frozen=True)
 class Sample:
-    """One line crop and the transcription confirmed for it."""
+    """One line crop and the transcription confirmed for it.
+
+    ``bbox`` is where the line sat on its source page, so a crop that was never
+    committed can be cut again from the page it came from.
+    """
     crop: str
     label: str
     source: str = ""
     note: str = ""
+    bbox: tuple[int, ...] = ()
 
 
 def normalise(latex: str) -> str:
@@ -125,8 +130,8 @@ def load_manifest(path: Path) -> list[Sample]:
     for index, entry in enumerate(data.get("samples", []), start=1):
         if not isinstance(entry, dict) or not entry.get("crop") or not entry.get("label"):
             raise EvalError(f"sample {index} needs a crop and a confirmed label")
-        samples.append(Sample(entry["crop"], entry["label"],
-                              entry.get("source", ""), entry.get("note", "")))
+        samples.append(Sample(entry["crop"], entry["label"], entry.get("source", ""),
+                              entry.get("note", ""), tuple(entry.get("bbox", ()))))
     return samples
 
 

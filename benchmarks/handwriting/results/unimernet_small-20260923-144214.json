@@ -1,0 +1,138 @@
+{
+  "samples": 14,
+  "exact": 0,
+  "exact_rate": 0.0,
+  "sign_errors": 0,
+  "subscript_errors": 60,
+  "digit_errors": 40,
+  "misses": [
+    {
+      "exact": false,
+      "sign_errors": 0,
+      "subscript_errors": 8,
+      "digit_errors": 3,
+      "expected": "V^{+}=V_{a}=\\frac{R_{4}}{(R_{3}+R_{4})}",
+      "actual": "v^{\\prime}=v_{n}=\\frac{t_{v}}{(t_{s}+t_{v})}",
+      "crop": "crops/lab1-p3-01.png"
+    },
+    {
+      "exact": false,
+      "sign_errors": 0,
+      "subscript_errors": 7,
+      "digit_errors": 4,
+      "expected": "V_{o}=-(R_{2}/R_{1})\\timesV_{b}+(1+R_{2}/R_{1})\\timesV_{a}",
+      "actual": "v_{0}=-(s_{2}/t)\\timesv_{0}+(1+h_{2}/t_{1})\\timesv_{0}",
+      "crop": "crops/lab1-p3-02.png"
+    },
+    {
+      "exact": false,
+      "sign_errors": 0,
+      "subscript_errors": 1,
+      "digit_errors": 3,
+      "expected": "\\frac{R_{2}}{R_{1}}=\\frac{10}{1}=10",
+      "actual": "\\frac{R_{2}}{R}=\\frac{16}{1}=10",
+      "crop": "crops/lab1-p3-03.png"
+    },
+    {
+      "exact": false,
+      "sign_errors": 0,
+      "subscript_errors": 2,
+      "digit_errors": 3,
+      "expected": "\\frac{R_{4}}{R_{3}+R_{4}}=\\frac{22}{24.2}=0.9091",
+      "actual": "\\frac{R_{11}}{R_{3}^{+k_{4}}}=\\frac{22}{24.2}=0.90a",
+      "crop": "crops/lab1-p3-04.png"
+    },
+    {
+      "exact": false,
+      "sign_errors": 0,
+      "subscript_errors": 0,
+      "digit_errors": 2,
+      "expected": "(1+10)\\times0.9091=10",
+      "actual": "(1+10)\\times0.9691=10",
+      "crop": "crops/lab1-p3-05.png"
+    },
+    {
+      "exact": false,
+      "sign_errors": 0,
+      "subscript_errors": 4,
+      "digit_errors": 1,
+      "expected": "V_{o}=10\\timesV_{a}-10\\timesV_{b}",
+      "actual": "v_{0}=10\\timesv_{a}-10\\timesv_{v}",
+      "crop": "crops/lab1-p3-06.png"
+    },
+    {
+      "exact": false,
+      "sign_errors": 0,
+      "subscript_errors": 0,
+      "digit_errors": 0,
+      "expected": "=10(V_{a}-V_{b})",
+      "actual": "=10(u_{a}-v_{b})",
+      "crop": "crops/lab1-p3-07.png"
+    },
+    {
+      "exact": false,
+      "sign_errors": 0,
+      "subscript_errors": 4,
+      "digit_errors": 3,
+      "expected": "V_{b}grounded\\rightarrowG=+10",
+      "actual": "v_{3}\\int\\limits_{0}^{\\infty}\\sinded\\theta\\rightarrow\\sum\\limits_{0}^{}v=+10",
+      "crop": "crops/lab1-p3-08.png"
+    },
+    {
+      "exact": false,
+      "sign_errors": 0,
+      "subscript_errors": 0,
+      "digit_errors": 1,
+      "expected": "V_{a}grounded\\rightarrowG=-10",
+      "actual": "u_{a}\\sin\\alphad\\neq0,G=-10",
+      "crop": "crops/lab1-p3-09.png"
+    },
+    {
+      "exact": false,
+      "sign_errors": 0,
+      "subscript_errors": 0,
+      "digit_errors": 1,
+      "expected": "V_{b}=V_{a}\\rightarrowG=10",
+      "actual": "u_{b}=v_{a}\\rightarrowv=0",
+      "crop": "crops/lab1-p3-10.png"
+    },
+    {
+      "exact": false,
+      "sign_errors": 0,
+      "subscript_errors": 4,
+      "digit_errors": 2,
+      "expected": "G=\\frac{V_{o}}{V_{c}}=\\frac{(R_{1}\\timesR_{4})-(R_{2}\\timesR_{3})}{R_{1}\\times(R_{3}+R_{4})}",
+      "actual": "\\theta=\\frac{v_{0}}{v_{1}}=\\frac{(R_{1}\\timesR_{4})-(R_{2}\\timesR_{3})}{R_{1}\\times(R_{3}\\timesR_{4})}",
+      "crop": "crops/lab1-p3-11.png"
+    },
+    {
+      "exact": false,
+      "sign_errors": 0,
+      "subscript_errors": 16,
+      "digit_errors": 7,
+      "expected": "V_{o}=-R_{f}\\times(V_{D2}/R_{D2}+V_{D1}/R_{D1}+V_{D0}/R_{D0})",
+      "actual": "v_{0}=-R_{4}\\times(v_{02}/l_{0},\\ldotsv_{01}/l_{01}+v_{02}/l_{00})",
+      "crop": "crops/lab1-p3-13.png"
+    },
+    {
+      "exact": false,
+      "sign_errors": 0,
+      "subscript_errors": 8,
+      "digit_errors": 4,
+      "expected": "V_{o}=-(4\\timesV_{D2}+2\\timesV_{D1}+1\\timesV_{D0})",
+      "actual": "v_{0}=-(4v_{02}+2\\timesv_{01}+1\\timesv_{02})",
+      "crop": "crops/lab1-p3-14.png"
+    },
+    {
+      "exact": false,
+      "sign_errors": 0,
+      "subscript_errors": 6,
+      "digit_errors": 6,
+      "expected": "R_{f}/R_{D2}=4,R_{f}/R_{D1}=2,R_{f}/R_{D0}=1",
+      "actual": "R_{f}/e_{02}=4,R_{f}/e_{0}=0,R_{f}/e_{00}=1",
+      "crop": "crops/lab1-p3-15.png"
+    }
+  ],
+  "model": "models/unimernet_small",
+  "ran_at": "2026-09-23T14:42:14"
+}
