@@ -1052,3 +1052,11 @@ def test_summing_dac_output_tool_names_bad_input_as_a_metrics_error():
     result = summing_dac_output([1], 3, 10e3, [2.5e3, 5e3])
     assert result["ok"] is False
     assert result["error"] == "metrics_error"
+
+
+def test_check_equivalence_confirms_a_bounded_sum_against_its_closed_form():
+    """The n-term sum a summing amplifier writes, checked at n = 1 through 4."""
+    result = check_equivalence("sum_n(V/R^i, i, 1, n)", "V*(1 - R^(-n))/(R - 1)")
+    assert result["ok"] is True
+    assert result["equivalent"] is True
+    assert "n = 1, 2, 3, 4" in result["detail"]
