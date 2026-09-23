@@ -196,20 +196,22 @@ def _failure(kind: str, message: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _expression(
-    text: str, where: str, symbols: dict[str, sp.Symbol] | None = None
+    text: str, where: str, symbols: dict[str, sp.Symbol] | None = None,
+    renames: dict[str, str] | None = None,
 ) -> sp.Expr:
     """Parse one expression, saying which input failed if it does."""
     try:
-        return parse_expression(text, symbols)
+        return parse_expression(text, symbols, renames)
     except ParseError as exc:
         raise ParseError(f"Could not read {where}: {exc}") from exc
 
 
 def _equation(
-    text: str, where: str, symbols: dict[str, sp.Symbol] | None = None
+    text: str, where: str, symbols: dict[str, sp.Symbol] | None = None,
+    renames: dict[str, str] | None = None,
 ) -> sp.Eq:
     try:
-        return parse_equation(text, symbols)
+        return parse_equation(text, symbols, renames)
     except ParseError as exc:
         raise ParseError(f"Could not read {where}: {exc}") from exc
 
@@ -272,13 +274,15 @@ def _check_equivalence(expr_a: str, expr_b: str) -> dict[str, Any]:
     # No ground truth here, so the first expression *is* the reference: parsing
     # each side independently is exactly what makes two identical-looking
     # symbols compare unequal.
-    a = _expression(expr_a, "expr_a")
-    b = _expression(expr_b, "expr_b", symbols=bind(a))
+    renames: dict[str, str] = {}
+    a = _expression(expr_a, "expr_a", renames=renames)
+    b = _expression(expr_b, "expr_b", symbols=bind(a), renames=renames)
 
     verdict = equivalent(a, b)
     return {
         "ok": True,
         "equivalent": verdict.equivalent,
+        "renamed_symbols": renames,
         "oracle": verdict.oracle,
         "counterexample": _stringified(verdict.counterexample),
         "detail": verdict.detail,
@@ -290,14 +294,15 @@ def _check_equivalence(expr_a: str, expr_b: str) -> dict[str, Any]:
 def _check_derivation(
     steps: list[str], truth: str, parameters: dict[str, float] | None = None
 ) -> dict[str, Any]:
-    truth_expr = _expression(truth, "the ground truth")
+    renames: dict[str, str] = {}
+    truth_expr = _expression(truth, "the ground truth", renames=renames)
 
     # The truth's symbols seed the table; each step adds whatever it introduces,
     # so step k+1 binds onto the objects step k already used.
     known = dict(bind(truth_expr))
     parsed: list[sp.Expr] = []
     for index, text in enumerate(steps, start=1):
-        expr = _expression(text, f"step {index}", symbols=dict(known))
+        expr = _expression(text, f"step {index}", symbols=dict(known), renames=renames)
         known.update(bind(expr))
         parsed.append(expr)
 
@@ -322,6 +327,7 @@ def _check_derivation(
         "counterexample": _stringified(result.counterexample),
         "steps": [_rendered(step) for step in parsed],
         "truth": _rendered(truth_expr),
+        "renamed_symbols": renames,
         "parameters": dict(parameters or {}),
         "evaluated_steps": [_rendered(step) for step in checked_steps],
         "evaluated_truth": _rendered(checked_truth),
@@ -1118,6 +1124,10 @@ def check_equivalence(expr_a: str, expr_b: str) -> dict[str, Any]:
 
     Both sides are parsed onto one set of symbols, so ``Rf`` on the left is the
     same object as ``Rf`` on the right.
+
+    ``is`` is read as ``i_s``: it is the standard source-current name and a
+    Python keyword, so it is rewritten before parsing and echoed back in
+    ``renamed_symbols``.
     """
     return _guarded("check_equivalence", expr_a=expr_a, expr_b=expr_b)
 
@@ -1148,6 +1158,10 @@ def check_derivation(
     The parsed steps are echoed back. Check them against what was actually
     written before trusting a verdict -- a misread subscript produces a
     confident "your step 3 is wrong" about a step 3 that was fine.
+
+    ``is`` is read as ``i_s``: it is the standard source-current name and a
+    Python keyword, so it is rewritten before parsing and echoed back in
+    ``renamed_symbols``.
     """
     return _guarded(
         "check_derivation", steps=list(steps), truth=truth,
@@ -1966,7 +1980,9 @@ def transcribe_page(image_base64: str) -> CallToolResult:
     decoded = _decode_image(image_base64)
     if isinstance(decoded, dict):
         return _transcription_content(decoded)
-    result = OCR_WORKER.call({"action": "transcribe_page", "png": decoded}, timeout=PAGE_OCR_TIMEOUT_SECONDS)
+    # Driven box by box, so a transcribe_image call made while a page is being
+    # read waits for one box rather than for the whole page.
+    result = OCR_WORKER.transcribe_page(decoded, timeout=PAGE_OCR_TIMEOUT_SECONDS)
     return _transcription_content(result)
 
 

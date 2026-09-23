@@ -100,6 +100,15 @@ _BANNED_NAMES = frozenset(keyword.kwlist) | frozenset({
     "dir", "type", "object", "super", "exit", "quit",
 })
 
+# Names this course writes that Python happens to reserve. Each is rewritten to
+# a safe spelling *before* the screen runs, so the keyword never reaches the
+# tokenizer and every other keyword stays banned. ``is`` is the standard source
+# current in the text, and refusing it outright made the tool unusable for any
+# current-driven circuit.
+_ALIASES = {"is": "i_s"}
+
+_ALIAS_PATTERN = re.compile(r"\b(" + "|".join(sorted(_ALIASES, key=len, reverse=True)) + r")\b")
+
 _NAME_HINTS = {
     "lambda": (
         " If this is MOSFET channel-length modulation, write it as 'lam'"
@@ -203,6 +212,25 @@ def _require_text(text: str) -> str:
     return stripped
 
 
+def _apply_aliases(text: str, renames: dict[str, str] | None) -> str:
+    """Rewrite reserved names this course writes, recording what was rewritten.
+
+    A silent rename would be its own trap, so every applied rename is reported
+    back to the caller, which echoes it beside the result.
+    """
+    applied: dict[str, str] = {}
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        applied[name] = _ALIASES[name]
+        return _ALIASES[name]
+
+    rewritten = _ALIAS_PATTERN.sub(replace, text)
+    if renames is not None:
+        renames.update(applied)
+    return rewritten
+
+
 def _screen(text: str) -> None:
     """Reject constructs that could reach the interpreter. Runs before parsing."""
     banned = _NAME_PATTERN.search(text)
@@ -278,7 +306,8 @@ def _resolve_symbols(symbols: dict[str, sp.Symbol] | None) -> dict[str, sp.Symbo
 
 
 def parse_expression(
-    text: str, symbols: dict[str, sp.Symbol] | None = None
+    text: str, symbols: dict[str, sp.Symbol] | None = None,
+    renames: dict[str, str] | None = None,
 ) -> sp.Expr:
     """Parse a mathematical expression into SymPy.
 
@@ -287,7 +316,7 @@ def parse_expression(
     and a freshly parsed ``Symbol('A')`` compares unequal to lcapy's ``A`` while
     printing identically, which makes correct work look wrong.
     """
-    stripped = _require_text(text)
+    stripped = _apply_aliases(_require_text(text), renames)
     _screen(stripped)
     required = _resolve_symbols(symbols)
     local_dict = dict(required)  # SymPy writes discovered names into this one
@@ -392,13 +421,14 @@ def _split_on_equals(text: str) -> tuple[str, str]:
 
 
 def parse_equation(
-    text: str, symbols: dict[str, sp.Symbol] | None = None
+    text: str, symbols: dict[str, sp.Symbol] | None = None,
+    renames: dict[str, str] | None = None,
 ) -> sp.Eq:
     """Parse 'lhs = rhs' into a SymPy Eq."""
     stripped = _require_text(text)
     lhs, rhs = _split_on_equals(stripped)
     return sp.Eq(
-        parse_expression(lhs, symbols),
-        parse_expression(rhs, symbols),
+        parse_expression(lhs, symbols, renames),
+        parse_expression(rhs, symbols, renames),
         evaluate=False,
     )
