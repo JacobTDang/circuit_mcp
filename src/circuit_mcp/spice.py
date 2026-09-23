@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+
+from . import paths
 
 
 class SpiceError(ValueError):
@@ -120,9 +121,12 @@ def _parse_raw(path: Path, requested: list[str]) -> dict:
 def simulate_spice(netlist: str, analysis: str, outputs: list[str]) -> dict:
     """Run one allow-listed analysis with no access to user startup files."""
     command = _validate(netlist, analysis, outputs)
-    executable = shutil.which("ngspice")
+    executable = paths.ngspice()
     if executable is None:
-        raise SpiceError("ngspice is not installed or is not on PATH")
+        raise SpiceError(
+            "ngspice is not installed. Put it on PATH, or set CIRCUIT_MCP_NGSPICE "
+            "to the binary to use."
+        )
     requested = [name.lower() for name in outputs]
     with tempfile.TemporaryDirectory(prefix="circuit-mcp-spice-") as directory:
         root = Path(directory)
@@ -134,7 +138,7 @@ def simulate_spice(netlist: str, analysis: str, outputs: list[str]) -> dict:
         )
         try:
             run = subprocess.run(
-                [executable, "-n", "-b", "-r", str(raw), str(deck)],
+                [str(executable), "-n", "-b", "-r", str(raw), str(deck)],
                 cwd=root,
                 stdin=subprocess.DEVNULL,
                 capture_output=True,

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build Andrew's PrepPal.app.
-# Usage: macos/build_app.sh [--stage python|app|sign|dmg|all]
+# Usage: macos/build_app.sh [--stage python|ngspice|app|sign|dmg|all]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -92,6 +92,14 @@ strip_console_scripts() {
     fail "bin/ still names the build machine's path after removing $removed console script(s)"
   fi
   echo "build_app: removed $removed console script(s) that hardcoded the build path"
+}
+
+# The simulator. A Mac without Homebrew has no ngspice, and spice.py fails loudly rather than
+# silently, so simulate_spice, the expected card and compare_readings all stop working on exactly
+# the machine this app exists for. stage_ngspice.sh copies it with its libraries and rewrites
+# every load command to point inside the bundle.
+stage_ngspice() {
+  "$ROOT/macos/stage_ngspice.sh" "$RESOURCES/ngspice" || fail "could not stage ngspice"
 }
 
 stage_app() {
@@ -192,15 +200,16 @@ if [ "$#" -eq 0 ]; then
 elif [ "$#" -eq 2 ] && [ "${1:-}" = "--stage" ] && [ -n "${2:-}" ]; then
   stage="$2"
 else
-  fail "usage: macos/build_app.sh [--stage python|app|sign|dmg|all]"
+  fail "usage: macos/build_app.sh [--stage python|ngspice|app|sign|dmg|all]"
 fi
 
 case "$stage" in
-  python) stage_python ;;
-  app)    stage_app ;;
-  sign)   stage_sign ;;
-  dmg)    stage_dmg ;;
-  all)    stage_python; stage_app; stage_sign; stage_dmg ;;
-  *) fail "unknown stage '$stage'; expected python, app, sign, dmg, or all" ;;
+  python)  stage_python ;;
+  ngspice) stage_ngspice ;;
+  app)     stage_app ;;
+  sign)    stage_sign ;;
+  dmg)     stage_dmg ;;
+  all)     stage_python; stage_ngspice; stage_app; stage_sign; stage_dmg ;;
+  *) fail "unknown stage '$stage'; expected python, ngspice, app, sign, dmg, or all" ;;
 esac
 echo "build_app: stage '$stage' done -> $APP"

@@ -9,6 +9,7 @@ variable is set.
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -54,3 +55,21 @@ def ocr_python() -> Path:
     # Never resolve: a venv's python is a symlink to its base interpreter, and
     # resolving it would discard the venv's site-packages.
     return python.absolute()
+
+
+def ngspice() -> Path | None:
+    """The simulator binary: the one the app carries, else the one on PATH.
+
+    Unset is not a failure -- a checkout uses Homebrew's -- so this returns None
+    and the caller says so. A variable that names something unrunnable is a
+    failure: the app sets it deliberately, and falling back to PATH there would
+    let a broken bundle pass for a working one on the developer's own machine.
+    """
+    value = _override("CIRCUIT_MCP_NGSPICE")
+    if value:
+        binary = Path(value).expanduser().absolute()
+        if not (binary.is_file() and os.access(binary, os.X_OK)):
+            raise ValueError(f"CIRCUIT_MCP_NGSPICE names {binary}, which is not an executable file")
+        return binary
+    found = shutil.which("ngspice")
+    return Path(found) if found else None
