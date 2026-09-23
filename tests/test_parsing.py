@@ -496,3 +496,24 @@ def test_a_bare_pipe_is_still_rejected():
         parse_expression("R1 | R2")
     with pytest.raises(ParseError):
         parse_expression("R1 || R2")
+
+# --- bounded sums ------------------------------------------------------------
+
+def test_sum_n_parses_as_a_symbolic_sum():
+    """sum_n(expr, i, lo, hi) is the n-term sum the summing-amplifier problems write."""
+    total = parse_expression("sum_n(V/R^i, i, 1, n)")
+    assert isinstance(total, sp.Sum)
+    # Bind the bound first: doit() on a symbolic bound returns the geometric
+    # closed form, which is equal but not what a student wrote.
+    two_terms = total.subs({sp.Symbol("n"): 2}).doit()
+    assert sp.simplify(two_terms - parse_expression("V/R + V/R^2")) == 0
+
+
+def test_sum_n_needs_four_arguments():
+    with pytest.raises(ParseError):
+        parse_expression("sum_n(V/R^i, i, 1)")
+
+
+def test_sum_n_index_must_be_a_name():
+    with pytest.raises(ParseError):
+        parse_expression("sum_n(V/R^i, 2, 1, n)")
