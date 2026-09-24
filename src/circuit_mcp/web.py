@@ -218,6 +218,7 @@ def status() -> dict[str, Any]:
         "library_count": len(items), "database": _db().integrity(), "workspace": workspace_status(),
         "workspace_configuration": workspace_configuration(),
         "ocr": OCR_WORKER.availability(), "instruments": instrument_status(),
+        "showman": SHOWMAN.status(),
     }
 
 

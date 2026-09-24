@@ -149,6 +149,12 @@ schema migration 2 archived its rows to `.local/command_center/archive/` as JSON
 before dropping it. See the
 [Showman integration scope](docs/SHOWMAN_INTEGRATION.md).
 
+The renderer is a Node worker, so a machine with no Node, or a checkout without
+the submodule, cannot render at all. `CIRCUIT_MCP_SHOWMAN_ROOT` names where it
+lives; `/api/status` carries one sentence saying which of those is missing, and
+the visual card on the desk shows that sentence instead of a button that would
+only answer 502.
+
 ## Solutions sheet
 
 One assignment is one page: `GET /solutions?tag=m2-hw1` renders every problem
