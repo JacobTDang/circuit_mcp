@@ -123,6 +123,20 @@ keeps Metal initialization out of every process that later calls `fork()`.
 
 ## iPad screen-mirroring workflow
 
+AirPlay needs UxPlay, which this project does not build. `CIRCUIT_MCP_UXPLAY`
+names one; otherwise a build under the runtime folder is preferred, then one on
+PATH, then `/opt/homebrew` and `/usr/local` by name -- the app bounds its
+server's PATH deliberately, so a Homebrew install would otherwise be invisible
+to it. With none of those, `/api/ipad/status` carries one sentence saying so and
+the iPad page shows it.
+
+Capturing the screen needs macOS Screen Recording permission, which is granted
+per application. Run from a terminal it is inherited from the terminal; the
+packaged app is its own subject and is asked once, against its bundle
+identifier. `workspace_status` reports what CoreGraphics says for this process
+-- `granted`, `denied`, or `unavailable` where the question cannot be asked --
+and a capture asks for access once so that prompt can appear at all.
+
 1. Run `scripts/setup_ipad_capture.sh` once.
 2. Start the receiver in the command center or call `ipad_receiver_start`.
 3. On the iPad, open Control Center → **Screen Mirroring** → **Circuit Capture**,

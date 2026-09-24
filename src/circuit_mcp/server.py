@@ -1971,10 +1971,10 @@ def instrument_query(
 def workspace_status() -> dict[str, Any]:
     """Can this Mac capture a mirrored iPad workspace?
 
-    This is a read-only capability check and does not take a screenshot or
-    trigger the macOS privacy prompt. ``permission`` remains
-    ``unknown_until_capture`` because macOS exposes denial through the capture
-    attempt itself.
+    A read-only capability check: it takes no screenshot and shows no prompt.
+    ``permission`` is the answer CoreGraphics gives for this process --
+    ``granted``, ``denied``, or ``unavailable`` where the question cannot be
+    asked, in which case the capture attempt itself stays the authority.
     """
     return _guarded("workspace_status")
 
