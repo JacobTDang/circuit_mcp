@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build Andrew's PrepPal.app.
-# Usage: macos/build_app.sh [--stage python|ngspice|app|sign|dmg|all]
+# Usage: macos/build_app.sh [--stage python|ngspice|uxplay|app|sign|dmg|all]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -102,6 +102,21 @@ stage_ngspice() {
   "$ROOT/macos/stage_ngspice.sh" "$RESOURCES/ngspice" || fail "could not stage ngspice"
 }
 
+# The AirPlay receiver. UxPlay is built from source by scripts/setup_ipad_capture.sh --
+# there is no Homebrew formula for it -- and this copies that build with the seven
+# GStreamer plugins the headless pipeline resolves. Skipped, loudly, when no build
+# exists: an app without a receiver reports why on the iPad page, which is a better
+# outcome than a build that cannot be made at all on a machine without GStreamer.
+stage_uxplay() {
+  if [ ! -x "$ROOT/.local/runtime/uxplay/bin/uxplay" ]; then
+    echo "build_app: no uxplay build, so the app will ship without AirPlay." >&2
+    echo "build_app: run scripts/setup_ipad_capture.sh first to include it." >&2
+    rm -rf "$RESOURCES/uxplay"
+    return 0
+  fi
+  "$ROOT/macos/stage_uxplay.sh" "$RESOURCES/uxplay" || fail "could not stage uxplay"
+}
+
 stage_app() {
   [ -x "$RESOURCES/python/bin/python3" ] || fail "run 'macos/build_app.sh --stage python' first"
   [ -n "$VERSION" ] || fail "could not read the version from pyproject.toml"
@@ -200,16 +215,17 @@ if [ "$#" -eq 0 ]; then
 elif [ "$#" -eq 2 ] && [ "${1:-}" = "--stage" ] && [ -n "${2:-}" ]; then
   stage="$2"
 else
-  fail "usage: macos/build_app.sh [--stage python|ngspice|app|sign|dmg|all]"
+  fail "usage: macos/build_app.sh [--stage python|ngspice|uxplay|app|sign|dmg|all]"
 fi
 
 case "$stage" in
   python)  stage_python ;;
   ngspice) stage_ngspice ;;
+  uxplay)  stage_uxplay ;;
   app)     stage_app ;;
   sign)    stage_sign ;;
   dmg)     stage_dmg ;;
-  all)     stage_python; stage_ngspice; stage_app; stage_sign; stage_dmg ;;
-  *) fail "unknown stage '$stage'; expected python, ngspice, app, sign, dmg, or all" ;;
+  all)     stage_python; stage_ngspice; stage_uxplay; stage_app; stage_sign; stage_dmg ;;
+  *) fail "unknown stage '$stage'; expected python, ngspice, uxplay, app, sign, dmg, or all" ;;
 esac
 echo "build_app: stage '$stage' done -> $APP"

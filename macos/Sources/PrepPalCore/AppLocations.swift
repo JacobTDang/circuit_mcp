@@ -47,6 +47,16 @@ public struct AppLocations: Equatable {
         bundle.appendingPathComponent("Contents/Resources/ngspice/bin/ngspice")
     }
 
+    /// The AirPlay receiver the app carries, staged by `macos/stage_uxplay.sh`.
+    public static func bundledUxplay(in bundle: URL) -> URL {
+        bundledGStreamer(in: bundle).appendingPathComponent("bin/uxplay")
+    }
+
+    /// The staged receiver's own folder: binary, plugins and plugin scanner.
+    public static func bundledGStreamer(in bundle: URL) -> URL {
+        bundle.appendingPathComponent("Contents/Resources/uxplay", isDirectory: true)
+    }
+
     /// macOS runs a quarantined app from a randomized read-only copy until the user moves it.
     public static func isTranslocated(_ bundle: URL) -> Bool {
         bundle.path.contains("/AppTranslocation/")

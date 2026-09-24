@@ -98,3 +98,63 @@ extension ServerEnvironmentTests {
         XCTAssertTrue(json.contains("Contents/Resources/ngspice/bin/ngspice"), json)
     }
 }
+
+/// The AirPlay receiver the app carries. UxPlay is GStreamer, which finds its plugins through
+/// the environment rather than through its own load commands, so naming the binary is not
+/// enough: without the plugin path, the scanner and a writable registry, a bundled GStreamer
+/// silently uses whatever the machine has, or nothing.
+extension ServerEnvironmentTests {
+    private func receiverBundle(withReceiver: Bool) throws -> URL {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("preppal-uxplay-\(UUID().uuidString)/PrepPal.app", isDirectory: true)
+        let binary = AppLocations.bundledUxplay(in: root)
+        try FileManager.default.createDirectory(at: binary.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        if withReceiver {
+            FileManager.default.createFile(atPath: binary.path, contents: Data("#!/bin/sh\n".utf8),
+                                           attributes: [.posixPermissions: 0o755])
+        }
+        addTeardownBlock { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
+        return root
+    }
+
+    func testTheBundledReceiverAndItsPluginsAreNamedWhenTheAppCarriesThem() throws {
+        let app = try receiverBundle(withReceiver: true)
+        let variables = ServerEnvironment.variables(locations: locations, secrets: [:],
+                                                    home: "/Users/someone", appBundle: app)
+        let resources = app.appendingPathComponent("Contents/Resources/uxplay")
+        XCTAssertEqual(variables["CIRCUIT_MCP_UXPLAY"],
+                       resources.appendingPathComponent("bin/uxplay").path)
+        XCTAssertEqual(variables["GST_PLUGIN_SYSTEM_PATH"],
+                       resources.appendingPathComponent("plugins").path)
+        XCTAssertEqual(variables["GST_PLUGIN_PATH"],
+                       resources.appendingPathComponent("plugins").path)
+        XCTAssertEqual(variables["GST_PLUGIN_SCANNER"],
+                       resources.appendingPathComponent("libexec/gst-plugin-scanner").path)
+    }
+
+    /// A .app is read-only once installed. GStreamer writes its registry on first run, so
+    /// pointed inside the bundle every launch rescans 7 plugins and warns, and pointed at
+    /// nothing it rescans forever.
+    func testTheGStreamerRegistryGoesSomewhereWritable() throws {
+        let app = try receiverBundle(withReceiver: true)
+        let variables = ServerEnvironment.variables(locations: locations, secrets: [:],
+                                                    home: "/Users/someone", appBundle: app)
+        let registry = try XCTUnwrap(variables["GST_REGISTRY"])
+        XCTAssertTrue(registry.hasPrefix(locations.supportDirectory.path), registry)
+        XCTAssertFalse(registry.hasPrefix(app.path), registry)
+    }
+
+    /// Naming a receiver that is not there would be worse than naming none: `paths.uxplay()`
+    /// refuses a variable it cannot run, so a bundle built without the uxplay stage would
+    /// report a broken receiver on a machine whose own build was sitting in the runtime folder.
+    func testNoReceiverVariablesWhenTheBundleCarriesNone() throws {
+        let app = try receiverBundle(withReceiver: false)
+        let variables = ServerEnvironment.variables(locations: locations, secrets: [:],
+                                                    home: "/Users/someone", appBundle: app)
+        for name in ["CIRCUIT_MCP_UXPLAY", "GST_PLUGIN_SYSTEM_PATH", "GST_PLUGIN_PATH",
+                     "GST_PLUGIN_SCANNER", "GST_REGISTRY"] {
+            XCTAssertNil(variables[name], name)
+        }
+    }
+}

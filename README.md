@@ -124,8 +124,9 @@ keeps Metal initialization out of every process that later calls `fork()`.
 ## iPad screen-mirroring workflow
 
 AirPlay needs UxPlay, which this project does not build. `CIRCUIT_MCP_UXPLAY`
-names one; otherwise a build under the runtime folder is preferred, then one on
-PATH, then `/opt/homebrew` and `/usr/local` by name -- the app bounds its
+names one -- which is what the packaged app sets, because it now carries a
+receiver of its own -- otherwise a build under the runtime folder is preferred,
+then one on PATH, then `/opt/homebrew` and `/usr/local` by name -- the app bounds its
 server's PATH deliberately, so an install under either prefix would otherwise be
 invisible to it. There is no Homebrew formula for UxPlay, so
 `scripts/setup_ipad_capture.sh` builds it from source. With none of those,
@@ -304,6 +305,19 @@ brew install ngspice
 macos/build_app.sh
 macos/smoke_test.sh
 ```
+
+The receiver travels inside the app too, when there is one to copy.
+`macos/stage_uxplay.sh` takes the UxPlay that `scripts/setup_ipad_capture.sh`
+built and the seven GStreamer plugins the headless pipeline resolves --
+`appsrc ! queue ! h264parse ! decodebin ! videoconvert ! videoscale ! fakesink`
+-- which is 22 MB rather than the 162 MB of plugins Homebrew installs. The
+decoder `decodebin` auto-plugs is `vtdec_hw`, which is VideoToolbox and so
+present on every Mac; that is why `libgstlibav` and the whole of ffmpeg stay
+out. GStreamer finds plugins through the environment, so the app names the
+plugin path and the scanner as well as the binary, and points the registry at
+its writable support folder because a `.app` is read-only. Building without a
+UxPlay build present is not an error: the app ships without AirPlay and the
+iPad page says so.
 
 The simulator travels inside the app. `macos/stage_ngspice.sh` copies the build
 machine's `ngspice` with the fourteen libraries it loads and rewrites every load
