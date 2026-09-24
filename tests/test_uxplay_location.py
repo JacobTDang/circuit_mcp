@@ -61,7 +61,12 @@ def test_the_status_says_what_is_missing_and_how_to_get_it(tmp_path, monkeypatch
     monkeypatch.setattr(paths.shutil, "which", lambda _: None)
     airplay = IPadCaptureService().status()["airplay"]
     assert airplay["available"] is False
-    assert "uxplay" in airplay["unavailable"].lower()
+    unavailable = airplay["unavailable"]
+    assert "uxplay" in unavailable.lower()
+    assert "setup_ipad_capture.sh" in unavailable
+    # There is no uxplay formula in Homebrew core: `brew install uxplay` answers
+    # "No available formula", so naming it sends the student to a dead end.
+    assert "brew install uxplay" not in unavailable
 
 
 def test_a_receiver_that_is_there_reports_no_reason(tmp_path, monkeypatch):

@@ -126,9 +126,10 @@ keeps Metal initialization out of every process that later calls `fork()`.
 AirPlay needs UxPlay, which this project does not build. `CIRCUIT_MCP_UXPLAY`
 names one; otherwise a build under the runtime folder is preferred, then one on
 PATH, then `/opt/homebrew` and `/usr/local` by name -- the app bounds its
-server's PATH deliberately, so a Homebrew install would otherwise be invisible
-to it. With none of those, `/api/ipad/status` carries one sentence saying so and
-the iPad page shows it.
+server's PATH deliberately, so an install under either prefix would otherwise be
+invisible to it. There is no Homebrew formula for UxPlay, so
+`scripts/setup_ipad_capture.sh` builds it from source. With none of those,
+`/api/ipad/status` carries one sentence saying so and the iPad page shows it.
 
 Capturing the screen needs macOS Screen Recording permission, which is granted
 per application. Run from a terminal it is inherited from the terminal; the
