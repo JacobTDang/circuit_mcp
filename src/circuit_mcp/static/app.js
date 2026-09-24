@@ -5,11 +5,32 @@ function apiErrorMessage(data){const errors=Array.isArray(data&&data.errors)?dat
 async function api(url,options={}){const response=await fetch(url,options);const data=await response.json();if(!response.ok)throw new Error(apiErrorMessage(data));return data}
 function show(view){$$('.view').forEach(x=>x.classList.toggle('active',x.id===view));$$('nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===view));const t=$('#title');if(t)t.textContent=names[view]}
 $$('nav button').forEach(b=>b.onclick=()=>show(b.dataset.view));$$('[data-jump]').forEach(b=>b.onclick=()=>show(b.dataset.jump));
-async function refresh(){try{const s=await api('/api/status');state.status=s;const set=(q,v)=>{const e=$(q);if(e)e.textContent=v};set('#toolCount',s.tool_count);set('#libraryCount',s.library_count);set('#ocrState',s.ocr.ok?'ready':'setup');showCapturePermission(s.workspace);set('#visaState',!s.instruments.enabled?'offline':s.instruments.resources.length?`${s.instruments.resources.length} found`:'waiting');if(s.workspace_configuration.ok){$('#capDisplay').value=s.workspace_configuration.display;if(s.workspace_configuration.mode!=='display'){$('#capX').value=s.workspace_configuration.x;$('#capY').value=s.workspace_configuration.y;$('#capW').value=s.workspace_configuration.width;$('#capH').value=s.workspace_configuration.height}}renderTools(s.tools);const h=await api('/api/history');state.history=h.events;const history=$('#history');if(history)history.innerHTML=h.events.length?h.events.slice(0,8).map(e=>`<div>${new Date(e.time*1000).toLocaleString()} · ${escapeHtml(e.name)} · ${e.ok?'done':'failed'}</div>`).join(''):'No activity yet.';await Promise.all([loadLibrary(),loadProblems(),loadIPadStatus()]);updateCanvasComponents();refreshVisualCards()}catch(e){toast(e.message)}}
+async function refresh(){try{const s=await api('/api/status');state.status=s;const set=(q,v)=>{const e=$(q);if(e)e.textContent=v};set('#toolCount',s.tool_count);set('#libraryCount',s.library_count);set('#ocrState',s.ocr.ok?'ready':'setup');showCapturePermission(s.workspace);set('#visaState',!s.instruments.enabled?'offline':s.instruments.resources.length?`${s.instruments.resources.length} found`:'waiting');if(s.workspace_configuration.ok){$('#capDisplay').value=s.workspace_configuration.display;if(s.workspace_configuration.mode!=='display'){$('#capX').value=s.workspace_configuration.x;$('#capY').value=s.workspace_configuration.y;$('#capW').value=s.workspace_configuration.width;$('#capH').value=s.workspace_configuration.height}}renderTools(s.tools);const h=await api('/api/history');state.history=h.events;const history=$('#history');if(history)history.innerHTML=h.events.length?h.events.slice(0,8).map(e=>`<div>${new Date(e.time*1000).toLocaleString()} · ${escapeHtml(e.name)} · ${e.ok?'done':'failed'}</div>`).join(''):'No activity yet.';await Promise.all([loadLibrary(),loadProblems(),loadIPadStatus(),loadOcrInstall()]);updateCanvasComponents();refreshVisualCards()}catch(e){toast(e.message)}}
 // macOS refuses every capture until Screen Recording is allowed for this app, and
 // it is the app that has to be allowed, not the terminal that used to run this.
 function showCapturePermission(workspace){const line=$('#capturePermission');if(!line)return;const denied=workspace&&workspace.permission==='denied';line.hidden=!denied;line.textContent=denied?workspace.message:''}
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+// The recogniser is an 810 MB model and its own virtualenv, installed until now by
+// running a shell script. Someone who opens an app has no terminal in the story, so
+// the offer, the progress and the cancel all live here.
+let ocrInstallTimer=null;
+async function loadOcrInstall(){const strip=$('#ocrInstall');if(!strip)return;let s;try{s=await api('/api/ocr/install')}catch{return}
+const detail=$('#ocrInstallDetail'),start=$('#ocrInstallStart'),cancel=$('#ocrInstallCancel');
+strip.hidden=s.installed;
+if(s.installed){clearTimeout(ocrInstallTimer);ocrInstallTimer=null;return}
+const running=s.state==='running';
+start.hidden=running;cancel.hidden=!running;
+start.textContent=s.state==='failed'||s.state==='cancelled'?'try again':'install';
+const n=s.removed?s.removed.length:0,removed=n?` Removed ${n} unfinished ${n===1?'folder':'folders'}.`:'';
+detail.textContent=running?`${s.detail}\u2026`
+  :s.state==='failed'?`Install failed: ${s.detail}${removed}`
+  :s.state==='cancelled'?`Install cancelled.${removed}`
+  :`Not installed. ${s.download_note}`;
+clearTimeout(ocrInstallTimer);
+ocrInstallTimer=running?setTimeout(loadOcrInstall,1500):null;
+if(!running&&s.state==='done')refresh()}
+$('#ocrInstallStart')?.addEventListener('click',async()=>{try{await api('/api/ocr/install',{method:'POST'});toast('Installing the recogniser\u2026');loadOcrInstall()}catch(e){toast(e.message);loadOcrInstall()}});
+$('#ocrInstallCancel')?.addEventListener('click',async()=>{try{await api('/api/ocr/install',{method:'DELETE'});toast('Cancelling\u2026');loadOcrInstall()}catch(e){toast(e.message)}});
 async function loadIPadStatus(){const s=await api('/api/ipad/status');state.ipad=s;const active=s.active_source,status=$('#ipadSourceState'),pin=$('#ipadPin');if(status)status.textContent=active?`${active.toUpperCase()} connected · ready to capture`:s.airplay.running?'Receiver running · select Circuit Capture from iPad Screen Mirroring':s.usb.connected?'USB-C iPad connected':(!s.airplay.available&&!s.usb.available&&s.airplay.unavailable)?s.airplay.unavailable:'No live iPadOS feed';if(pin)pin.textContent=s.airplay.running&&s.airplay.pin?`PIN ${s.airplay.pin}`:'';return s}
 async function startReceiver(){try{await api('/api/ipad/receiver/start',{method:'POST'});const s=await loadIPadStatus();toast(`AirPlay ready · PIN ${s.airplay.pin}`)}catch(e){toast(e.message)}}
 async function stopReceiver(){try{await api('/api/ipad/receiver/stop',{method:'POST'});await loadIPadStatus();toast('AirPlay stopped')}catch(e){toast(e.message)}}
