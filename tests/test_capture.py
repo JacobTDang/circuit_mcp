@@ -6,23 +6,32 @@ from pathlib import Path
 
 import pytest
 
-from circuit_mcp import capture
+from circuit_mcp import capture, screen_recording
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"test-image"
 
 
-def test_status_does_not_capture_or_claim_permission(monkeypatch):
+@pytest.fixture(autouse=True)
+def allowed(monkeypatch):
+    """This machine's own Screen Recording decision is not what these test.
+
+    Left real, every one of them would pass or fail by whether the developer had
+    ticked a box in System Settings.
+    """
+    monkeypatch.setattr(screen_recording, "permission_state",
+                        lambda: screen_recording.GRANTED)
+    monkeypatch.setattr(screen_recording, "request_access",
+                        lambda: screen_recording.GRANTED)
+
+
+def test_status_reports_the_tool_and_the_permission_without_capturing(monkeypatch):
     monkeypatch.setattr(capture.shutil, "which", lambda command: command)
-    status = capture.capture_status()
-    assert status == {
+    assert capture.capture_status() == {
         "ok": True,
         "platform": "macos",
         "capture_command": capture.SCREEN_CAPTURE,
-        "permission": "unknown_until_capture",
-        "message": (
-            "Screen capture is available. macOS may ask for Screen Recording "
-            "permission on the first capture."
-        ),
+        "permission": "granted",
+        "message": "Screen capture is available and Screen Recording is allowed.",
     }
 
 
@@ -78,17 +87,29 @@ def test_invalid_capture_selection_is_refused(monkeypatch, arguments):
         capture.capture_workspace(**arguments)
 
 
-def test_permission_failure_is_actionable(monkeypatch):
+def refusing(monkeypatch, detail: str = "could not create image from display"):
     monkeypatch.setattr(capture.shutil, "which", lambda command: command)
     monkeypatch.setattr(
-        capture.subprocess,
-        "run",
-        lambda command, **kwargs: subprocess.CompletedProcess(
-            command, 1, "", "could not create image from display"
-        ),
+        capture.subprocess, "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 1, "", detail),
     )
 
+
+def test_a_capture_refused_for_permission_is_actionable(monkeypatch):
+    refusing(monkeypatch)
+    monkeypatch.setattr(screen_recording, "permission_state",
+                        lambda: screen_recording.DENIED)
     with pytest.raises(capture.CaptureError) as caught:
         capture.capture_workspace(allow_full_display=True)
     assert "Screen Recording" in str(caught.value)
     assert "System Settings" in str(caught.value)
+
+
+def test_a_capture_refused_for_any_other_reason_says_that_reason(monkeypatch):
+    """Blaming Screen Recording for a locked screen or a display that is not
+    there sends the student to a settings pane that was never the problem."""
+    refusing(monkeypatch, "invalid display specified")
+    with pytest.raises(capture.CaptureError) as caught:
+        capture.capture_workspace(display=9, allow_full_display=True)
+    assert "invalid display specified" in str(caught.value)
+    assert "System Settings" not in str(caught.value)

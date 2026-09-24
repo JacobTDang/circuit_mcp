@@ -146,8 +146,12 @@ async def _exercise_server(data_dir: Path) -> None:
             status = await session.call_tool("workspace_status", {})
             assert status.is_error is False
             if sys.platform == "darwin":
-                assert status.structured_content["ok"] is True
                 assert status.structured_content["platform"] == "macos"
+                # ok means a capture can succeed, so it follows Screen Recording:
+                # this machine may or may not have granted it, and claiming ok
+                # while every capture fails is what the honest report replaced.
+                assert status.structured_content["ok"] is (
+                    status.structured_content["permission"] != "denied")
             else:
                 # Screen capture is macOS-only. Off it, the tool has to say so
                 # rather than claim a workspace it cannot read.

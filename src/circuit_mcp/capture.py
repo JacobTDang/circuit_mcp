@@ -12,6 +12,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from . import screen_recording
+
 SCREEN_CAPTURE = "/usr/sbin/screencapture"
 MAX_CAPTURE_BYTES = 25 * 1024 * 1024
 
@@ -21,19 +23,24 @@ class CaptureError(RuntimeError):
 
 
 def capture_status() -> dict:
-    """Report platform/tool availability without triggering a privacy prompt."""
+    """Report tool availability and the real permission, without prompting."""
     executable = shutil.which(SCREEN_CAPTURE)
+    permission = screen_recording.permission_state()
+    if executable is None:
+        message = "This capture backend requires macOS /usr/sbin/screencapture."
+    elif permission == screen_recording.DENIED:
+        message = screen_recording.DENIED_MESSAGE
+    elif permission == screen_recording.GRANTED:
+        message = "Screen capture is available and Screen Recording is allowed."
+    else:
+        message = ("Screen capture is available. macOS may ask for Screen Recording "
+                   "permission on the first capture.")
     return {
-        "ok": executable is not None,
+        "ok": executable is not None and permission != screen_recording.DENIED,
         "platform": "macos" if executable else "unsupported",
         "capture_command": executable,
-        "permission": "unknown_until_capture",
-        "message": (
-            "Screen capture is available. macOS may ask for Screen Recording "
-            "permission on the first capture."
-            if executable
-            else "This capture backend requires macOS /usr/sbin/screencapture."
-        ),
+        "permission": permission,
+        "message": message,
     }
 
 
@@ -63,9 +70,13 @@ def capture_workspace(
     height: int | None = None,
 ) -> dict:
     """Capture a display or global screen rectangle and return its PNG bytes."""
-    status = capture_status()
-    if not status["ok"]:
-        raise CaptureError(status["message"])
+    executable = shutil.which(SCREEN_CAPTURE)
+    if executable is None:
+        raise CaptureError("This capture backend requires macOS /usr/sbin/screencapture.")
+    # Asking triggers the one prompt a packaged app ever gets. An unknown state is
+    # not a refusal: off macOS the tool below stays the authority.
+    if screen_recording.request_access() == screen_recording.DENIED:
+        raise CaptureError(screen_recording.DENIED_MESSAGE)
     if display < 1:
         raise CaptureError("display must be 1 or greater.")
 
@@ -107,10 +118,9 @@ def capture_workspace(
 
         if completed.returncode != 0 or not output.exists():
             detail = completed.stderr.strip() or "no image was produced"
-            raise CaptureError(
-                "Screen capture failed. Allow Screen Recording for the app that "
-                f"runs this MCP server in System Settings, then retry. Detail: {detail}"
-            )
+            if screen_recording.permission_state() == screen_recording.DENIED:
+                raise CaptureError(screen_recording.DENIED_MESSAGE)
+            raise CaptureError(f"Screen capture failed: {detail}")
 
         png = output.read_bytes()
 
