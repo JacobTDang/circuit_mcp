@@ -1,4 +1,4 @@
-"""Server entry point for the Andrew's PrepPal macOS app.
+"""Server entry point for the Circuit MCP macOS app.
 
     python -m circuit_mcp.app_server --data-dir <folder>
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Prove the app's bundled Python is self-contained and runs the command-center server.
-# Usage: macos/check_python_runtime.sh [path/to/Andrew's PrepPal.app]
+# Usage: macos/check_python_runtime.sh [path/to/Circuit MCP.app]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="${1:-}"
-[ -n "$APP" ] || APP="$ROOT/dist/Andrew's PrepPal.app"
+[ -n "$APP" ] || APP="$ROOT/dist/Circuit MCP.app"
 PY="$APP/Contents/Resources/python/bin/python3"
 fail() { echo "check_python_runtime: $*" >&2; exit 1; }
 

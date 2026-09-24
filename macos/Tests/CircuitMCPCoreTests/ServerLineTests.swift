@@ -1,5 +1,5 @@
 import XCTest
-@testable import PrepPalCore
+@testable import CircuitMCPCore
 
 final class ServerLineTests: XCTestCase {
     func testReadyCarriesThePort() {

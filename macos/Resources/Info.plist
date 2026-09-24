@@ -5,13 +5,13 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleName</key>
-    <string>Andrew's PrepPal</string>
+    <string>Circuit MCP</string>
     <key>CFBundleDisplayName</key>
-    <string>Andrew's PrepPal</string>
+    <string>Circuit MCP</string>
     <key>CFBundleExecutable</key>
-    <string>PrepPal</string>
+    <string>CircuitMCP</string>
     <key>CFBundleIdentifier</key>
-    <string>io.github.jacobtdang.preppal</string>
+    <string>io.github.jacobtdang.circuitmcp</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundlePackageType</key>
@@ -25,7 +25,7 @@
     <!-- UxPlay advertises the AirPlay receiver over mDNS. Without these macOS
          refuses the discovery silently and the iPad never sees a receiver. -->
     <key>NSLocalNetworkUsageDescription</key>
-    <string>Andrew’s PrepPal runs a private AirPlay receiver on this Mac so your iPad can mirror its screen to the desk. Nothing leaves your local network.</string>
+    <string>Circuit MCP runs a private AirPlay receiver on this Mac so your iPad can mirror its screen to the desk. Nothing leaves your local network.</string>
     <key>NSBonjourServices</key>
     <array>
         <string>_airplay._tcp</string>

@@ -291,9 +291,9 @@ quietly. Once it lands, `ocr_status` reports the model without a restart.
 Not installing it is a supported state: every tool that does not need a model
 keeps working, and the OCR routes refuse with a sentence.
 
-## macOS app: Andrew's PrepPal
+## macOS app: Circuit MCP
 
-`Andrew's PrepPal.app` runs the command center in its own window. There's no
+`Circuit MCP.app` runs the command center in its own window. There's no
 browser tab and no `run_ui.py`. The app starts the server itself on a free local
 port, shows the desk once the server answers, and stops the server when you quit.
 
@@ -326,13 +326,13 @@ has no `/opt/homebrew` for the original paths to resolve against. It reads back
 what the staged files load and refuses rather than shipping a binary that dies
 at launch on the machine the app exists for.
 
-That produces `dist/Andrew's PrepPal.app` and `dist/PrepPal-<version>.dmg`.
+That produces `dist/Circuit MCP.app` and `dist/CircuitMCP-<version>.dmg`.
 
-- **Data:** `~/Library/Application Support/PrepPal/`. To bring over a
+- **Data:** `~/Library/Application Support/CircuitMCP/`. To bring over a
   checkout's `.local/command_center`, use **Import Existing Data…**. Stop
   `run_ui.py` first. The app's current data is moved to a backup folder, not
   deleted.
-- **Logs:** `~/Library/Logs/PrepPal/`, with the last five launches kept. If the
+- **Logs:** `~/Library/Logs/CircuitMCP/`, with the last five launches kept. If the
   server can't start, the app shows the end of the log.
 - **OpenRouter key and model:** stored in the macOS Keychain. Set them with
   **Settings…**, and use a free model.
@@ -366,7 +366,7 @@ launch needs your say-so.
    and go back to step 2:
 
    ```console
-   xattr -d com.apple.quarantine "/Applications/Andrew's PrepPal.app"
+   xattr -d com.apple.quarantine "/Applications/Circuit MCP.app"
    ```
 
    That changes this one app. Leave Gatekeeper itself alone: turning it off

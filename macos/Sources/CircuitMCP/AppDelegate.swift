@@ -1,12 +1,12 @@
 import AppKit
-import PrepPalCore
+import CircuitMCPCore
 
 /// AppKit calls every delegate method on the main thread, and `ServerLifecycle` requires it.
 /// `NSApplicationDelegate` does not carry that isolation into this target under the package's
 /// Swift 5 language mode, so it is stated here.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    static let displayName = "Andrew's PrepPal"
+    static let displayName = "Circuit MCP"
 
     private var window: NSWindow!
     private let web = WebWindow()
@@ -49,7 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         window.title = Self.displayName
-        window.setFrameAutosaveName("PrepPalMainWindow")
+        window.setFrameAutosaveName("CircuitMCPMainWindow")
         // This delegate holds the only strong reference, so letting the close release it too
         // would over-release the window that the quit sequence still writes its status into.
         window.isReleasedWhenClosed = false
@@ -112,7 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let refusal = lifecycle.refusalToStart {
             // Nothing the user can do reaches this. It is the last guard against a second server
             // that no reference would hold: one of those keeps running after the app is gone.
-            NSLog("PrepPal did not start a server: %@", refusal)
+            NSLog("CircuitMCP did not start a server: %@", refusal)
             return
         }
         status.showLoading("Starting the server…")
@@ -159,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.showFailure("The server stopped unexpectedly (exit status \(exitStatus)).", detail: "Restart to start it again.")
         }
         if let refusal = lifecycle.adopt(controller) {
-            NSLog("PrepPal did not start a server: %@", refusal)
+            NSLog("CircuitMCP did not start a server: %@", refusal)
             return
         }
         controller.start { [weak self] event in self?.handle(event, from: controller) }
@@ -174,7 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // dropped with it: nothing else would ever say why that server died.
         guard lifecycle.liveServer === controller else {
             if case .failed(let failure) = event {
-                NSLog("PrepPal ignored a failure from a superseded server: %@", "\(failure)")
+                NSLog("CircuitMCP ignored a failure from a superseded server: %@", "\(failure)")
             }
             return
         }
@@ -194,7 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         // Same rule as above, and the same reason for logging it: this health
                         // check belongs to a server that has already been replaced, so its
                         // failure must not take the screen, but it still has to be sayable.
-                        NSLog("PrepPal ignored a health check failure from a superseded server on port %@: %@",
+                        NSLog("CircuitMCP ignored a health check failure from a superseded server on port %@: %@",
                               "\(port)", "\(error)")
                         return
                     }
@@ -262,7 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         // Command-Q arrived while this stop ran. Starting the replacement now
                         // would hand the quit a server it has already decided not to stop.
                         if let pendingWork {
-                            NSLog("PrepPal: %@ did not run because the app is quitting.", pendingWork)
+                            NSLog("CircuitMCP: %@ did not run because the app is quitting.", pendingWork)
                         }
                         NSApp.reply(toApplicationShouldTerminate: true)
                     }
@@ -278,9 +278,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .notRunning, .stoppedGracefully:
             return nil
         case .killed:
-            return "PrepPal: the server did not stop when it was asked; killed its process group\n"
+            return "CircuitMCP: the server did not stop when it was asked; killed its process group\n"
         case .killFailed(let reason):
-            return "PrepPal: the server could not be confirmed stopped, so a server process may still be running: \(reason)\n"
+            return "CircuitMCP: the server could not be confirmed stopped, so a server process may still be running: \(reason)\n"
         }
     }
 
@@ -303,7 +303,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try handle.seekToEnd()
             try handle.write(contentsOf: Data(line.utf8))
         } catch {
-            NSLog("PrepPal could not append to %@: %@", log.path, "\(error)")
+            NSLog("CircuitMCP could not append to %@: %@", log.path, "\(error)")
         }
     }
 
@@ -533,7 +533,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let refusal = failure as? DataImportError, refusal.refusedBeforeTouchingDisk {
             return "\(refusal)\n\nNothing was changed."
         }
-        let readTheLog = "Open Console.app and search for PrepPal to see what the import reported."
+        let readTheLog = "Open Console.app and search for CircuitMCP to see what the import reported."
         let state: ImportRecovery
         do {
             state = try importer.recovery(at: destination)

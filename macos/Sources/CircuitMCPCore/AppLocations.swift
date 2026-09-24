@@ -6,7 +6,7 @@ public enum AppLocationsError: Error, Equatable {
 
 /// Where the app keeps its data and logs, and where its bundled Python lives.
 public struct AppLocations: Equatable {
-    public static let folderName = "PrepPal"
+    public static let folderName = "CircuitMCP"
 
     public let supportDirectory: URL
     public let logsDirectory: URL
@@ -15,13 +15,13 @@ public struct AppLocations: Equatable {
     public var showmanDirectory: URL { supportDirectory.appendingPathComponent("showman", isDirectory: true) }
     public var workspaceConfig: URL { supportDirectory.appendingPathComponent("workspace.json") }
 
-    /// `PREPPAL_HOME`, when set, replaces `~/Library` so tests never touch real user data.
+    /// `CIRCUIT_MCP_APP_HOME`, when set, replaces `~/Library` so tests never touch real user data.
     public static func current(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         homeLibrary: URL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
     ) throws -> AppLocations {
         var library = homeLibrary
-        if let home = environment["PREPPAL_HOME"] {
+        if let home = environment["CIRCUIT_MCP_APP_HOME"] {
             guard !home.trimmingCharacters(in: .whitespaces).isEmpty else { throw AppLocationsError.emptyHome }
             library = URL(fileURLWithPath: home, isDirectory: true)
         }

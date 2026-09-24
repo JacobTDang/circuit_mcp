@@ -1,5 +1,10 @@
 # Andrew's PrepPal macOS App: Shell and Core Implementation Plan
 
+> **Renamed.** This document records the 2026-09-15 design, when the app shipped as
+> `Andrew's PrepPal`. It is now `Circuit MCP` (bundle id
+> `io.github.jacobtdang.circuitmcp`). The old name is left here as the record of what
+> was decided then; nothing in the codebase still uses it.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship `Andrew's PrepPal.app`, a native macOS app that starts the command center's Python server itself and shows the desk in its own window, with the Python core bundled inside so it runs on another Mac.

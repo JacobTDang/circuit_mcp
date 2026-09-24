@@ -1,5 +1,5 @@
 import XCTest
-@testable import PrepPalCore
+@testable import CircuitMCPCore
 
 final class HealthCheckTests: XCTestCase {
     private func response(_ status: Int, _ body: String) -> (Data, URLResponse) {

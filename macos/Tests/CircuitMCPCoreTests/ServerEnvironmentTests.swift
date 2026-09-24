@@ -1,17 +1,17 @@
 import XCTest
-@testable import PrepPalCore
+@testable import CircuitMCPCore
 
 final class ServerEnvironmentTests: XCTestCase {
-    private let locations = try! AppLocations.current(environment: ["PREPPAL_HOME": "/tmp/pp"],
+    private let locations = try! AppLocations.current(environment: ["CIRCUIT_MCP_APP_HOME": "/tmp/pp"],
                                                      homeLibrary: URL(fileURLWithPath: "/unused"))
 
     func testTheServerGetsItsFoldersABoundedPathAndTheSecrets() {
         let variables = ServerEnvironment.variables(locations: locations,
                                                     secrets: ["OPENROUTER_API_KEY": "sk-or-key"],
                                                     home: "/Users/someone")
-        XCTAssertEqual(variables["CIRCUIT_MCP_DATA_DIR"], "/tmp/pp/Application Support/PrepPal/command_center")
-        XCTAssertEqual(variables["CIRCUIT_MCP_SHOWMAN_DATA_DIR"], "/tmp/pp/Application Support/PrepPal/showman")
-        XCTAssertEqual(variables["CIRCUIT_MCP_WORKSPACE_CONFIG"], "/tmp/pp/Application Support/PrepPal/workspace.json")
+        XCTAssertEqual(variables["CIRCUIT_MCP_DATA_DIR"], "/tmp/pp/Application Support/CircuitMCP/command_center")
+        XCTAssertEqual(variables["CIRCUIT_MCP_SHOWMAN_DATA_DIR"], "/tmp/pp/Application Support/CircuitMCP/showman")
+        XCTAssertEqual(variables["CIRCUIT_MCP_WORKSPACE_CONFIG"], "/tmp/pp/Application Support/CircuitMCP/workspace.json")
         XCTAssertEqual(variables["OPENROUTER_API_KEY"], "sk-or-key")
         XCTAssertEqual(variables["HOME"], "/Users/someone")
         XCTAssertEqual(variables["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin")
@@ -29,8 +29,8 @@ final class ServerEnvironmentTests: XCTestCase {
     /// fill. Both must name the writable folder sub-project 5 installs into instead.
     func testOCRPointsAtTheWritableDataFolderAndNotIntoTheBundle() {
         let variables = ServerEnvironment.variables(locations: locations, secrets: [:], home: "/Users/someone")
-        XCTAssertEqual(variables["CIRCUIT_MCP_OCR_PYTHON"], "/tmp/pp/Application Support/PrepPal/ocr/venv/bin/python")
-        XCTAssertEqual(variables["CIRCUIT_MCP_OCR_MODEL"], "/tmp/pp/Application Support/PrepPal/ocr/models/unimernet_small")
+        XCTAssertEqual(variables["CIRCUIT_MCP_OCR_PYTHON"], "/tmp/pp/Application Support/CircuitMCP/ocr/venv/bin/python")
+        XCTAssertEqual(variables["CIRCUIT_MCP_OCR_MODEL"], "/tmp/pp/Application Support/CircuitMCP/ocr/models/unimernet_small")
     }
 
     /// `paths._override` raises "is set but empty" for any variable that is set to blank, which
@@ -49,7 +49,7 @@ final class ServerEnvironmentTests: XCTestCase {
     /// so leaving it unset aims a write at a read-only folder instead of reporting a reason.
     func testTheRuntimeFolderIsWritableAndNotInsideTheBundle() {
         let variables = ServerEnvironment.variables(locations: locations, secrets: [:], home: "/Users/someone")
-        XCTAssertEqual(variables["CIRCUIT_MCP_RUNTIME_DIR"], "/tmp/pp/Application Support/PrepPal/runtime")
+        XCTAssertEqual(variables["CIRCUIT_MCP_RUNTIME_DIR"], "/tmp/pp/Application Support/CircuitMCP/runtime")
     }
 }
 
@@ -59,7 +59,7 @@ final class ServerEnvironmentTests: XCTestCase {
 extension ServerEnvironmentTests {
     private func bundle(withSimulator: Bool) throws -> URL {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("preppal-ngspice-\(UUID().uuidString)/PrepPal.app", isDirectory: true)
+            .appendingPathComponent("circuitmcp-ngspice-\(UUID().uuidString)/CircuitMCP.app", isDirectory: true)
         let binary = AppLocations.bundledNgspice(in: root)
         try FileManager.default.createDirectory(at: binary.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
@@ -106,7 +106,7 @@ extension ServerEnvironmentTests {
 extension ServerEnvironmentTests {
     private func receiverBundle(withReceiver: Bool) throws -> URL {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("preppal-uxplay-\(UUID().uuidString)/PrepPal.app", isDirectory: true)
+            .appendingPathComponent("circuitmcp-uxplay-\(UUID().uuidString)/CircuitMCP.app", isDirectory: true)
         let binary = AppLocations.bundledUxplay(in: root)
         try FileManager.default.createDirectory(at: binary.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
