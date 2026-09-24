@@ -19,7 +19,6 @@ from . import paths
 from .processes import stop_within
 
 RUNTIME = paths.runtime_dir()
-UXPLAY = RUNTIME / "uxplay" / "bin" / "uxplay"
 WINDOW_INFO = RUNTIME / "bin" / "window_info"
 USB_CAPTURE = RUNTIME / "bin" / "ipad_usb_capture"
 SCREEN_CAPTURE = Path("/usr/sbin/screencapture")
@@ -55,6 +54,17 @@ class IPadCaptureService:
         self._frame_cached: dict | None = None
         self._frame_cached_at = 0.0
 
+    @staticmethod
+    def _airplay_unavailable() -> str:
+        """One sentence naming what is missing and the two ways to get it.
+
+        This project does not build the receiver, and the packaged app does not
+        carry it, so "not built" was only ever true of a checkout.
+        """
+        return ("AirPlay needs UxPlay and there is none on this machine. Install it with "
+                "brew install uxplay, or build one with scripts/setup_ipad_capture.sh, "
+                "then reopen this page.")
+
     def _clear_streams(self) -> None:
         for path in self._stream_dir.glob("airplay-frame*.h264"):
             path.unlink(missing_ok=True)
@@ -86,8 +96,9 @@ class IPadCaptureService:
         with self._lock:
             if self._process and self._process.poll() is None:
                 return self.status()
-            if not UXPLAY.is_file():
-                raise IPadCaptureError("UxPlay is not built; run scripts/setup_ipad_capture.sh")
+            receiver = paths.uxplay()
+            if receiver is None:
+                raise IPadCaptureError(self._airplay_unavailable())
             self._stream_dir.mkdir(parents=True, exist_ok=True)
             self._clear_streams()
             self._stream_last_size = 0
@@ -97,7 +108,7 @@ class IPadCaptureService:
             preview_size = os.environ.get("CIRCUIT_MCP_AIRPLAY_SIZE", "800x600@30")
             if not re.fullmatch(r"[1-9]\d{2,3}x[1-9]\d{2,3}@[1-9]\d?", preview_size):
                 raise IPadCaptureError("CIRCUIT_MCP_AIRPLAY_SIZE must look like 800x600@30")
-            command = [str(UXPLAY), "-n", "Circuit Capture", "-nh", "-pin", self._pin,
+            command = [str(receiver), "-n", "Circuit Capture", "-nh", "-pin", self._pin,
                        "-m", "02:ee:23:00:00:01", "-key", str(self._identity_key),
                        "-reg", str(self._registration), "-nohold",
                        "-s", preview_size,
@@ -215,9 +226,11 @@ class IPadCaptureService:
                 # stdout omits the usual connection-request diagnostic.
                 connected = connected or time.monotonic() - self._stream_active_at < 12
         usb, usb_error = self._refresh_usb_async()
+        receiver = paths.uxplay()
         return {
-            "ok": UXPLAY.is_file() or USB_CAPTURE.is_file(),
-            "airplay": {"available": UXPLAY.is_file(), "running": running,
+            "ok": receiver is not None or USB_CAPTURE.is_file(),
+            "airplay": {"available": receiver is not None, "running": running,
+                        "unavailable": "" if receiver else self._airplay_unavailable(),
                         "connected": connected, "stream_ready": stream_ready,
                         "headless": True,
                         "receiver": "Circuit Capture",

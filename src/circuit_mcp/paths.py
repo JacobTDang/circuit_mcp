@@ -14,6 +14,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# The app starts its server with PATH=/usr/bin:/bin:/usr/sbin:/sbin on purpose, so
+# shutil.which can never see a Homebrew install. Tools the student is told to brew
+# install are looked for by name here instead of widening that PATH for everything.
+HOMEBREW_PREFIXES = (Path("/opt/homebrew"), Path("/usr/local"))
+
 
 def _override(name: str) -> str | None:
     value = os.environ.get(name)
@@ -78,3 +83,28 @@ def ngspice() -> Path | None:
         return binary
     found = shutil.which("ngspice")
     return Path(found) if found else None
+
+
+def uxplay() -> Path | None:
+    """The AirPlay receiver: the one named, else the one built, else one on PATH.
+
+    This project does not build UxPlay, so all three are possible and they are
+    different situations for the person reading the screen. None means there is
+    genuinely none, which the status turns into a sentence rather than a path
+    that is not there.
+    """
+    value = _override("CIRCUIT_MCP_UXPLAY")
+    if value:
+        binary = Path(value).expanduser().absolute()
+        if not (binary.is_file() and os.access(binary, os.X_OK)):
+            raise ValueError(f"CIRCUIT_MCP_UXPLAY names {binary}, which is not an executable file")
+        return binary
+    candidates = [runtime_dir() / "uxplay" / "bin" / "uxplay"]
+    found = shutil.which("uxplay")
+    if found:
+        candidates.append(Path(found))
+    candidates.extend(prefix / "bin" / "uxplay" for prefix in HOMEBREW_PREFIXES)
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None

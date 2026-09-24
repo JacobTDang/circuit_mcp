@@ -85,7 +85,9 @@ def test_the_runtime_tools_follow_the_runtime_variable(tmp_path):
     env = {**os.environ, "CIRCUIT_MCP_RUNTIME_DIR": str(tmp_path / "runtime"),
            "PYTHONPATH": str(paths.REPO_ROOT / "src")}
     completed = subprocess.run(
-        [sys.executable, "-c", "from circuit_mcp import ipad_capture as c; print(c.UXPLAY); print(c.USB_CAPTURE)"],
+        [sys.executable, "-c",
+         "from circuit_mcp import ipad_capture as c, paths; "
+         "print(paths.uxplay() or paths.runtime_dir() / 'uxplay' / 'bin' / 'uxplay'); print(c.USB_CAPTURE)"],
         env=env, capture_output=True, text=True, timeout=120,
     )
     assert completed.returncode == 0, completed.stderr

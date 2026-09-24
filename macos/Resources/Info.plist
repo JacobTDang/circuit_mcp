@@ -22,6 +22,15 @@
     <string>__VERSION__</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
+    <!-- UxPlay advertises the AirPlay receiver over mDNS. Without these macOS
+         refuses the discovery silently and the iPad never sees a receiver. -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Andrew’s PrepPal runs a private AirPlay receiver on this Mac so your iPad can mirror its screen to the desk. Nothing leaves your local network.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_airplay._tcp</string>
+        <string>_raop._tcp</string>
+    </array>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSPrincipalClass</key>
