@@ -20,6 +20,16 @@ def forget_the_prompt(monkeypatch):
     monkeypatch.setattr(screen_recording, "_ASKED", False, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def capture_tool_exists(monkeypatch):
+    """What these test is the permission, not whether this machine is a Mac.
+
+    Left real, every one of them short-circuits on Linux at "there is no
+    screencapture here" and asserts nothing about permission at all.
+    """
+    monkeypatch.setattr(capture.shutil, "which", lambda command: command)
+
+
 class FakeCoreGraphics:
     """Stands in for the framework: the real answer depends on this machine's TCC."""
 
