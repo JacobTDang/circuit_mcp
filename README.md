@@ -271,6 +271,24 @@ configure_workspace(x=<left>, y=<top>, width=<width>, height=<height>)
 It is saved in the ignored `.local/workspace.json`. Explicit coordinates on a
 later `transcribe_workspace` call override the saved values for that call.
 
+## Installing the handwriting recogniser
+
+`scripts/setup_ocr.sh` still does this in a terminal with uv. From the desk,
+the iPad page offers the same install: the recogniser's virtualenv and the
+810 MB UniMERNet checkpoint, about 2 GB together, into the folder
+`CIRCUIT_MCP_OCR_PYTHON` and `CIRCUIT_MCP_OCR_MODEL` name.
+
+It uses the running interpreter's own `venv` and `pip` rather than uv, because
+the packaged app carries no uv and bounds its server's PATH so it could not
+reach one anyway. Every step writes into a staging folder beside the
+destination and nothing is renamed into place until all of them have
+succeeded, so a failure or a cancellation halfway leaves the desk exactly as it
+was -- and says which unfinished folder it removed rather than tidying up
+quietly. Once it lands, `ocr_status` reports the model without a restart.
+
+Not installing it is a supported state: every tool that does not need a model
+keeps working, and the OCR routes refuse with a sentence.
+
 ## macOS app: Andrew's PrepPal
 
 `Andrew's PrepPal.app` runs the command center in its own window. There's no

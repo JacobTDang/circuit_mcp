@@ -21,6 +21,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import paths, solution_sheet
 from .ocr_client import OCR_WORKER
+from .ocr_install import OCR_INSTALLER, OCRInstallError
 from .storage import CommandCenterDB, StorageError
 from .capture import CaptureError, capture_workspace as _capture_workspace
 from .workspace import configure_display as _configure_display
@@ -448,6 +449,27 @@ def delete_upload(identifier: str) -> dict[str, Any]:
         raise
     _record("delete", item["name"], True, "document", identifier, {"recoverable": True})
     return {"ok": True}
+
+
+@app.get("/api/ocr/install")
+def ocr_install_state() -> dict[str, Any]:
+    """What is missing, what it would cost, and how a running install is going."""
+    return OCR_INSTALLER.state()
+
+
+@app.post("/api/ocr/install")
+def ocr_install_start() -> dict[str, Any]:
+    try:
+        return OCR_INSTALLER.start()
+    except OCRInstallError as refused:
+        raise HTTPException(status_code=409, detail=str(refused)) from refused
+
+
+@app.delete("/api/ocr/install")
+def ocr_install_cancel() -> dict[str, Any]:
+    """Cancelling one that is not running is not an error: the button may have
+    been pressed as the last step finished."""
+    return OCR_INSTALLER.cancel()
 
 
 @app.post("/api/library/{identifier}/ocr")
