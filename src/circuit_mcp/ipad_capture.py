@@ -16,6 +16,7 @@ from collections import deque
 from pathlib import Path
 
 from . import paths
+from .processes import stop_within
 
 RUNTIME = paths.runtime_dir()
 UXPLAY = RUNTIME / "uxplay" / "bin" / "uxplay"
@@ -122,13 +123,10 @@ class IPadCaptureService:
     def stop_airplay(self) -> dict:
         with self._lock:
             process = self._process
-            if process and process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=2)
+            # Bounded: the app's quit runs this and the Showman stop in sequence
+            # inside one grace period. See processes.stop_within.
+            if not stop_within(process):
+                self._logs.append(f"UxPlay (pid {process.pid}) did not stop")
             self._process = None
             self._pin = None
             self._started_at = None

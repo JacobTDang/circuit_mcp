@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import re
 import subprocess
 import threading
@@ -16,8 +17,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import paths
+from .processes import stop_within
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WORKER_SCRIPT = Path("dist") / "service" / "worker.js"
 OBJECT_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,240}")
 FREE_MODEL_SUFFIX = ":free"
@@ -73,7 +74,7 @@ class ShowmanManager:
 
     def __init__(self, root: Path | None = None, port: int = 2301,
                  data_dir: Path | None = None):
-        self.root = Path(root) if root else PROJECT_ROOT / "vendor" / "showman"
+        self.root = Path(root) if root else paths.showman_root()
         self.port = port
         self.data_dir = Path(data_dir) if data_dir else paths.showman_data_dir()
         self.process: subprocess.Popen[bytes] | None = None
@@ -277,20 +278,19 @@ class ShowmanManager:
         return self.start(timeout)
 
     def stop(self) -> None:
-        """Stop only a worker this manager started. Adopting sessions leave it running,
-        and a stale worker is reaped by start() instead, so an unrelated process
-        importing this module can never signal a live worker."""
+        """Stop only a worker this manager started, inside a bounded time.
+
+        Adopting sessions leave it running, and a stale worker is reaped by
+        start() instead, so an unrelated process importing this module can never
+        signal a live worker. The bound is what the app's quit depends on: see
+        ``processes.stop_within``.
+        """
         with self._lock:
             process, self.process = self.process, None
             if process is not None:
                 self._identity_path.unlink(missing_ok=True)
-        if process and process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=3)
+        if not stop_within(process):
+            self._last_error = f"the Showman worker (pid {process.pid}) did not stop"
 
     def status(self) -> dict[str, Any]:
         running = self._health()
@@ -306,7 +306,29 @@ class ShowmanManager:
             "model": identity.get("model", "") if identity else "",
             "key_available": self._authoring_mode(os.environ) != "offline",
             "error": "" if (running and identity) else self._last_error,
+            "unavailable": "" if running and identity else self.unavailable(),
+            "root": str(self.root),
         }
+
+    def unavailable(self) -> str:
+        """One sentence saying why nothing can be rendered, or "" when it can.
+
+        Inside the packaged app there is no Node, no node_modules and no
+        vendored worker, so every visual route answers 502. Answering 502 is
+        honest; offering a button that always does is not. The surface reads
+        this instead of finding out by failing.
+        """
+        if not (self.root / "package.json").is_file():
+            return ("Showman is not installed, so there is nothing to render with. The app does "
+                    "not carry the renderer; a checkout gets it with "
+                    "git submodule update --init vendor/showman.")
+        if shutil.which("node") is None:
+            return ("Showman needs Node to run and there is none on this machine. "
+                    "Install Node 20 or later, then reopen this panel.")
+        if not (self.root / WORKER_SCRIPT).is_file():
+            return (f"Showman is installed but not built. Run npm ci && npm run build in "
+                    f"{self.root}.")
+        return ""
 
     def _within(self, budget: float, label: str, work: Callable[[], Any]) -> Any:
         """Run one upstream call under a wall-clock budget.
