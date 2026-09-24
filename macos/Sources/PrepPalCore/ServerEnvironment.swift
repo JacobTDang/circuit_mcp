@@ -16,6 +16,31 @@ public enum ServerEnvironment {
         dataVariables(locations: locations)
             .merging(writableFolderVariables(locations: locations)) { existing, _ in existing }
             .merging(simulatorVariables(appBundle: appBundle)) { existing, _ in existing }
+            .merging(receiverVariables(locations: locations, appBundle: appBundle)) { existing, _ in existing }
+    }
+
+    /// The AirPlay receiver the app carries, when it carries one.
+    ///
+    /// UxPlay is GStreamer, which finds its plugins through the environment rather than through
+    /// its own load commands. Naming only the binary would leave it scanning whatever plugins the
+    /// machine has -- none, on the Mac this app exists for -- so the plugin path and the scanner
+    /// are named with it. The registry has to be somewhere writable: a .app is read-only once
+    /// installed, and GStreamer writes the registry on first run.
+    static func receiverVariables(locations: AppLocations, appBundle: URL?,
+                                  fileManager: FileManager = .default) -> [String: String] {
+        guard let appBundle else { return [:] }
+        let binary = AppLocations.bundledUxplay(in: appBundle)
+        guard fileManager.isExecutableFile(atPath: binary.path) else { return [:] }
+        let staged = AppLocations.bundledGStreamer(in: appBundle)
+        let plugins = staged.appendingPathComponent("plugins", isDirectory: true).path
+        return [
+            "CIRCUIT_MCP_UXPLAY": binary.path,
+            "GST_PLUGIN_SYSTEM_PATH": plugins,
+            "GST_PLUGIN_PATH": plugins,
+            "GST_PLUGIN_SCANNER": staged.appendingPathComponent("libexec/gst-plugin-scanner").path,
+            "GST_REGISTRY": locations.supportDirectory
+                .appendingPathComponent("gstreamer-registry.bin").path,
+        ]
     }
 
     /// The simulator the app carries, when it carries one.
