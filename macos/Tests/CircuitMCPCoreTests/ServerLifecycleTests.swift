@@ -1,5 +1,5 @@
 import XCTest
-@testable import PrepPalCore
+@testable import CircuitMCPCore
 
 /// `AppDelegate` supervises exactly one server, and the bookkeeping for that -- which controller
 /// is live, what work is in flight, and whether a quit is waiting on it -- is what these drive.

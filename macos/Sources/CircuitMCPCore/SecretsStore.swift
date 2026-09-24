@@ -13,7 +13,7 @@ public struct SecretsStore {
 
     public let service: String
 
-    public init(service: String = "io.github.jacobtdang.preppal") {
+    public init(service: String = "io.github.jacobtdang.circuitmcp") {
         self.service = service
     }
 

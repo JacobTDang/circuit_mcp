@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Build Andrew's PrepPal.app.
+# Build Circuit MCP.app.
 # Usage: macos/build_app.sh [--stage python|ngspice|uxplay|app|sign|dmg|all]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="Andrew's PrepPal"
+APP_NAME="Circuit MCP"
 APP="$ROOT/dist/$APP_NAME.app"
 RESOURCES="$APP/Contents/Resources"
 WORK="$ROOT/build/macos"
@@ -123,12 +123,12 @@ stage_app() {
   # --arch arm64 on purpose: without it the slice is whatever the build host happens to be, so
   # the disk image would only be Apple silicon by accident. The bundled Python is an
   # aarch64 build, so arm64 is the only slice the app could run with anyway.
-  (cd "$ROOT/macos" && swift build -c release --arch arm64 --product PrepPal)
+  (cd "$ROOT/macos" && swift build -c release --arch arm64 --product CircuitMCP)
   local bin
-  bin="$(cd "$ROOT/macos" && swift build -c release --arch arm64 --show-bin-path)/PrepPal"
+  bin="$(cd "$ROOT/macos" && swift build -c release --arch arm64 --show-bin-path)/CircuitMCP"
   [ "$(lipo -archs "$bin")" = "arm64" ] || fail "built $(lipo -archs "$bin"), expected arm64"
   mkdir -p "$APP/Contents/MacOS"
-  cp "$bin" "$APP/Contents/MacOS/PrepPal"
+  cp "$bin" "$APP/Contents/MacOS/CircuitMCP"
   sed "s/__VERSION__/$VERSION/g" "$ROOT/macos/Resources/Info.plist" >"$APP/Contents/Info.plist"
   plutil -lint "$APP/Contents/Info.plist" >/dev/null || fail "the generated Info.plist is invalid"
 }
@@ -162,7 +162,7 @@ copy_out_of_tree() {
 }
 
 stage_sign() {
-  [ -x "$APP/Contents/MacOS/PrepPal" ] || fail "run 'macos/build_app.sh --stage app' first"
+  [ -x "$APP/Contents/MacOS/CircuitMCP" ] || fail "run 'macos/build_app.sh --stage app' first"
   local unsynced unsynced_work signed_candidate backup
   copy_out_of_tree "$APP"
   # Ad-hoc signature. A release build would add Developer ID signing, notarization, and stapling.
@@ -192,7 +192,7 @@ stage_sign() {
 }
 
 stage_dmg() {
-  local dmg="$ROOT/dist/PrepPal-$VERSION.dmg"
+  local dmg="$ROOT/dist/CircuitMCP-$VERSION.dmg"
   local unsynced unsynced_work dmg_work candidate
   # The staged copy is both the signature check and what the disk image is built from, so what
   # users open is the bundle that verified, without the sync flag on it.
@@ -200,9 +200,9 @@ stage_dmg() {
   codesign --verify --deep --strict "$unsynced" \
     || fail "the app is not signed; run 'macos/build_app.sh --stage sign' first"
   ln -s /Applications "$unsynced_work/Applications"
-  dmg_work="$(mktemp -d "$ROOT/dist/.preppal-dmg.XXXXXX")"
+  dmg_work="$(mktemp -d "$ROOT/dist/.circuitmcp-dmg.XXXXXX")"
   temporary_dirs+=("$dmg_work")
-  candidate="$dmg_work/PrepPal-$VERSION.dmg"
+  candidate="$dmg_work/CircuitMCP-$VERSION.dmg"
   hdiutil create -volname "$APP_NAME" -srcfolder "$unsynced_work" -ov -format UDZO "$candidate" >/dev/null
   hdiutil verify "$candidate" >/dev/null || fail "hdiutil could not verify $candidate"
   mv -f "$candidate" "$dmg"

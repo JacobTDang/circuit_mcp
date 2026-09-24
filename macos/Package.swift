@@ -7,12 +7,12 @@ import PackageDescription
 let mainActorIsEnforced: [SwiftSetting] = [.unsafeFlags(["-Werror", "ActorIsolatedCall"])]
 
 let package = Package(
-    name: "PrepPal",
+    name: "CircuitMCP",
     platforms: [.macOS(.v14)],
     targets: [
-        .target(name: "PrepPalCore", swiftSettings: mainActorIsEnforced),
-        .executableTarget(name: "PrepPal", dependencies: ["PrepPalCore"], swiftSettings: mainActorIsEnforced),
-        .testTarget(name: "PrepPalCoreTests", dependencies: ["PrepPalCore"],
+        .target(name: "CircuitMCPCore", swiftSettings: mainActorIsEnforced),
+        .executableTarget(name: "CircuitMCP", dependencies: ["CircuitMCPCore"], swiftSettings: mainActorIsEnforced),
+        .testTarget(name: "CircuitMCPCoreTests", dependencies: ["CircuitMCPCore"],
                     resources: [.copy("Fixtures")], swiftSettings: mainActorIsEnforced),
     ]
 )

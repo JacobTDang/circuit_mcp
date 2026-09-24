@@ -1,5 +1,5 @@
 import XCTest
-@testable import PrepPalCore
+@testable import CircuitMCPCore
 
 final class ServerControllerTests: XCTestCase {
     private var logDirectory: URL!

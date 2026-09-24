@@ -1,5 +1,10 @@
 # Andrew's PrepPal macOS app: shell and core — design
 
+> **Renamed.** This document records the 2026-09-15 design, when the app shipped as
+> `Andrew's PrepPal`. It is now `Circuit MCP` (bundle id
+> `io.github.jacobtdang.circuitmcp`). The old name is left here as the record of what
+> was decided then; nothing in the codebase still uses it.
+
 *2026-09-15 · tracks #46*
 
 ## Purpose

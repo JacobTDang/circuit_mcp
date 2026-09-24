@@ -1,5 +1,5 @@
 import XCTest
-@testable import PrepPalCore
+@testable import CircuitMCPCore
 
 final class DataImporterTests: XCTestCase {
     private var root: URL!
@@ -176,7 +176,7 @@ final class DataImporterTests: XCTestCase {
         .notACommandCenter("/Users/andrew/Documents"),
         .sameFolder,
         .sourceInUse("41273"),
-        .backupExists("/Users/andrew/Library/Application Support/PrepPal/command_center.before-import-20270115T080000Z"),
+        .backupExists("/Users/andrew/Library/Application Support/CircuitMCP/command_center.before-import-20270115T080000Z"),
     ]
 
     /// The list above is hand-kept, so a case added without a sentence would simply not be
@@ -220,7 +220,7 @@ final class DataImporterTests: XCTestCase {
     }
 
     func testAnExistingBackupNamesTheFolderInTheWay() {
-        let aside = "/Users/andrew/Library/Application Support/PrepPal/command_center.before-import-20270115T080000Z"
+        let aside = "/Users/andrew/Library/Application Support/CircuitMCP/command_center.before-import-20270115T080000Z"
         let message = "\(DataImportError.backupExists(aside))"
         XCTAssertTrue(message.contains(aside), "the folder in the way: \(message)")
         XCTAssertTrue(message.lowercased().contains("rename"), "the action to take: \(message)")

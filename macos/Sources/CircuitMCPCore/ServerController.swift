@@ -272,7 +272,7 @@ public final class ServerController {
             do {
                 try log.write(contentsOf: chunk)
             } catch {
-                NSLog("PrepPal could not write the server log %@: %@", configuration.logFile.path, "\(error)")
+                NSLog("CircuitMCP could not write the server log %@: %@", configuration.logFile.path, "\(error)")
                 break
             }
             pending.append(chunk)

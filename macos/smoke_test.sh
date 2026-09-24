@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # End to end: open the built app in a throwaway home, wait for a healthy server,
 # quit the app, and confirm nothing from the bundle is left running.
-# Usage: macos/smoke_test.sh [path/to/Andrew's PrepPal.app]
+# Usage: macos/smoke_test.sh [path/to/Circuit MCP.app]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # bash 3.2 parses the apostrophe inside a ${...:-default} as an unterminated quote, so the
 # default is assigned on its own line -- the same shape check_python_runtime.sh uses.
 APP="${1:-}"
-[ -n "$APP" ] || APP="$ROOT/dist/Andrew's PrepPal.app"
+[ -n "$APP" ] || APP="$ROOT/dist/Circuit MCP.app"
 check=""
 home=""
 launched=no
@@ -18,7 +18,7 @@ cleanup() {
   local process
   trap - EXIT
   if [ "$launched" = yes ]; then
-    osascript -e 'tell application id "io.github.jacobtdang.preppal" to quit' >/dev/null 2>&1 || true
+    osascript -e 'tell application id "io.github.jacobtdang.circuitmcp" to quit' >/dev/null 2>&1 || true
     for _ in $(seq 1 20); do
       pgrep -f "$APP/Contents/" >/dev/null || break
       sleep 0.1
@@ -45,7 +45,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-[ -x "$APP/Contents/MacOS/PrepPal" ] || fail "no built app at $APP; run macos/build_app.sh"
+[ -x "$APP/Contents/MacOS/CircuitMCP" ] || fail "no built app at $APP; run macos/build_app.sh"
 # codesign refuses to look at a bundle whose root carries a com.apple.FinderInfo attribute, and a
 # checkout under a synced folder gets one put back on every .app within a second or two of its
 # being removed, so a strict check run in place answers by luck. Checking a copy in a temporary
@@ -65,8 +65,8 @@ check=""
 if pgrep -f "$APP/Contents/" >/dev/null; then fail "the app is already running; quit it first"; fi
 
 home="$(mktemp -d)"
-logs="$home/Logs/PrepPal"
-open --env "PREPPAL_HOME=$home" "$APP" || fail "could not launch $APP"
+logs="$home/Logs/CircuitMCP"
+open --env "CIRCUIT_MCP_APP_HOME=$home" "$APP" || fail "could not launch $APP"
 launched=yes
 
 port=""
@@ -95,7 +95,7 @@ for _ in $(seq 1 60); do
 done
 [ -n "$healthy" ] || fail "/api/status on port $port never reported ok"
 
-osascript -e 'tell application id "io.github.jacobtdang.preppal" to quit' \
+osascript -e 'tell application id "io.github.jacobtdang.circuitmcp" to quit' \
   || fail "could not tell the app to quit; allow the terminal to control other apps in System Settings -> Privacy & Security -> Automation"
 for _ in $(seq 1 40); do
   pgrep -f "$APP/Contents/" >/dev/null || break

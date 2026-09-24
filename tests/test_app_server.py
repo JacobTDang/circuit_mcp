@@ -23,7 +23,7 @@ from circuit_mcp.app_server import EXIT_LOCKED, LOCK_NAME, DataFolderLocked, acq
 
 # The spawned servers run the web lifespan, whose shutdown stops Showman. Point
 # them at a throwaway folder so they never touch a developer's .local/showman.
-_SHOWMAN_DATA = tempfile.TemporaryDirectory(prefix="preppal-showman-")
+_SHOWMAN_DATA = tempfile.TemporaryDirectory(prefix="circuitmcp-showman-")
 ENV = {
     **os.environ,
     "PYTHONPATH": str(paths.REPO_ROOT / "src"),

@@ -26,7 +26,7 @@ extension DataImportError: CustomStringConvertible, LocalizedError {
         case .sourceInUse(let holder):
             return "Another server is using that folder (process \(holder)). Quit run_ui.py, or whatever else is using that folder, and try the import again."
         case .backupExists(let path):
-            return "PrepPal moves your current data aside before it imports, and \(path) is already there. Rename or move that folder, then try the import again."
+            return "CircuitMCP moves your current data aside before it imports, and \(path) is already there. Rename or move that folder, then try the import again."
         }
     }
 
@@ -71,7 +71,7 @@ public struct ImportRecovery: Equatable {
 extension DataImporter: @unchecked Sendable {}
 
 public struct DataImporter {
-    private static let log = Logger(subsystem: "io.github.jacobtdang.preppal", category: "DataImporter")
+    private static let log = Logger(subsystem: "io.github.jacobtdang.circuitmcp", category: "DataImporter")
 
     private let fileManager: FileManager
 

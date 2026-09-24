@@ -1,11 +1,11 @@
 import XCTest
-@testable import PrepPalCore
+@testable import CircuitMCPCore
 
 final class SecretsStoreTests: XCTestCase {
     private var store: SecretsStore!
 
     override func setUpWithError() throws {
-        store = SecretsStore(service: "io.github.jacobtdang.preppal.tests.\(UUID().uuidString)")
+        store = SecretsStore(service: "io.github.jacobtdang.circuitmcp.tests.\(UUID().uuidString)")
     }
 
     override func tearDownWithError() throws {
@@ -41,7 +41,7 @@ final class SecretsStoreTests: XCTestCase {
     /// separating the app's secrets from another application's identically named accounts.
     func testAnotherServiceDoesNotSeeTheseSecrets() throws {
         try store.write("sk-or-key", for: SecretsStore.apiKeyAccount)
-        let other = SecretsStore(service: "io.github.jacobtdang.preppal.tests.\(UUID().uuidString)")
+        let other = SecretsStore(service: "io.github.jacobtdang.circuitmcp.tests.\(UUID().uuidString)")
         XCTAssertNil(try other.read(SecretsStore.apiKeyAccount))
         XCTAssertEqual(try other.serverSecrets(), [:])
     }
@@ -49,6 +49,6 @@ final class SecretsStoreTests: XCTestCase {
     /// Every other test here injects its own service name, so nothing else would catch a typo in
     /// the default -- and a typo writes the key to a service the running app never reads.
     func testTheDefaultServiceIsTheAppsBundleIdentifier() {
-        XCTAssertEqual(SecretsStore().service, "io.github.jacobtdang.preppal")
+        XCTAssertEqual(SecretsStore().service, "io.github.jacobtdang.circuitmcp")
     }
 }

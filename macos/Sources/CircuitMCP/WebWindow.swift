@@ -98,7 +98,7 @@ final class WebWindow: NSObject, WKUIDelegate, WKNavigationDelegate {
     /// custom scheme would launch another application, both on the page's say-so.
     private func openOutside(_ url: URL) {
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
-            NSLog("PrepPal did not open %@: only http and https links leave the desk.", url.absoluteString)
+            NSLog("CircuitMCP did not open %@: only http and https links leave the desk.", url.absoluteString)
             return
         }
         NSWorkspace.shared.open(url)
@@ -123,7 +123,7 @@ final class WebWindow: NSObject, WKUIDelegate, WKNavigationDelegate {
         guard !cancelled else {
             // Not shown, but not dropped either: a page that cancels its own loads in a way the
             // user does notice leaves a trail here.
-            NSLog("PrepPal: a navigation was cancelled (%@ %ld); the desk was left as it was.",
+            NSLog("CircuitMCP: a navigation was cancelled (%@ %ld); the desk was left as it was.",
                   error.domain, error.code)
             return
         }
