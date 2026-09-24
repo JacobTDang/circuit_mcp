@@ -61,9 +61,10 @@ class IPadCaptureService:
         This project does not build the receiver, and the packaged app does not
         carry it, so "not built" was only ever true of a checkout.
         """
-        return ("AirPlay needs UxPlay and there is none on this machine. Install it with "
-                "brew install uxplay, or build one with scripts/setup_ipad_capture.sh, "
-                "then reopen this page.")
+        return ("AirPlay needs UxPlay and there is none on this machine. There is no "
+                "Homebrew formula for it, so build one with scripts/setup_ipad_capture.sh "
+                "-- it needs Homebrew for cmake, GStreamer and libplist -- then reopen "
+                "this page.")
 
     def _clear_streams(self) -> None:
         for path in self._stream_dir.glob("airplay-frame*.h264"):
