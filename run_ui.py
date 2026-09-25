@@ -1,6 +1,7 @@
-"""Launch the local Circuit Command Center on http://localhost:2300."""
+"""Launch the local Circuit Command Center on http://localhost:2300, or on the port given by --port."""
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -30,7 +31,15 @@ load_local_env()
 import uvicorn  # noqa: E402
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the Circuit Command Center.")
+    parser.add_argument("--port", type=int, default=2300,
+                        help="the port to serve on; linkC passes the port it chose for its tab")
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
+    args = parse_args()
     from circuit_mcp import paths
     from circuit_mcp.app_server import EXIT_LOCKED, DataFolderLocked, acquire_data_lock
 
@@ -39,4 +48,7 @@ if __name__ == "__main__":
     except DataFolderLocked as refused:
         print(refused, file=sys.stderr)
         sys.exit(EXIT_LOCKED)
-    uvicorn.run("circuit_mcp.web:app", host="127.0.0.1", port=2300, reload=False)
+    # A bounded graceful shutdown: an open page keeps a connection alive, and without a bound
+    # uvicorn waits for it forever, so SIGTERM would never finish.
+    uvicorn.run("circuit_mcp.web:app", host="127.0.0.1", port=args.port, reload=False,
+                timeout_graceful_shutdown=3)

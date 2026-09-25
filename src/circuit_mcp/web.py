@@ -211,6 +211,12 @@ def index() -> FileResponse:
     return FileResponse(STATIC / "index.html")
 
 
+@app.get("/healthz")
+def healthz() -> dict[str, bool]:
+    """Liveness for a launcher such as linkC: cheap, touches nothing, and 200 once the app serves."""
+    return {"ok": True}
+
+
 @app.get("/api/status")
 def status() -> dict[str, Any]:
     items = _read_index()

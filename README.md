@@ -377,6 +377,17 @@ runtime and a timestamp), submission to Apple's
 notary service, and stapling the result; those steps would expand the `sign` and
 packaging stages of `macos/build_app.sh`.
 
+## Open it in linkC
+
+[linkC](https://github.com/JacobTDang/linkC) can open the command center in a tab of this
+project. It reads [`.linkc/app.json`](.linkc/app.json), starts `run_ui.py --port <port>` with the
+repository's `.venv`, waits for `/healthz` to answer, and shows the desk. Closing the tab stops the
+server. linkC asks for port 2300 first, so the desk keeps the layout it saved in the page's local
+storage, and falls back to a free port when 2300 is taken.
+
+The data folder holds one server at a time. If `Circuit MCP.app` or another `run_ui.py` is already
+running, the tab reports that the folder is locked and shows the server's output.
+
 ## Development
 
 Create a Python 3.12+ virtual environment and install the project with its test
