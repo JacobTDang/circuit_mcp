@@ -1,5 +1,7 @@
 # circuit_mcp
 
+![circuit_mcp: a sign error found at the step it happened, then the schematic, breadboard build and expected scope readings for the same circuit](docs/media/circuit-mcp.gif)
+
 An MCP server that checks circuit derivations against a symbolic ground truth
 for local circuit analysis, study, and visual learning.
 

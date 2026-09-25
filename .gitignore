@@ -35,3 +35,6 @@ macos/.swiftpm/
 # A student's own line crops for the handwriting eval; the manifest that names
 # them is committed, the coursework images are not.
 benchmarks/handwriting/crops/
+
+# /brag launch-video workspace; only the README GIF (docs/media/) is tracked
+brag/
