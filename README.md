@@ -15,7 +15,7 @@ verdicts.
 ## Status
 
 The linear-circuit MCP server is implemented and registered by [`.mcp.json`](.mcp.json).
-It currently provides fifty-six tools:
+It provides these tools:
 
 | Tool | Purpose |
 |---|---|
@@ -25,11 +25,6 @@ It currently provides fifty-six tools:
 | `check_derivation` | Locate the first invalid algebra transition, setup error, or wrong final answer; optional parameters support symbolic-to-numeric steps |
 | `circuit_equations` | Return lcapy's nodal system and solved circuit quantities |
 | `check_setup` | Check that submitted equations hold and have full rank; classify each equation's role |
-
-`derive`, `check_equivalence`, `check_derivation`, `check_setup`, and
-`simulate_spice` take an optional `attempt_id`. Pass one and the call is
-recorded against that attempt with the verdict it reached, which
-`attempt_history` and the problem board then show.
 | `compare_readings` | Check measured bench readings against a build's prediction and name the likeliest cause of each miss |
 | `workspace_status` | Check whether the macOS screenshot backend is available without capturing anything |
 | `capture_workspace` | Return the current visible iPad screen or selected region as an MCP PNG image |
@@ -73,11 +68,19 @@ recorded against that attempt with the verdict it reached, which
 | `attempt_create` | Start a student or agent attempt |
 | `attempt_complete` | Complete an attempt with a graded workflow status |
 | `problem_tag` | Attach a normalized course tag |
+| `canvas_card_add` | Put a verified card on the desk (formula, walkthrough, vocabulary, schematic, breadboard, expected), or a problem's solution on its solutions sheet |
+| `canvas_card_list` | List the cards on the desk, newest first, optionally for one problem |
+| `canvas_card_remove` | Take one card off the desk |
 | `visual_status` | Report whether the local renderer can author a visual |
 | `visual_generate` | Render one local teaching video from a brief and persist it |
 | `visual_list` | List locally rendered visuals, newest first |
 | `visual_get` | Read one visual and the specification it was rendered from |
 | `visual_preview` | Return one still frame of a stored visual as an image |
+
+`derive`, `check_equivalence`, `check_derivation`, `check_setup`, and
+`simulate_spice` take an optional `attempt_id`. Pass one and the call is
+recorded against that attempt with the verdict it reached, which
+`attempt_history` and the problem board then show.
 
 The detailed rationale, evaluated alternatives, and known lcapy limitations are
 recorded in [`docs/2026-08-24-design.md`](docs/2026-08-24-design.md).
