@@ -515,3 +515,10 @@ def test_a_solution_whose_attempt_has_no_checks_says_so(tmp_path, monkeypatch):
         page = browser.get("/solutions?tag=m2-silent").text
 
     assert "no checks recorded against this attempt" in page
+
+
+def test_healthz_answers_without_touching_the_desk(tmp_path, monkeypatch):
+    """A launcher polls this until the server is up, so it must be cheap and always 200."""
+    response = client(tmp_path, monkeypatch).get("/healthz")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}

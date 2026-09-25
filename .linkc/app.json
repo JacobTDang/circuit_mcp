@@ -1,0 +1,6 @@
+{
+  "name": "Circuit MCP",
+  "start": [".venv/bin/python", "run_ui.py", "--port", "{port}"],
+  "health": "/healthz",
+  "port": 2300
+}
