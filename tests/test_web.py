@@ -414,6 +414,19 @@ def _hw1_sheet(browser):
     return database
 
 
+def test_the_sheet_writes_a_negative_answer_with_the_minus_sign(tmp_path, monkeypatch):
+    """2.9 (a) hands in -6 V/V; on the page that sign has to read as a minus, not a hyphen."""
+    with client(tmp_path, monkeypatch) as browser:
+        _hw1_sheet(browser)
+        page = browser.get("/solutions?tag=m2-hw1").text
+
+    problem = page[page.index("2.9 (a) gain and input resistance"):]
+    answer = problem[problem.index('<div class="answer">'):]
+    answer = answer[:answer.index("</div>")]
+    assert "\u2212" in answer or "&#8722;" in answer, answer
+    assert "<mn>-6</mn>" not in answer and "<mo>-</mo>" not in answer, answer
+
+
 def test_the_sheet_renders_all_eight_hw1_problems_in_page_order(tmp_path, monkeypatch):
     with client(tmp_path, monkeypatch) as browser:
         _hw1_sheet(browser)

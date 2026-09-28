@@ -1,19 +1,105 @@
 # circuit_mcp
 
-An MCP server that checks circuit derivations against a symbolic ground truth
-for local circuit analysis, study, and visual learning.
+![circuit_mcp: a sign error found at the step it happened, then the schematic, breadboard build and expected scope readings for the same circuit](docs/media/circuit-mcp.gif)
 
-It does not solve homework on the student's behalf. Given a netlist and an
-ordered derivation, it identifies where the work diverges: setup equations are
-checked against the circuit's solved values, algebra is checked step-to-step,
-and the final expression is checked against the ground-truth transfer function.
-The language model handles transcription; lcapy and SymPy make the mathematical
-verdicts.
+An MCP server that checks circuit homework without doing it for you. Give it
+your working and it finds the first step that is wrong. The language model only
+reads your work. lcapy, SymPy and ngspice decide whether it is right.
 
-## Status
+## What it does
 
-The linear-circuit MCP server is implemented and registered by [`.mcp.json`](.mcp.json).
-It currently provides fifty-six tools:
+- **Finds the first mistake.** `check_setup` tests your circuit equations,
+  `check_derivation` tests each algebra step, and the answer is compared with the
+  transfer function `derive` works out from the netlist.
+- **Reads your iPad.** Mirror the iPad and the agent captures the page. Local
+  handwriting OCR turns each line into LaTeX. The agent shows what it read and
+  waits for you to confirm before it checks anything.
+- **Explains on a desk.** A local web page, or the macOS app, shows cards beside
+  your work: formulas, algebra walkthroughs, and a schematic drawn from the same
+  netlist that was checked. Every card is verified before it is drawn.
+- **Gets you to the bench.** A breadboard card gives the build in wiring order.
+  An expected card says what the meter and scope should read. `compare_readings`
+  names the likely cause of a reading that is off.
+- **Makes a page to hand in.** `/solutions?tag=<tag>` prints a whole assignment,
+  each answer backed by the checks that were recorded for it.
+
+Course files stay on your machine.
+
+## Quick start
+
+You need macOS or Linux, Python 3.12+, and ngspice 47+ for simulation
+(`brew install ngspice`). Windows is not supported.
+
+```console
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -e '.[dev]'
+.venv/bin/python -m pytest -q      # tests
+.venv/bin/python run_server.py     # the MCP server, over stdio
+.venv/bin/python run_ui.py         # the desk, at http://localhost:2300
+```
+
+The checked-in [`.mcp.json`](.mcp.json) registers the server with Claude Code.
+[`CLAUDE.md`](CLAUDE.md) is the tutoring workflow the agent follows.
+
+### Optional add-ons
+
+Each one reports itself as unavailable, and says what is missing, until it is
+set up.
+
+| Add-on | Set up | More |
+|---|---|---|
+| iPad capture | `scripts/setup_ipad_capture.sh` | [ipad-capture.md](docs/ipad-capture.md) |
+| Handwriting OCR (about 2 GB) | `scripts/setup_ocr.sh`, or install from the iPad page | [reference](docs/reference.md#handwriting-recognition) |
+| Teaching videos | the `vendor/showman` submodule, Node, and an OpenRouter key in `.env` | [reference](docs/reference.md#teaching-videos) |
+| MATLAB | `CIRCUIT_MCP_ENABLE_MATLAB=1` in the shell only, never in `.mcp.json` | [reference](docs/reference.md#matlab-bridge) |
+| Lab instruments | `CIRCUIT_MCP_ENABLE_INSTRUMENTS=1`, read-only VISA; the checked-in `.mcp.json` sets it | [reference](docs/reference.md#configuration) |
+
+## Checking work on an iPad
+
+1. Run `scripts/setup_ipad_capture.sh` once.
+2. Start the receiver on the desk's iPad page, or ask the agent to.
+3. On the iPad: Control Center → **Screen Mirroring** → **Circuit Capture**, then
+   enter the four-digit PIN.
+4. Ask the agent to check your solution. It captures the screen, falling back to
+   a USB-C iPad when AirPlay is off.
+5. Confirm or correct its transcription. Only then does it check the maths.
+
+Nothing is recorded in the background. A frame is saved only when you, or the
+agent, snap one.
+
+## macOS app
+
+`Circuit MCP.app` runs the desk in its own window and starts and stops the
+server for you. It carries its own ngspice, and the AirPlay receiver too when
+the build machine has built one. Build it on an Apple silicon Mac:
+
+```console
+uv python install 3.12
+brew install ngspice
+macos/build_app.sh
+macos/smoke_test.sh
+```
+
+That makes `dist/Circuit MCP.app` and a `.dmg`. In the app, **Copy MCP Command**
+gives you the line to paste into Claude Code. The app is not notarized, so
+another Mac needs one extra step the first time; see
+[opening it on another Mac](docs/reference.md#opening-it-on-another-mac).
+
+## Open it in linkC
+
+[linkC](https://github.com/JacobTDang/linkC) can open the desk in a tab of this
+project, from [`.linkc/app.json`](.linkc/app.json). Closing the tab stops the
+server. Only one server can use the data folder at a time, so the tab says so
+if the app is already running.
+[More](docs/reference.md#open-it-in-linkc).
+
+## Tools
+
+The tools cover checking and deriving, simulation and measurement, iPad
+capture and OCR, the course record, desk cards, and teaching videos.
+
+<details>
+<summary>All tools</summary>
 
 | Tool | Purpose |
 |---|---|
@@ -23,11 +109,6 @@ It currently provides fifty-six tools:
 | `check_derivation` | Locate the first invalid algebra transition, setup error, or wrong final answer; optional parameters support symbolic-to-numeric steps |
 | `circuit_equations` | Return lcapy's nodal system and solved circuit quantities |
 | `check_setup` | Check that submitted equations hold and have full rank; classify each equation's role |
-
-`derive`, `check_equivalence`, `check_derivation`, `check_setup`, and
-`simulate_spice` take an optional `attempt_id`. Pass one and the call is
-recorded against that attempt with the verdict it reached, which
-`attempt_history` and the problem board then show.
 | `compare_readings` | Check measured bench readings against a build's prediction and name the likeliest cause of each miss |
 | `workspace_status` | Check whether the macOS screenshot backend is available without capturing anything |
 | `capture_workspace` | Return the current visible iPad screen or selected region as an MCP PNG image |
@@ -71,487 +152,49 @@ recorded against that attempt with the verdict it reached, which
 | `attempt_create` | Start a student or agent attempt |
 | `attempt_complete` | Complete an attempt with a graded workflow status |
 | `problem_tag` | Attach a normalized course tag |
+| `canvas_card_add` | Put a verified card on the desk (formula, walkthrough, vocabulary, schematic, breadboard, expected), or a problem's solution on its solutions sheet |
+| `canvas_card_list` | List the cards on the desk, newest first, optionally for one problem |
+| `canvas_card_remove` | Take one card off the desk |
 | `visual_status` | Report whether the local renderer can author a visual |
 | `visual_generate` | Render one local teaching video from a brief and persist it |
 | `visual_list` | List locally rendered visuals, newest first |
 | `visual_get` | Read one visual and the specification it was rendered from |
 | `visual_preview` | Return one still frame of a stored visual as an image |
 
-The detailed rationale, evaluated alternatives, and known lcapy limitations are
-recorded in [`docs/2026-08-24-design.md`](docs/2026-08-24-design.md).
-The SQLite ownership, migration, recovery, and context-tool design is in
-[`docs/storage.md`](docs/storage.md).
-
-## Requirements and platform support
-
-- Python 3.12 or newer
-- lcapy 1.26 or newer
-- SymPy 1.14 or newer
-- MCP 1.2 or newer
-- ngspice 47 or newer for `simulate_spice` (`brew install ngspice` on macOS)
-- A POSIX operating system with `fork`, process groups, and file-descriptor
-  polling (macOS and Linux)
-
-Windows is not currently supported. Tool calls run in a prewarmed worker that
-forks a disposable child for every request. This isolates lcapy's process-global
-symbol registry and makes the 20-second wall-clock bound real: the worker's
-entire process group can be killed if symbolic evaluation runs away. A Windows
-port needs a spawn-based worker with equivalent isolation and timeout semantics;
-silently falling back to an unkillable thread would violate those guarantees.
-
-ngspice is optional for the symbolic tools, but required for nonlinear,
-time-domain, and numeric frequency-domain simulation.
-
-### Local process architecture
-
-```text
-Claude / Codex
-      └── circuit_mcp (native macOS, stdio MCP)
-            ├── UxPlay + GStreamer (PIN-protected AirPlay receiver)
-            ├── CoreMediaIO/AVFoundation helper (USB-C fallback)
-            ├── FFmpeg (latest headless AirPlay H.264 frame → PNG)
-            ├── /usr/sbin/screencapture (legacy manual crop only)
-            ├── UniMERNet worker (spawned once, persistent, PyTorch MPS)
-            ├── ngspice (isolated temporary deck, one bounded analysis)
-            ├── SQLite (documents, problems, attempts, and evidence)
-            └── symbolic worker (prewarmed, forks an isolated child per call)
-```
-
-UniMERNet lives in its own `.venv-ocr.nosync` environment. This prevents its
-PyTorch/NumPy dependency graph from changing the proven lcapy environment and
-keeps Metal initialization out of every process that later calls `fork()`.
-
-## iPad screen-mirroring workflow
-
-AirPlay needs UxPlay, which this project does not build. `CIRCUIT_MCP_UXPLAY`
-names one -- which is what the packaged app sets, because it now carries a
-receiver of its own -- otherwise a build under the runtime folder is preferred,
-then one on PATH, then `/opt/homebrew` and `/usr/local` by name -- the app bounds its
-server's PATH deliberately, so an install under either prefix would otherwise be
-invisible to it. There is no Homebrew formula for UxPlay, so
-`scripts/setup_ipad_capture.sh` builds it from source. With none of those,
-`/api/ipad/status` carries one sentence saying so and the iPad page shows it.
-
-Capturing the screen needs macOS Screen Recording permission, which is granted
-per application. Run from a terminal it is inherited from the terminal; the
-packaged app is its own subject and is asked once, against its bundle
-identifier. `workspace_status` reports what CoreGraphics says for this process
--- `granted`, `denied`, or `unavailable` where the question cannot be asked --
-and a capture asks for access once so that prompt can appear at all.
-
-1. Run `scripts/setup_ipad_capture.sh` once.
-2. Start the receiver in the command center or call `ipad_receiver_start`.
-3. On the iPad, open Control Center → **Screen Mirroring** → **Circuit Capture**,
-   then enter the four-digit PIN shown by the tool or UI.
-4. Ask the agent to “check my solution.” It calls `capture_ipad_screen`; when
-   AirPlay is unavailable, a trusted USB-C iPad is tried automatically.
-5. The agent shows its visual transcription for confirmation before grading.
-
-Capture is local and never records in the background. The workspace card shows
-transient no-store frames while connected, but a PNG is retained only after an
-explicit Snap/tool call. AirPlay uses an ephemeral PIN and runs headlessly; the latest received
-H.264 frame is decoded without opening or capturing a Mac window. USB-C uses
-Apple's CoreMediaIO/AVFoundation screen-device path.
-Every returned frame includes a SHA-256 hash.
-
-## Visual explanations
-
-The former browser SVG renderer has been retired, and with it the legacy
-`animation_*` tools that drove it. Showman is pinned under `vendor/showman` and
-renders locally: `visual_generate` turns a brief into an MP4, and
-`visual_preview` returns a still frame so a visual can be checked against its
-brief before a student sees it. The legacy `animation_scenes` table is gone:
-schema migration 2 archived its rows to `.local/command_center/archive/` as JSON
-before dropping it. See the
-[Showman integration scope](docs/SHOWMAN_INTEGRATION.md).
-
-The renderer is a Node worker, so a machine with no Node, or a checkout without
-the submodule, cannot render at all. `CIRCUIT_MCP_SHOWMAN_ROOT` names where it
-lives; `/api/status` carries one sentence saying which of those is missing, and
-the visual card on the desk shows that sentence instead of a button that would
-only answer 502.
-
-## Solutions sheet
-
-One assignment is one page: `GET /solutions?tag=m2-hw1` renders every problem
-carrying that tag in page order, each with its prompt, the given values as
-chips, the drawn schematic, the numbered steps, an answer box with its unit,
-and a line saying which recorded checks stand behind it. A problem with no
-solution card still appears, saying so -- a sheet that quietly omits unfinished
-work hides the one thing worth seeing.
-
-The page is rendered on the server, so what is handed in is what the tests
-assert. Export is the browser's own print: the stylesheet sets US Letter,
-hides the button, keeps a problem from splitting across pages, and prints on a
-light ground. Checked end to end -- eight problems come out as six Letter
-pages with all eight answer boxes.
-
-## Canvas cards
-
-The agent can put its explanation on the desk beside the student's work with
-`canvas_card_add`. Three kinds: `formula` (labelled expressions), `walkthrough`
-(ordered algebra steps, each with a note), and `vocabulary` (terms with optional
-math). The agent writes the words; the server produces every piece of math.
-Expressions use the same restricted syntax as `check_derivation`, so anything the
-checker cannot parse never reaches the canvas, and a walkthrough is refused unless
-every transition is a proved identity that reaches the stated truth. Math renders
-as native MathML -- no library, no CDN -- laid out in the order it was written
-rather than SymPy's canonical order. Cards are draggable and resizable like
-everything else on the desk; closing one in the browser removes it for the agent.
-
-A `schematic` card takes `{"netlist": ...}` -- the same lcapy netlist `derive`
-was given -- and draws the circuit from it: op-amp stages left to right, the
-inverting input on top, feedback on a track above the triangle, and everything
-tied to ground dropped onto a ground symbol. The drawing is then read back out
-of its own geometry, with wires joined where they share an end, where a dot
-marks a junction and where they run over one another, and nowhere else; it is
-refused unless the connections it shows are the ones the netlist declares. A
-card can therefore never show a circuit other than the one the maths was done
-on. A netlist it cannot place is refused by name rather than drawn
-approximately, and the browser can save the drawing as a PNG.
-
-Two more kinds turn a confirmed circuit into a bench session. `breadboard` draws
-the build on the columns of a 30-column board it uses: the chip across the
-trench with each pin's number and job, each part between named holes, the supply
-rails, and where the generator and probes connect, plus a wire list in build
-order. Every net wears one colour on its wires, its strips, and a legend that
-says what it joins; every piece carries its wire-list step number, and hovering
-or tapping a step or a net lights only its pieces. Parts reach no further than a
-bent lead, and each net's wires chain to the nearest strip already on it. The layout is
-verified before it is drawn, so every net comes out as one connected group and
-no two nets touch. `expected` runs the same build through ngspice with a
-rail-limited op amp and reports what each probe should read: DC volts, or peak
-and rms with a waveform, whether the output is clipping, and the gain and phase
-between input and output probes. The eight Lab 1 circuits are the test
-fixtures for both.
-
-Authoring a lesson from a brief needs an OpenRouter key and a model that can
-emit a valid scene specification. Copy [`.env.example`](.env.example) to `.env`
-and fill it in; `run_ui.py` loads it and the render worker inherits it at spawn.
-Without a key the worker can only produce generic template lessons, so the
-command center refuses to author rather than return one unrelated to the brief.
-Model choice is not incidental — the recorded measurements are in the example
-file.
-
-## MATLAB bridge (opt-in)
-
-`matlab_status` reports whether MATLAB is enabled and whether a session is already
-warm, without starting the Engine. `matlab_eval` runs code in one persistent
-session and returns the captured text; when a figure is present afterward, the
-current figure comes back as a PNG on the tool result.
-
-Once enabled, the agent can run anything MATLAB can, including `system()`. Treat
-that as local trusted use only — the same trust boundary as sitting at the MATLAB
-desktop. Set `CIRCUIT_MCP_ENABLE_MATLAB=1` only in the shell of a session that
-needs MATLAB. Do not put it in [`.mcp.json`](.mcp.json): this server ingests
-untrusted OCR and documents, and MCP tools are not approved per call.
-
-The `matlabengine` package is optional and is not part of the core tutoring
-install. Install it from the local MATLAB tree so the wheel matches the installed
-release, for example:
-
-```console
-pip install /Applications/MATLAB_R2026a.app/extern/engines/python
-```
-
-Replace `R2026a` with whatever release is on the machine. Evaluation is bounded:
-timeout 5–120 s (default 30), code at most 100 000 characters, output truncated
-at 1 MB, and figure PNGs larger than 5 MB are skipped with a note. Details and
-review decisions are in
-[`docs/superpowers/specs/2026-09-08-matlab-bridge-design.md`](docs/superpowers/specs/2026-09-08-matlab-bridge-design.md).
-
-MCP clients decide when to call tools, so “continuous awareness” means the agent
-takes a fresh frame when asked or periodically during an active tutoring loop;
-the server does not push images into an idle conversation.
-
-The older manual rectangle workflow remains available for unusual setups:
-
-```text
-configure_workspace(x=<left>, y=<top>, width=<width>, height=<height>)
-```
-
-It is saved in the ignored `.local/workspace.json`. Explicit coordinates on a
-later `transcribe_workspace` call override the saved values for that call.
-
-## Installing the handwriting recogniser
-
-`scripts/setup_ocr.sh` still does this in a terminal with uv. From the desk,
-the iPad page offers the same install: the recogniser's virtualenv and the
-810 MB UniMERNet checkpoint, about 2 GB together, into the folder
-`CIRCUIT_MCP_OCR_PYTHON` and `CIRCUIT_MCP_OCR_MODEL` name.
-
-It uses the running interpreter's own `venv` and `pip` rather than uv, because
-the packaged app carries no uv and bounds its server's PATH so it could not
-reach one anyway. Every step writes into a staging folder beside the
-destination and nothing is renamed into place until all of them have
-succeeded, so a failure or a cancellation halfway leaves the desk exactly as it
-was -- and says which unfinished folder it removed rather than tidying up
-quietly. Once it lands, `ocr_status` reports the model without a restart.
-
-Not installing it is a supported state: every tool that does not need a model
-keeps working, and the OCR routes refuse with a sentence.
-
-## macOS app: Circuit MCP
-
-`Circuit MCP.app` runs the command center in its own window. There's no
-browser tab and no `run_ui.py`. The app starts the server itself on a free local
-port, shows the desk once the server answers, and stops the server when you quit.
-
-Build it on an Apple silicon Mac with uv and ngspice installed:
-
-```console
-uv python install 3.12
-brew install ngspice
-macos/build_app.sh
-macos/smoke_test.sh
-```
-
-The receiver travels inside the app too, when there is one to copy.
-`macos/stage_uxplay.sh` takes the UxPlay that `scripts/setup_ipad_capture.sh`
-built and the seven GStreamer plugins the headless pipeline resolves --
-`appsrc ! queue ! h264parse ! decodebin ! videoconvert ! videoscale ! fakesink`
--- which is 22 MB rather than the 162 MB of plugins Homebrew installs. The
-decoder `decodebin` auto-plugs is `vtdec_hw`, which is VideoToolbox and so
-present on every Mac; that is why `libgstlibav` and the whole of ffmpeg stay
-out. GStreamer finds plugins through the environment, so the app names the
-plugin path and the scanner as well as the binary, and points the registry at
-its writable support folder because a `.app` is read-only. Building without a
-UxPlay build present is not an error: the app ships without AirPlay and the
-iPad page says so.
-
-The simulator travels inside the app. `macos/stage_ngspice.sh` copies the build
-machine's `ngspice` with the fourteen libraries it loads and rewrites every load
-command to point inside the bundle, because a Mac that never installed Homebrew
-has no `/opt/homebrew` for the original paths to resolve against. It reads back
-what the staged files load and refuses rather than shipping a binary that dies
-at launch on the machine the app exists for.
-
-That produces `dist/Circuit MCP.app` and `dist/CircuitMCP-<version>.dmg`.
-
-- **Data:** `~/Library/Application Support/CircuitMCP/`. To bring over a
-  checkout's `.local/command_center`, use **Import Existing Data…**. Stop
-  `run_ui.py` first. The app's current data is moved to a backup folder, not
-  deleted.
-- **Logs:** `~/Library/Logs/CircuitMCP/`, with the last five launches kept. If the
-  server can't start, the app shows the end of the log.
-- **OpenRouter key and model:** stored in the macOS Keychain. Set them with
-  **Settings…**, and use a free model.
-- **Claude Code:** move the app to Applications, choose **Copy MCP Command**,
-  and paste the result into your MCP configuration.
-- **Requirements:** Apple silicon and macOS 14 or later.
-
-This release bundles the core tools and circuit simulation. Showman visuals,
-iPad capture, and handwriting OCR need runtimes the app cannot carry, and each
-reports itself unavailable with what is missing, as it does in a checkout
-without that runtime.
-
-### Opening it on another Mac
-
-The app is signed ad hoc, not with a Developer ID, and it is not notarized. So
-the Mac that did not build it treats it as downloaded software, and the first
-launch needs your say-so.
-
-1. **Open the disk image and drag the app into Applications. Open it from
-   there, not from the disk image.** macOS runs an app opened straight out of a
-   downloaded image from a randomized read-only copy of itself — app
-   translocation. The app detects that and says so, because the path it is
-   running from will not exist next time: **Copy MCP Command** would hand Claude
-   Code a command that stops working as soon as the image is ejected.
-2. Open it. macOS refuses the first time and says it cannot verify the developer.
-   Leave that dialog, open **System Settings → Privacy & Security**, scroll to
-   Security, and press **Open Anyway** next to the app's name. (On macOS 14 the
-   same permission is given by opening the app once with Control-click, **Open**,
-   then **Open** in the dialog.) You are asked once per copy of the app.
-3. If it is still refused, clear the download flag on the copy in Applications
-   and go back to step 2:
-
-   ```console
-   xattr -d com.apple.quarantine "/Applications/Circuit MCP.app"
-   ```
-
-   That changes this one app. Leave Gatekeeper itself alone: turning it off
-   system-wide to install one tutoring app is a bad trade.
-
-Signing and notarizing it requires Developer ID signing (with the hardened
-runtime and a timestamp), submission to Apple's
-notary service, and stapling the result; those steps would expand the `sign` and
-packaging stages of `macos/build_app.sh`.
-
-## Open it in linkC
-
-[linkC](https://github.com/JacobTDang/linkC) can open the command center in a tab of this
-project. It reads [`.linkc/app.json`](.linkc/app.json), starts `run_ui.py --port <port>` with the
-repository's `.venv`, waits for `/healthz` to answer, and shows the desk. Closing the tab stops the
-server. linkC asks for port 2300 first, so the desk keeps the layout it saved in the page's local
-storage, and falls back to a free port when 2300 is taken.
-
-The data folder holds one server at a time. If `Circuit MCP.app` or another `run_ui.py` is already
-running, the tab reports that the folder is locked and shows the server's output.
-
-## Development
-
-Create a Python 3.12+ virtual environment and install the project with its test
-dependencies:
-
-```console
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -e '.[dev]'
-```
-
-Run the test suite:
-
-```console
-.venv/bin/python -m pytest -q
-```
-
-Start the stdio MCP server directly:
-
-```console
-.venv/bin/python run_server.py
-```
-
-Start the local Circuit Command Center:
-
-```console
-.venv/bin/python run_ui.py
-```
-
-Open [http://localhost:2300](http://localhost:2300). It binds only to
-`127.0.0.1`, stores uploaded homework and lecture material under the ignored
-`.local/command_center/` directory, accepts PDF/PNG/JPEG/text/Markdown/CSV up
-to 50 MB, and never sends course files to a cloud service. The UI provides
-an initially blank spatial desk. Click empty space to manually spawn an iPad
-screen, course files, problem board, circuit bench, or activity panel. Panels
-can be dragged, closed, and retain their layout in browser-local storage. The
-underlying pages still provide search, previews, local formula OCR, attempt
-tracking, status, and circuit-analysis forms. Files remain on disk; SQLite stores metadata, confirmed
-transcription revisions, problems, attempts, and tool evidence.
-
-Create a verified online database backup with:
-
-```console
-PYTHONPATH=src .venv/bin/python scripts/backup_database.py
-```
-
-The checked-in `.mcp.json` uses that command. The worker is prewarmed at server
-startup so the first interactive call does not pay lcapy's import cost. The
-checkout-local launcher adds `src` explicitly; this also avoids the documented
-macOS/iCloud case where Python silently ignores a hidden editable-install `.pth`.
-
-### Install local handwriting OCR
-
-The OCR stack is intentionally separate from the main virtual environment:
-
-```console
-./scripts/setup_ocr.sh
-```
-
-This creates `.venv-ocr.nosync`, installs UniMERNet 0.2.3, and downloads the
-`wanderkid/unimernet_small` checkpoint to the ignored `models/` directory.
-Together they currently consume about 1.9 GB on disk. Verify native Metal
-loading through MCP with `ocr_status(load_model=true)`; `device` should be
-`mps` on Apple Silicon.
-
-| Variable | Default |
-|---|---|
-| `CIRCUIT_MCP_OCR_PYTHON` | `.venv-ocr.nosync/bin/python` |
-| `CIRCUIT_MCP_OCR_MODEL` | `models/unimernet_small` |
-| `CIRCUIT_MCP_OCR_DEVICE` | `auto` (`mps`, then CUDA, then CPU) |
-| `CIRCUIT_MCP_WORKSPACE_CONFIG` | `.local/workspace.json` |
-| `CIRCUIT_MCP_ENABLE_INSTRUMENTS` | unset; set exactly `1` to enable read-only VISA access |
-| `CIRCUIT_MCP_ENABLE_MATLAB` | unset; set exactly `1` only in a shell that needs MATLAB — never in `.mcp.json` |
-| `CIRCUIT_MCP_DATA_DIR` | `.local/command_center` |
-| `CIRCUIT_MCP_AIRPLAY_SIZE` | `800x600@30`; headless receiver stream resolution and frame rate |
-
-The model loads lazily and remains resident. If its process crashes, the
-supervisor replaces it and retries the request. A 120-second deadline kills a
-wedged worker and releases its Metal memory.
-
-### Handwriting benchmark
-
-Add private PNG samples and expected LaTeX entries to
-`benchmarks/handwriting/manifest.json`, then run:
-
-```console
-.venv/bin/python scripts/benchmark_ocr.py
-```
-
-The benchmark uses whitespace-normalized exact LaTeX matching. Keep personal
-handwriting images out of git; only the empty manifest is tracked.
-
-## Input and output contract
-
-Expressions use an intentionally small ASCII SymPy syntax. Common notation such
-as `s^2`, `2R`, and `0.5` is normalized, while attribute access, unknown function
-calls, Python keywords, Unicode lookalikes, and other interpreter escape routes
-are rejected before parsing.
-
-One exception is spelled out rather than banned: `is`, the standard source-current
-name, is rewritten to `i_s` before the screen runs, and every result that parsed it
-reports `renamed_symbols` so the substitution is never silent. All other keywords
-stay rejected.
-
-Parallel combination is written `par(R1, R2, ...)`, not `R1 || R2`: SymPy overloads
-`|` as boolean `Or`, so admitting the operator would silently turn a resistance into
-a logical expression.
-
-An n-term sum is written `sum_n(V/R^i, i, 1, n)`. A summation bound is a term
-count rather than a continuous quantity, so `check_equivalence` expands it at
-n = 1 through 4 instead of substituting a random value for it.
-
-A name ending in the index is that term's own: `sum_n(Rf/RN_i*vN_i, i, 1, n)`
-expands to `Rf/RN_1*vN_1 + Rf/RN_2*vN_2 + …`, which is the shape a summing
-amplifier has. Expanding a name onto one the expression already uses is refused
-rather than silently conflating two quantities, and a summand that never
-mentions its index is refused too -- that is n copies of one term, which is a
-product written as a sum.
-
-Rendered expressions contain two forms:
-
-- `text`: readable and suitable for feeding into another MCP tool call.
-- `srepr`: an exact SymPy record that preserves symbol assumptions.
-
-Every response has `ok`. An `error` field means the tool could not run, such as
-for a malformed netlist, unsafe expression, or timeout. A `kind` field means the
-check ran and describes the mathematical verdict.
-
-`check_setup` also returns `equation_roles`. Each satisfied equation is labelled
-`law`, `solved`, `ambiguous`, or `trivial`, with an explanation and any isolated
-unknown/value. Classification is advisory: in small circuits a textbook law and
-a solved answer may be algebraically identical, so ambiguity is reported rather
-than guessed away.
-
-UniMERNet output is also untrusted. It recognizes cropped formulas, not page
-layout, circuit connectivity, or whether two drawn wires cross. The response
-includes the exact captured PNG alongside LaTeX so the agent can echo both and
-wait for confirmation. `CLAUDE.md` and `AGENTS.md` make that confirmation a
-required project workflow.
-
-For s-domain circuits, write an explicitly s-domain source such as
-`Vs 1 0 s {V}`. With a capacitor, `Vs 1 0 {V}` asks lcapy for the DC steady state
-and therefore contains no `sC` term.
-
-## Scope
-
-The server covers symbolic linear circuits, including op-amps with finite
-constant gain, the ideal-gain limit, and a single-pole finite gain-bandwidth
-model. lcapy rejects s-dependent component values, so GBW mode derives with a
-constant gain `A` and then safely substitutes `A0 / (1 + s/wp)`. Symbol binding
-and substitution are checked explicitly to prevent assumption mismatches from
-producing plausible but incorrect verdicts.
-
-`simulate_spice` extends coverage to numeric operating points, DC sweeps, AC
-responses, transients, transfer/impedance, pole-zero, sensitivity, noise, distortion, and
-nonlinear or XSPICE mixed-signal device models. Its deck cannot contain
-file includes, control/shell blocks, embedded analyses, or `.end`; the server
-adds one validated analysis and runs ngspice without user startup files in a
-temporary directory. Simulation is numeric evidence, not an algebraic proof.
-
-Current course-coverage boundaries are explicit: the harness can grade
-ADC/DAC quantization, code tables, INL/DNL, and spectral metrics and verify a
-student-provided converter network. Numeric AC analysis uses ngspice's
-operating-point small-signal linearization. Laboratory data can arrive as CSV
-or through explicitly enabled, allow-listed, read-only VISA queries. It also
-cannot infer circuit connectivity from handwriting; the agent must confirm the
-transcription/netlist with the student first. See
-[`docs/verification.md`](docs/verification.md) for the tested matrix.
+</details>
+
+`derive`, `check_equivalence`, `check_derivation`, `check_setup` and
+`simulate_spice` take an optional `attempt_id`. Pass one and the verdict is
+recorded against that attempt, for `attempt_history` and the problem board.
+
+## How it stays honest
+
+- **The model reads; the maths decides.** OCR and vision only transcribe. Every
+  verdict comes from lcapy and SymPy, or from ngspice for numeric results.
+- **You confirm first.** The agent echoes every transcribed equation and the
+  circuit it thinks it sees, and waits. A misread sign or subscript would
+  otherwise produce a confident wrong verdict.
+- **Cards can't disagree with the maths.** A walkthrough is refused unless every
+  step is an identity. A schematic is read back from its own drawing and refused
+  unless it matches the netlist.
+- **Input is screened.** Expressions use a small, safe SymPy syntax, and
+  simulation decks can't include files or shell commands. See
+  [expressions and results](docs/reference.md#expressions-and-results).
+
+## Limits
+
+- Symbolic analysis covers linear circuits, including op amps with finite
+  gain, ideal gain, or a single-pole gain-bandwidth model.
+- Nonlinear and time-domain work goes through `simulate_spice`. That is numeric
+  evidence, not an algebraic proof.
+- It can't infer circuit connectivity from handwriting. You confirm the netlist.
+- Windows is not supported: each call runs in a forked child that can be killed
+  on a timeout, and Windows has no `fork`.
+
+## Docs
+
+- [Reference](docs/reference.md): setup, configuration and behaviour in full
+- [iPad capture](docs/ipad-capture.md): the AirPlay and USB-C backends
+- [Design](docs/2026-08-24-design.md): rationale, alternatives and lcapy limits
+- [Storage](docs/storage.md): the SQLite database, migrations and recovery
+- [Verification](docs/verification.md): what has been tested, and how

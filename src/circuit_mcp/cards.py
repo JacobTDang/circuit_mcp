@@ -32,6 +32,7 @@ MAX_ITEMS = 24
 MAX_TITLE = 120
 MAX_TEXT = 600
 MAX_EXPRESSION = 2_000
+MINUS = "\u2212"
 
 
 class CardError(ValueError):
@@ -48,6 +49,38 @@ class _WrittenOrder(MathMLPresentationPrinter):
 
     def _as_ordered_terms(self, expr, order=None):
         return list(expr.args)
+
+    def doprint(self, expr):
+        """SymPy's own ``doprint``, with every minus turned into the minus sign first.
+
+        It writes ASCII '-', which MathML Core draws as a short hyphen: the one
+        glyph a sign error lives in would be the least visible thing on the card.
+        """
+        tree = self._minus_signs(self._print(expr))
+        return tree.toxml().encode("ascii", "xmlcharrefreplace").decode()
+
+    def _minus_signs(self, node):
+        for child in list(node.childNodes):
+            self._minus_signs(child)
+        if node.nodeType != node.ELEMENT_NODE or node.firstChild is None \
+                or node.firstChild.nodeType != node.TEXT_NODE:
+            return node
+        text = node.firstChild.data
+        if node.tagName == "mo" and text == "-":
+            node.firstChild.data = MINUS
+        elif node.tagName == "mn" and text.startswith("-"):
+            # <mn>-6</mn> becomes <mrow><mo>−</mo><mn>6</mn></mrow>: one node where
+            # there was one, so a fraction keeps exactly its two children.
+            node.firstChild.data = text[1:]
+            sign = self.dom.createElement("mo")
+            sign.appendChild(self.dom.createTextNode(MINUS))
+            row = self.dom.createElement("mrow")
+            if node.parentNode is not None:
+                node.parentNode.replaceChild(row, node)
+            row.appendChild(sign)
+            row.appendChild(node)
+            return row
+        return node
 
 
 _PRINTER = _WrittenOrder({"order": "old"})

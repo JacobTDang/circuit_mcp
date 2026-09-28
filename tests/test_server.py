@@ -19,10 +19,12 @@ import asyncio
 import base64
 import json
 import os
+import re
 import signal
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 import sympy as sp
@@ -159,6 +161,23 @@ def test_every_tool_is_registered_with_a_description():
     assert {tool.name for tool in tools} == TOOL_NAMES
     for tool in tools:
         assert tool.description and tool.description.strip()
+
+
+def test_the_readme_lists_every_registered_tool_in_one_unbroken_table():
+    """GitHub ends a table at its first non-table line; every row after it shows as raw pipes."""
+    lines = (Path(__file__).resolve().parent.parent / "README.md").read_text().splitlines()
+    start = lines.index("| Tool | Purpose |") + 2
+    rows = []
+    for line in lines[start:]:
+        if not line.startswith("| `"):
+            break
+        rows.append(line)
+    listed = [re.match(r"\| `([a-z_]+)` \|", row).group(1) for row in rows]
+    registered = {tool.name for tool in asyncio.run(server_module.server.list_tools())}
+    assert len(listed) == len(set(listed)), "a tool is listed twice"
+    assert set(listed) == registered, (
+        f"the table stops after {listed[-1]!r}; not in it: {sorted(registered - set(listed))}, "
+        f"not a tool: {sorted(set(listed) - registered)}")
 
 
 def test_every_tool_returns_something_json_serialisable():

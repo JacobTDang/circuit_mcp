@@ -115,7 +115,8 @@ def _describe(letter: str) -> str:
 
 def _value(element: Element) -> str:
     """A value a student would read, or the symbol the netlist used."""
-    text = element.value.strip().strip("{}")
+    # Braces are netlist syntax wherever they sit: `s {Vi}` is `s Vi`, not `s {Vi`.
+    text = element.value.replace("{", "").replace("}", "").strip()
     if not text:
         return ""
     try:
@@ -214,7 +215,13 @@ def _place_stage(drawing: Drawing, elements: list[Element], stage: Element,
     rows: dict[str, list[float]] = {}
     # One column per branch across the whole stage: both inputs draw to the left,
     # and two branches sharing a column would run their verticals over each other.
-    taken: list[float] = []
+    # Nearest the stage first: the + rows from the bottom up, then the - rows from
+    # the pin up. A drop to ground runs downwards, so every row it passes has to
+    # end short of its column -- the + rows below it, and, for the first - row's
+    # drop, the + input itself. Otherwise the drop reads as grounding that input.
+    order = [(plus, depth) for depth in reversed(range(len(inputs[plus])))]
+    order += [(minus, depth) for depth in range(len(inputs[minus]))]
+    columns = {key: bus_x - BODY - 40 - index * 95 for index, key in enumerate(order)}
     for pin, node, step in ((minus_pin, minus, -PITCH), (plus_pin, plus, PITCH)):
         drawing.wires.append({"points": [pin, (bus_x, pin[1])], "net": node})
         if node == GROUND:
@@ -223,7 +230,7 @@ def _place_stage(drawing: Drawing, elements: list[Element], stage: Element,
             rows[node] = [pin[1]]
             continue
         rows[node] = _branches(drawing, elements, inputs[node], node, bus_x, pin[1], step,
-                               placed, buses, taken)
+                               placed, buses, [columns[(node, depth)] for depth in range(len(inputs[node]))])
         if len(rows[node]) > 1:
             drawing.wires.append({"points": [(bus_x, pin[1]), (bus_x, rows[node][-1])], "net": node})
             drawing.dots.append((bus_x, pin[1]))
@@ -255,19 +262,18 @@ def _place_stage(drawing: Drawing, elements: list[Element], stage: Element,
 
 def _branches(drawing: Drawing, elements: list[Element], branches: list[Element], node: str,
               bus_x: float, pin_y: float, step: float, placed: set[str],
-              buses: dict[str, Point], taken: list[float]) -> list[float]:
+              buses: dict[str, Point], columns: list[float]) -> list[float]:
     """One branch per row, each with its own column for whatever ends it.
 
-    Every vertical belonging to a branch sits left of every symbol, so a drop to
-    ground crosses other rows without ever ending on one -- a crossing joins
-    nothing, and that is what keeps these rows independent.
+    Every vertical belonging to a branch sits left of every symbol, in the column
+    ``_place_stage`` ordered for it, so a drop to ground clears the rows it passes
+    rather than running over them.
     """
     rows: list[float] = []
     for depth, element in enumerate(branches):
         row = pin_y + step * depth
         rows.append(row)
-        column = bus_x - BODY - 40 - len(taken) * 95
-        taken.append(column)
+        column = columns[depth]
         far = element.nodes[0] if element.nodes[1] == node else element.nodes[1]
         if element.kind in ("V", "I"):
             _source_at(drawing, element, node, bus_x, row, column, placed, step)
@@ -284,8 +290,9 @@ def _branches(drawing: Drawing, elements: list[Element], branches: list[Element]
 def _drop_to_ground(drawing: Drawing, at: Point, step: float) -> None:
     """Downwards, always: ground is drawn below the thing it grounds.
 
-    The drop crosses the rows beneath it, which joins nothing -- each branch
-    owns its own column, so a crossing is only ever a crossing.
+    Each branch owns its own column, ordered so every row beneath the drop ends
+    short of it; a drop that did run over a row would join nothing, but it would
+    read as grounding that row.
     """
     x, y = at
     end = y + 55
@@ -302,15 +309,21 @@ def _source_at(drawing: Drawing, element: Element, node: str, bus_x: float, row:
             f"{element.name}: drives an op-amp input but is not referenced to ground, "
             f"which this layout has no channel for."
         )
-    top = (column, row)
-    bottom = (column, row + 55)
-    drawing.wires.append({"points": [(bus_x, row), top], "net": node})
-    drawing.symbols.append({"shape": "source", "centre": ((top[0] + bottom[0]) / 2, (top[1] + bottom[1]) / 2),
+    drawing.wires.append({"points": [(bus_x, row), (column, row)], "net": node})
+    _source(drawing, element, node, (column, row), placed, step)
+
+
+def _source(drawing: Drawing, element: Element, node: str, top: Point,
+            placed: set[str], step: float) -> None:
+    """A grounded source hanging below ``top``, which is where ``node`` meets it."""
+    bottom = (top[0], top[1] + 55)
+    drawing.symbols.append({"shape": "source", "from": top, "to": bottom,
+                            "centre": (top[0], (top[1] + bottom[1]) / 2),
                             "kind": element.kind, "name": element.name})
     drawing.terminals[element.name] = [top, bottom] if element.nodes[0] == node else [bottom, top]
     placed.add(element.name)
     drawing.labels.append(_beside(f"{element.name} {_value(element)}".strip(),
-                                  column - 24, (top[1] + bottom[1]) / 2))
+                                  top[0] - 24, (top[1] + bottom[1]) / 2))
     _drop_to_ground(drawing, bottom, step)
 
 
@@ -336,14 +349,7 @@ def _far_end(drawing: Drawing, elements: list[Element], node: str, at: Point,
             raise SchematicError(
                 f"{source.name}: is not referenced to ground, which this layout has no channel for."
             )
-        bottom = (x, y + 55)
-        drawing.symbols.append({"shape": "source", "centre": (x, (y + bottom[1]) / 2),
-                                "kind": source.kind, "name": source.name})
-        drawing.terminals[source.name] = [at, bottom] if source.nodes[0] == node else [bottom, at]
-        placed.add(source.name)
-        drawing.labels.append(_beside(f"{source.name} {_value(source)}".strip(),
-                                      x - 24, (y + bottom[1]) / 2))
-        _drop_to_ground(drawing, bottom, step)
+        _source(drawing, source, node, at, placed, step)
         return
     drawing.labels.append(_label(node, (x - 22, y)))
 
@@ -448,7 +454,7 @@ def connections(drawing: Drawing, strict: bool = False) -> dict[str, tuple[str, 
 
     Two wires join where they share an end, where a dot marks the junction, and
     where they run over one another. A wire crossing another with no dot joins
-    nothing, which is what lets a difference amplifier be drawn at all.
+    nothing, as a crossing does on paper.
     """
     groups: dict[Point, Point] = {}
 
@@ -545,8 +551,12 @@ def _symbol(symbol: dict[str, Any]) -> str:
         return f'<polygon points="{points}" fill="none" stroke="currentColor" stroke-width="1.6"/>'
     if symbol["shape"] == "source":
         x, y = symbol["centre"]
+        (_, top), (_, bottom) = symbol["from"], symbol["to"]
         mark = "~" if symbol["kind"] == "V" else "↑"
-        return (f'<circle cx="{_n(x)}" cy="{_n(y)}" r="16" fill="none" stroke="currentColor" stroke-width="1.6"/>'
+        # Leads from each terminal to the circle: without them it floats off its wire.
+        return (f'<line x1="{_n(x)}" y1="{_n(top)}" x2="{_n(x)}" y2="{_n(y - 16)}" stroke="currentColor" stroke-width="1.4"/>'
+                f'<line x1="{_n(x)}" y1="{_n(y + 16)}" x2="{_n(x)}" y2="{_n(bottom)}" stroke="currentColor" stroke-width="1.4"/>'
+                f'<circle cx="{_n(x)}" cy="{_n(y)}" r="16" fill="none" stroke="currentColor" stroke-width="1.6"/>'
                 f'<text x="{_n(x)}" y="{_n(y + 4)}" text-anchor="middle" font-size="12" fill="currentColor">{mark}</text>')
     (x1, y1), (x2, y2) = symbol["from"], symbol["to"]
     if symbol["shape"] == "R":
