@@ -11,7 +11,7 @@ from xml.etree import ElementTree
 
 import pytest
 
-from circuit_mcp.schematic import SchematicError, connections, draw, netlist_of, svg
+from circuit_mcp.schematic import Drawing, SchematicError, connections, draw, netlist_of, svg
 
 INVERTING = "Vs 1 0 {V}\nRi 1 2 {Ri}\nRf 2 3 {Rf}\nE1 3 0 opamp 0 2 {A}"
 NONINVERTING = "Vs 1 0 {V}\nRg 2 0 {Rg}\nRf 3 2 {Rf}\nE1 3 0 opamp 1 2 {A}"
@@ -66,10 +66,15 @@ def test_verify_refuses_a_moved_wire():
         connections(drawing.__class__(**{**drawing.__dict__, "wires": moved}), strict=True)
 
 
-def test_a_crossing_joins_nothing_and_an_overlap_joins():
-    drawing = draw(DIFFERENCE)
-    # A difference amplifier cannot be drawn without one wire crossing another.
-    assert netlist_of(drawing) == netlist_of(DIFFERENCE)
+def test_a_crossing_joins_nothing_unless_a_dot_marks_it():
+    """The read-back rule, on a crossing built by hand now that no layout here draws one."""
+    across = {"points": [(0.0, 10.0), (20.0, 10.0)], "net": "a"}
+    down = {"points": [(10.0, 0.0), (10.0, 20.0)], "net": "b"}
+    ends = {"A": [(0.0, 10.0), (100.0, 100.0)], "B": [(10.0, 0.0), (200.0, 200.0)]}
+    crossed = Drawing(elements=[], wires=[across, down], terminals=ends)
+    assert connections(crossed)["A"][0] != connections(crossed)["B"][0]
+    dotted = Drawing(elements=[], wires=[across, down], terminals=ends, dots=[(10.0, 10.0)])
+    assert connections(dotted)["A"][0] == connections(dotted)["B"][0]
 
 
 def test_unsupported_elements_are_refused_by_name():
@@ -105,3 +110,66 @@ def test_the_svg_carries_no_script_and_one_root():
     picture = svg(draw(SUMMING))
     assert "<script" not in picture.lower()
     assert len(re.findall(r"<svg", picture)) == 1
+
+
+def _crossing(first, second):
+    """Where a horizontal and a vertical segment cross through each other's middles."""
+    for (h1, h2), (v1, v2) in ((first, second), (second, first)):
+        if h1[1] == h2[1] and v1[0] == v2[0]:
+            if min(h1[0], h2[0]) < v1[0] < max(h1[0], h2[0]) and min(v1[1], v2[1]) < h1[1] < max(v1[1], v2[1]):
+                return (v1[0], h1[1])
+    return None
+
+
+@pytest.mark.parametrize("name", sorted(ALL))
+def test_no_wire_crosses_a_wire_of_another_net(name):
+    """A ground drop running over an input wire reads as that input being grounded."""
+    drawing = draw(ALL[name])
+    segments = [(segment, wire["net"]) for wire in drawing.wires
+                for segment in zip(wire["points"], wire["points"][1:])]
+    crossings = [(net, other, point) for i, (segment, net) in enumerate(segments)
+                 for other_segment, other in segments[i + 1:]
+                 if net != other and (point := _crossing(segment, other_segment))]
+    assert not crossings, f"{name}: wires of different nets cross at {crossings}"
+
+
+def _drawn_segments(picture):
+    """Every straight stroke in the SVG, as ((x1, y1), (x2, y2))."""
+    root = ElementTree.fromstring(picture)
+    strokes = []
+    for element in root.iter():
+        tag = element.tag.rsplit("}", 1)[-1]
+        if tag == "line":
+            strokes.append(tuple((float(element.get(f"x{i}")), float(element.get(f"y{i}"))) for i in (1, 2)))
+        elif tag == "polyline":
+            points = [tuple(map(float, pair.split(","))) for pair in element.get("points").split()]
+            strokes.extend(zip(points, points[1:]))
+    return strokes, [(float(c.get("cx")), float(c.get("cy")), float(c.get("r")))
+                     for c in root.iter() if c.tag.rsplit("}", 1)[-1] == "circle" and c.get("fill") == "none"]
+
+
+@pytest.mark.parametrize("name", sorted(n for n, netlist in ALL.items() if "V" in netlist.split()[0]))
+def test_a_source_is_drawn_joined_to_both_of_its_terminals(name):
+    """The circle sits on its wire: stroke or circle covers every point between the terminals."""
+    drawing = draw(ALL[name])
+    strokes, circles = _drawn_segments(svg(drawing))
+    for symbol in (s for s in drawing.symbols if s["shape"] == "source"):
+        x, _ = symbol["centre"]
+        top, bottom = sorted(y for _, y in drawing.terminals[symbol["name"]])
+        covered = [(min(a[1], b[1]), max(a[1], b[1])) for a, b in strokes
+                   if abs(a[0] - x) < .05 and abs(b[0] - x) < .05]
+        covered += [(cy - r, cy + r) for cx, cy, r in circles if abs(cx - x) < .05]
+        reach = top
+        for start, end in sorted(covered):
+            if start <= reach + .05:
+                reach = max(reach, end)
+        assert reach >= bottom - .05, (
+            f"{name}: {symbol['name']} is drawn with a gap between y={reach:.1f} and its terminal at y={bottom:.1f}")
+
+
+def test_a_label_carries_no_brace_from_an_s_domain_value():
+    """`s {Vi}` is the README's own s-domain source; braces are netlist syntax, not a value."""
+    drawing = draw("Vs 1 0 s {Vi}\nRg 2 0 {Rg}\nRf 3 2 {Rf}\nE1 3 0 opamp 1 2 {A}")
+    texts = [label["text"] for label in drawing.labels]
+    assert "Vs s Vi" in texts
+    assert not [text for text in texts if "{" in text or "}" in text], texts
