@@ -6,6 +6,9 @@ and a walkthrough with one bad transition is refused, naming the step.
 """
 from __future__ import annotations
 
+import re
+from xml.dom.minidom import parseString
+
 import pytest
 
 from circuit_mcp.cards import KINDS, MAX_ITEMS, MAX_TEXT, CardError, build_card
@@ -318,3 +321,22 @@ def test_a_single_step_solution_is_a_stated_answer_with_nothing_to_check():
         build_card("solution", "stated", {
             "given": [], "steps": [{"expression": "16"}],
             "answer": {"expression": "17", "unit": "V/V"}})
+
+
+# --- signs ---------------------------------------------------------------------
+
+@pytest.mark.parametrize("expression", [
+    "R1/R1 - R2/R1", "-R2/R1", "-6", "-6/5", "V_s*(1 - exp(-t/(R*C)))",
+])
+def test_every_minus_is_drawn_as_the_minus_sign_not_a_hyphen(expression):
+    """MathML Core draws ASCII '-' as a short hyphen, and a sign error must not hide in one."""
+    item = build_card("formula", "signs", {"items": [{"expression": expression}]})["payload"]["items"][0]
+    mathml = item["mathml"]
+    assert "<mo>-</mo>" not in mathml and not re.search(r"<mn>-", mathml), mathml
+    assert "\u2212" in mathml or "&#8722;" in mathml, mathml
+    # Still well-formed, and every fraction still has exactly a numerator and a denominator.
+    # SymPy's named entities (&InvisibleTimes;) are HTML, not XML; drop them to parse.
+    document = parseString(re.sub(r"&[A-Za-z]+;", "", mathml))
+    for fraction in document.getElementsByTagName("mfrac"):
+        assert len([n for n in fraction.childNodes if n.nodeType == n.ELEMENT_NODE]) == 2, mathml
+    assert item["expression"] == expression, "the text tools round-trip stays ASCII"
