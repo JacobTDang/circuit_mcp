@@ -24,8 +24,10 @@ output/playwright/
 # subagent-driven-development scratch (ledger, briefs, review packages)
 .superpowers/
 
-# linkC multi-agent coordination state
-.linkc/
+# linkC multi-agent coordination state. The app manifest in it is committed: it is how linkC
+# opens the command center in a project tab.
+.linkc/*
+!.linkc/app.json
 
 # Swift package build output for the macOS app: 250 MB of module cache that
 # swift build regenerates.

@@ -85,6 +85,14 @@ gives you the line to paste into Claude Code. The app is not notarized, so
 another Mac needs one extra step the first time; see
 [opening it on another Mac](docs/reference.md#opening-it-on-another-mac).
 
+## Open it in linkC
+
+[linkC](https://github.com/JacobTDang/linkC) can open the desk in a tab of this
+project, from [`.linkc/app.json`](.linkc/app.json). Closing the tab stops the
+server. Only one server can use the data folder at a time, so the tab says so
+if the app is already running.
+[More](docs/reference.md#open-it-in-linkc).
+
 ## Tools
 
 The tools cover checking and deriving, simulation and measurement, iPad
