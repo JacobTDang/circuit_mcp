@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from circuit_mcp import paths, web
+from circuit_mcp import ipad_capture, paths, web
 from circuit_mcp.cards import build_card
 
 
@@ -535,3 +535,15 @@ def test_healthz_answers_without_touching_the_desk(tmp_path, monkeypatch):
     response = client(tmp_path, monkeypatch).get("/healthz")
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+def test_ipad_capture_returns_503_when_no_decoder(tmp_path, monkeypatch):
+    def capture(source="auto"):
+        raise ipad_capture.IPadCaptureError(
+            "AirPlay needs ffmpeg; brew install ffmpeg and reopen this page."
+        )
+    monkeypatch.setattr(web.IPAD_CAPTURE, "capture", capture)
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.post("/api/ipad/capture", json={"source": "airplay"})
+        assert response.status_code == 503
+        assert "brew install ffmpeg" in response.json()["detail"]

@@ -99,3 +99,26 @@ def test_forked_child_cannot_run_parent_receiver_cleanup(monkeypatch):
     monkeypatch.setattr(ipad_capture.os, "getpid", lambda: service._owner_pid)
     service.close()
     assert calls == [True]
+
+
+def test_missing_ffmpeg_is_an_explicit_error(monkeypatch):
+    service = ipad_capture.IPadCaptureService()
+    monkeypatch.setattr(ipad_capture.paths, "ffmpeg", lambda: None)
+    monkeypatch.setattr(ipad_capture.paths, "uxplay", lambda: "/usr/bin/uxplay")
+    service._client_connected = True
+    assert not service.status()["airplay"]["available"]
+    assert "brew install ffmpeg" in service.status()["airplay"]["unavailable"]
+
+    with pytest.raises(ipad_capture.IPadCaptureError, match="brew install ffmpeg"):
+        service.capture("airplay")
+def test_airplay_unavailable_app(monkeypatch):
+    from circuit_mcp.ipad_capture import IPadCaptureService
+    from circuit_mcp import paths
+    monkeypatch.setattr(paths, "running_from_app", lambda: True)
+    assert "damaged and should be reinstalled" in IPadCaptureService._airplay_unavailable()
+
+def test_airplay_unavailable_checkout(monkeypatch):
+    from circuit_mcp.ipad_capture import IPadCaptureService
+    from circuit_mcp import paths
+    monkeypatch.setattr(paths, "running_from_app", lambda: False)
+    assert "setup_ipad_capture.sh" in IPadCaptureService._airplay_unavailable()

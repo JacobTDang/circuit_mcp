@@ -22,7 +22,6 @@ RUNTIME = paths.runtime_dir()
 WINDOW_INFO = RUNTIME / "bin" / "window_info"
 USB_CAPTURE = RUNTIME / "bin" / "ipad_usb_capture"
 SCREEN_CAPTURE = Path("/usr/sbin/screencapture")
-FFMPEG = Path(shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg")
 MAX_FRAME_BYTES = 25 * 1024 * 1024
 
 
@@ -65,6 +64,12 @@ class IPadCaptureService:
                 "Homebrew formula for it, so build one with scripts/setup_ipad_capture.sh "
                 "-- it needs Homebrew for cmake, GStreamer and libplist -- then reopen "
                 "this page.")
+
+    @staticmethod
+    def _decoder_unavailable() -> str:
+        """Tell the student why AirPlay decoding is unavailable and how to add it."""
+        return ("AirPlay needs ffmpeg to turn the mirrored stream into a picture, so install "
+                "it with Homebrew (`brew install ffmpeg`) and reopen this page.")
 
     def _clear_streams(self) -> None:
         for path in self._stream_dir.glob("airplay-frame*.h264"):
@@ -228,10 +233,18 @@ class IPadCaptureService:
                 connected = connected or time.monotonic() - self._stream_active_at < 12
         usb, usb_error = self._refresh_usb_async()
         receiver = paths.uxplay()
+        ffmpeg = paths.ffmpeg()
+        airplay_ok = receiver is not None and ffmpeg is not None
+        airplay_unavailable = ""
+        if not receiver:
+            airplay_unavailable = self._airplay_unavailable()
+        elif not ffmpeg:
+            airplay_unavailable = self._decoder_unavailable()
+
         return {
-            "ok": receiver is not None or USB_CAPTURE.is_file(),
-            "airplay": {"available": receiver is not None, "running": running,
-                        "unavailable": "" if receiver else self._airplay_unavailable(),
+            "ok": airplay_ok or USB_CAPTURE.is_file(),
+            "airplay": {"available": airplay_ok, "running": running,
+                        "unavailable": airplay_unavailable,
                         "connected": connected, "stream_ready": stream_ready,
                         "headless": True,
                         "receiver": "Circuit Capture",
@@ -279,6 +292,9 @@ class IPadCaptureService:
         with self._frame_lock:
             if self._frame_cached and time.monotonic() - self._frame_cached_at < 0.45:
                 return dict(self._frame_cached)
+            ffmpeg = paths.ffmpeg()
+            if ffmpeg is None:
+                raise IPadCaptureError(self._decoder_unavailable())
             with tempfile.TemporaryDirectory(prefix="ipad-airplay-") as directory:
                 stream = Path(directory) / "frame.h264"
                 output = Path(directory) / "frame.png"
@@ -286,7 +302,7 @@ class IPadCaptureService:
                 if source is None:
                     raise IPadCaptureError("AirPlay frame is not ready yet")
                 shutil.copyfile(source, stream)
-                result = subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error",
+                result = subprocess.run([str(ffmpeg), "-hide_banner", "-loglevel", "error",
                                          "-i", str(stream), "-fps_mode", "passthrough",
                                          "-update", "1", "-y", str(output)],
                                         capture_output=True, text=True,

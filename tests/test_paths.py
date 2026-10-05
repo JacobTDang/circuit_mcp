@@ -94,3 +94,20 @@ def test_the_runtime_tools_follow_the_runtime_variable(tmp_path):
     runtime = (tmp_path / "runtime").resolve()
     assert completed.stdout.split() == [str(runtime / "uxplay" / "bin" / "uxplay"),
                                         str(runtime / "bin" / "ipad_usb_capture")]
+
+
+def test_ffmpeg_lookup(tmp_path, monkeypatch):
+    monkeypatch.delenv("CIRCUIT_MCP_FFMPEG", raising=False)
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setattr("circuit_mcp.paths.HOMEBREW_PREFIXES", [])
+    assert paths.ffmpeg() is None
+
+    ffmpeg = tmp_path / "ffmpeg"
+    ffmpeg.touch()
+    ffmpeg.chmod(0o755)
+    monkeypatch.setenv("CIRCUIT_MCP_FFMPEG", str(ffmpeg))
+    assert paths.ffmpeg() == ffmpeg
+
+    monkeypatch.delenv("CIRCUIT_MCP_FFMPEG")
+    monkeypatch.setattr("shutil.which", lambda name: str(ffmpeg) if name == "ffmpeg" else None)
+    assert paths.ffmpeg() == ffmpeg

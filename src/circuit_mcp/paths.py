@@ -108,3 +108,25 @@ def uxplay() -> Path | None:
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return candidate
     return None
+
+
+def ffmpeg() -> Path | None:
+    """Find ffmpeg by override, PATH, then Homebrew prefixes; None means none exists.
+
+    The explicit Homebrew search matters for the packaged app, whose deliberately
+    short PATH excludes both Apple silicon and Intel Homebrew installations.
+    """
+    value = _override("CIRCUIT_MCP_FFMPEG")
+    if value:
+        binary = Path(value).expanduser().absolute()
+        if not (binary.is_file() and os.access(binary, os.X_OK)):
+            raise ValueError(f"CIRCUIT_MCP_FFMPEG names {binary}, which is not an executable file")
+        return binary
+    found = shutil.which("ffmpeg")
+    if found:
+        return Path(found)
+    for prefix in HOMEBREW_PREFIXES:
+        candidate = prefix / "bin" / "ffmpeg"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
