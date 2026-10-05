@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from pypdf import PdfReader
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import paths, solution_sheet
+from . import paths, screen_recording, solution_sheet
 from .ocr_client import OCR_WORKER
 from .ocr_install import OCR_INSTALLER, OCRInstallError
 from .storage import CommandCenterDB, StorageError
@@ -758,3 +758,9 @@ def backup_database() -> dict[str, Any]:
     _record("backup", Path(result["path"]).name, True, "database", None,
             {"sha256": result["sha256"], "size_bytes": result["size_bytes"]})
     return result
+
+
+@app.post("/api/capture/request")
+def request_screen_recording() -> dict[str, Any]:
+    state = screen_recording.request_access()
+    return {"ok": True, "permission": state}
