@@ -1,6 +1,14 @@
 import AppKit
 import CircuitMCPCore
 
+private enum MCPCommandCopyError: LocalizedError {
+    case pasteboardRejectedCommand
+
+    var errorDescription: String? {
+        "The pasteboard rejected the Terminal command. Copy it again after closing any clipboard utility that may be using the pasteboard."
+    }
+}
+
 /// AppKit calls every delegate method on the main thread, and `ServerLifecycle` requires it.
 /// `NSApplicationDelegate` does not carry that isolation into this target under the package's
 /// Swift 5 language mode, so it is stated here.
@@ -28,7 +36,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         buildMenu()
         buildWindow()
+        let offerSetup = shouldOfferFirstLaunchSetup()
         startServer()
+        if offerSetup { presentFirstLaunchSetup() }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -355,6 +365,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         appMenu.addItem(withTitle: "Import Existing Data…", action: #selector(importExistingData), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: "Register with Claude Code…", action: #selector(registerWithClaudeCode), keyEquivalent: "").target = self
         appMenu.addItem(withTitle: "Copy MCP Command", action: #selector(copyMCPCommand), keyEquivalent: "").target = self
         appMenu.addItem(withTitle: "Open Logs", action: #selector(openLogsMenu), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
@@ -456,16 +467,123 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func copyMCPCommand() {
         guard let locations = requireLocations() else { return }
         do {
-            let command = try MCPCommand.terminalCommand(appBundle: Bundle.main.bundleURL, locations: locations)
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(command, forType: .string)
+            try writeMCPCommandToPasteboard(locations: locations)
             presentAlert("Terminal command copied.",
-                         "Paste the command into Terminal. It registers (Self.displayName) with Claude Code for every folder (user scope).")
+                         "Paste the command into Terminal. It registers \(Self.displayName) with Claude Code for every folder (user scope).")
         } catch MCPCommandError.translocated {
             presentAlert("Move \(Self.displayName) to Applications first.",
                          "macOS is running the app from a temporary copy, so its path would change after a restart.")
         } catch {
             presentAlert("The MCP command could not be built.", "\(error)")
+        }
+    }
+
+    private func writeMCPCommandToPasteboard(locations: AppLocations) throws {
+        let command = try MCPCommand.terminalCommand(appBundle: Bundle.main.bundleURL,
+                                                     locations: locations)
+        NSPasteboard.general.clearContents()
+        guard NSPasteboard.general.setString(command, forType: .string) else {
+            throw MCPCommandCopyError.pasteboardRejectedCommand
+        }
+    }
+
+    /// Registers the app's bundled server at user scope. The command is shown before anything is
+    /// changed, and `Process` receives raw arguments so neither JSON nor paths are re-parsed by a
+    /// shell. If Claude is not installed where a GUI app can find it, the same command the menu
+    /// already offers is copied instead of pretending registration happened.
+    @objc private func registerWithClaudeCode() {
+        guard let locations = requireLocations() else { return }
+        guard let claude = MCPCommand.findClaude() else {
+            do {
+                try writeMCPCommandToPasteboard(locations: locations)
+                presentAlert("Claude Code was not found.",
+                             "The Terminal command was copied instead. Paste it into Terminal after installing Claude Code; it registers \(Self.displayName) for every folder (user scope).")
+            } catch {
+                presentAlert("Claude Code was not found, and the Terminal command could not be copied.",
+                             "\(error)")
+            }
+            return
+        }
+
+        let command: String
+        let arguments: [String]
+        do {
+            command = try MCPCommand.terminalCommand(appBundle: Bundle.main.bundleURL,
+                                                     locations: locations,
+                                                     claudeExecutable: claude)
+            arguments = try MCPCommand.registrationArguments(appBundle: Bundle.main.bundleURL,
+                                                              locations: locations)
+        } catch MCPCommandError.translocated {
+            presentAlert("Move \(Self.displayName) to Applications first.",
+                         "macOS is running the app from a temporary copy, so its path would change after a restart.")
+            return
+        } catch {
+            presentAlert("The Claude Code command could not be built.", "\(error)")
+            return
+        }
+
+        let confirm = NSAlert()
+        confirm.messageText = "Register \(Self.displayName) with Claude Code?"
+        confirm.informativeText = "This user-scope command makes the app's circuit tools and data available from every folder:\n\n\(command)"
+        confirm.addButton(withTitle: "Register")
+        confirm.addButton(withTitle: "Cancel")
+        guard confirm.runModal() == .alertFirstButtonReturn else { return }
+
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = claude
+        process.arguments = arguments
+        process.standardOutput = output
+        process.standardError = output
+        do {
+            try process.run()
+        } catch {
+            presentAlert("Claude Code registration failed.", "The command could not start:\n\n\(error)")
+            return
+        }
+        DispatchQueue.global().async {
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if process.terminationStatus == 0 {
+                    self.presentAlert("\(Self.displayName) is registered with Claude Code.",
+                                      text.isEmpty ? "Claude Code completed the user-scope registration." : text)
+                } else {
+                    self.presentAlert("Claude Code registration failed (exit status \(process.terminationStatus)).",
+                                      text.isEmpty ? "The command produced no output." : text)
+                }
+            }
+        }
+    }
+
+    private func shouldOfferFirstLaunchSetup() -> Bool {
+        guard let locations = requireLocations() else { return false }
+        do {
+            return try FirstLaunch.shouldOfferSetup(dataDirectory: locations.commandCenterDirectory)
+        } catch {
+            presentAlert("The app could not inspect its data folder.", "\(error)")
+            return false
+        }
+    }
+
+    /// One first-run sheet puts both ways to make an empty desk useful in front of the student:
+    /// bring an existing checkout notebook over, or connect Claude Code to this new app notebook.
+    private func presentFirstLaunchSetup() {
+        let alert = NSAlert()
+        alert.messageText = "Set up your empty \(Self.displayName) desk"
+        alert.informativeText = "Import an existing checkout's command_center folder, or register the app with Claude Code so new cards from every folder appear here."
+        alert.addButton(withTitle: "Import Existing Data…")
+        alert.addButton(withTitle: "Register with Claude Code")
+        alert.addButton(withTitle: "Not Now")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            switch response {
+            case .alertFirstButtonReturn: self.importExistingData()
+            case .alertSecondButtonReturn: self.registerWithClaudeCode()
+            default: break
+            }
         }
     }
 

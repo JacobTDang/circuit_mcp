@@ -51,6 +51,29 @@ final class MCPCommandTests: XCTestCase {
         XCTAssertEqual(server["args"] as? [String], ["-m", "circuit_mcp.server"])
     }
 
+    func testTheRegistrationCommandNamesTheClaudeExecutableThatWillRun() throws {
+        let app = URL(fileURLWithPath: "/Applications/Circuit MCP.app", isDirectory: true)
+        let claude = URL(fileURLWithPath: "/Users/student/My Tools/claude")
+        let command = try MCPCommand.terminalCommand(appBundle: app, locations: locations,
+                                                     fileManager: NoBundledToolsFileManager(),
+                                                     claudeExecutable: claude)
+        XCTAssertTrue(command.hasPrefix("'/Users/student/My Tools/claude' mcp add-json"), command)
+    }
+
+    func testClaudeDiscoveryChecksUserAndPackageManagerInstallLocations() {
+        final class ExecutableFileManager: FileManager {
+            let executable: String
+            init(_ executable: String) { self.executable = executable }
+            override func isExecutableFile(atPath path: String) -> Bool { path == executable }
+        }
+        let home = URL(fileURLWithPath: "/Users/student", isDirectory: true)
+        for path in ["/Users/student/.local/bin/claude", "/opt/homebrew/bin/claude",
+                     "/usr/local/bin/claude", "/Users/student/.claude/local/claude"] {
+            XCTAssertEqual(MCPCommand.findClaude(homeDirectory: home,
+                                                 fileManager: ExecutableFileManager(path))?.path, path)
+        }
+    }
+
     /// A client started from this config runs the same server the app runs, so it has to reach
     /// the same folders: with only the data variables it reported OCR and the runtime tools
     /// against bundle-internal paths, disagreeing with the app about the very same install.
