@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build Circuit MCP.app.
-# Usage: macos/build_app.sh [--stage python|ngspice|uxplay|app|sign|dmg|all]
+# Usage: macos/build_app.sh [--stage python|ngspice|uxplay|usb|app|sign|dmg|all]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -117,6 +117,21 @@ stage_uxplay() {
   "$ROOT/macos/stage_uxplay.sh" "$RESOURCES/uxplay" || fail "could not stage uxplay"
 }
 
+# The USB-C capture helper. A checkout builds it with scripts/setup_ipad_capture.sh
+# into RUNTIME/bin; the app has no such folder, so without this binary there is
+# no fallback when AirPlay is blocked. swiftc is the compiler that script uses.
+# An unsigned helper is killed on launch on Apple silicon, so it is signed here;
+# stage_sign signs the bundle around it and checks this signature first.
+stage_usb() {
+  command -v swiftc >/dev/null 2>&1 || fail "swiftc is required to build the USB capture helper"
+  mkdir -p "$RESOURCES"
+  swiftc "$ROOT/native/ipad_usb_capture.swift" -o "$RESOURCES/ipad_usb_capture" \
+    || fail "could not compile native/ipad_usb_capture.swift"
+  [ -x "$RESOURCES/ipad_usb_capture" ] || fail "the USB capture helper was not produced"
+  codesign --force --sign - "$RESOURCES/ipad_usb_capture" \
+    || fail "could not sign the USB capture helper"
+}
+
 stage_app() {
   [ -x "$RESOURCES/python/bin/python3" ] || fail "run 'macos/build_app.sh --stage python' first"
   [ -n "$VERSION" ] || fail "could not read the version from pyproject.toml"
@@ -163,6 +178,13 @@ copy_out_of_tree() {
 
 stage_sign() {
   [ -x "$APP/Contents/MacOS/CircuitMCP" ] || fail "run 'macos/build_app.sh --stage app' first"
+  # The helper is a nested executable. --deep signs it with the bundle, but only
+  # if it is already there: a bundle shipped without it has no USB-C fallback
+  # and looks like a finished app.
+  [ -x "$APP/Contents/Resources/ipad_usb_capture" ] \
+    || fail "the USB capture helper is not in the bundle; run 'macos/build_app.sh --stage usb' first"
+  codesign --verify --strict "$APP/Contents/Resources/ipad_usb_capture" \
+    || fail "the USB capture helper is not signed; run 'macos/build_app.sh --stage usb' again"
   local unsynced unsynced_work signed_candidate backup
   copy_out_of_tree "$APP"
   # Ad-hoc signature. A release build would add Developer ID signing, notarization, and stapling.
@@ -215,17 +237,18 @@ if [ "$#" -eq 0 ]; then
 elif [ "$#" -eq 2 ] && [ "${1:-}" = "--stage" ] && [ -n "${2:-}" ]; then
   stage="$2"
 else
-  fail "usage: macos/build_app.sh [--stage python|ngspice|uxplay|app|sign|dmg|all]"
+  fail "usage: macos/build_app.sh [--stage python|ngspice|uxplay|usb|app|sign|dmg|all]"
 fi
 
 case "$stage" in
   python)  stage_python ;;
   ngspice) stage_ngspice ;;
   uxplay)  stage_uxplay ;;
+  usb)     stage_usb ;;
   app)     stage_app ;;
   sign)    stage_sign ;;
   dmg)     stage_dmg ;;
-  all)     stage_python; stage_ngspice; stage_uxplay; stage_app; stage_sign; stage_dmg ;;
-  *) fail "unknown stage '$stage'; expected python, ngspice, uxplay, app, sign, dmg, or all" ;;
+  all)     stage_python; stage_ngspice; stage_uxplay; stage_usb; stage_app; stage_sign; stage_dmg ;;
+  *) fail "unknown stage '$stage'; expected python, ngspice, uxplay, usb, app, sign, dmg, or all" ;;
 esac
 echo "build_app: stage '$stage' done -> $APP"
