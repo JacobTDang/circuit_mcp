@@ -73,6 +73,7 @@ def test_a_receiver_that_is_there_reports_no_reason(tmp_path, monkeypatch):
     from circuit_mcp.ipad_capture import IPadCaptureService
 
     monkeypatch.setenv("CIRCUIT_MCP_UXPLAY", str(executable(tmp_path / "uxplay")))
+    monkeypatch.setenv("CIRCUIT_MCP_FFMPEG", str(executable(tmp_path / "ffmpeg")))
     airplay = IPadCaptureService().status()["airplay"]
     assert airplay["available"] is True
     assert airplay["unavailable"] == ""

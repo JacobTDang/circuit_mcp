@@ -21,6 +21,7 @@ def test_airplay_frame_is_preferred_and_hashed(monkeypatch, tmp_path):
         open(command[-1], "wb").write(PNG)
         return subprocess.CompletedProcess(command, 0, "", "")
     monkeypatch.setattr(ipad_capture.subprocess, "run", run)
+    monkeypatch.setattr(ipad_capture.paths, "ffmpeg", lambda: tmp_path / "ffmpeg")
     result = service.capture("auto")
     assert result["source"] == "airplay"
     assert result["headless"] is True
@@ -41,6 +42,7 @@ def test_airplay_frame_cache_shares_decode_between_fast_pollers(monkeypatch, tmp
         open(command[-1], "wb").write(PNG)
         return subprocess.CompletedProcess(command, 0, "", "")
     monkeypatch.setattr(ipad_capture.subprocess, "run", run)
+    monkeypatch.setattr(ipad_capture.paths, "ffmpeg", lambda: tmp_path / "ffmpeg")
     first = service.capture("airplay")
     second = service.capture("airplay")
     assert first["png"] == second["png"] == PNG
