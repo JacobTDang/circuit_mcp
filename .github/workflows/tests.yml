@@ -16,6 +16,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  swift:
+    # The app's Core target is platform-neutral Swift, but its executable uses AppKit. A macOS
+    # runner compiles both and runs the Core tests against the same framework the app ships.
+    runs-on: macos-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # SwiftPM owns this dependency graph; `swift test` resolves it, builds both targets, and
+      # executes the CircuitMCPCore tests without a separately generated Xcode project.
+      - name: Run the macOS app test suite
+        working-directory: macos
+        run: swift test
+
   pytest:
     # Linux only. The macOS-specific paths -- iPad capture, AirPlay, USB -- are
     # monkeypatched in the tests, so none of them needs a real Mac.

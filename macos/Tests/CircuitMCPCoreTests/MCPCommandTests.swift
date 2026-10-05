@@ -4,9 +4,14 @@ import XCTest
 final class MCPCommandTests: XCTestCase {
     private let locations = try! AppLocations.current(environment: [:], homeLibrary: URL(fileURLWithPath: "/Users/someone/Library"))
 
+    private final class NoBundledToolsFileManager: FileManager {
+        override func isExecutableFile(atPath path: String) -> Bool { false }
+    }
+
     func testTheConfigPointsClaudeCodeAtTheBundledPythonAndTheAppData() throws {
         let app = URL(fileURLWithPath: "/Applications/Circuit MCP.app", isDirectory: true)
-        let json = try MCPCommand.configJSON(appBundle: app, locations: locations)
+        let json = try MCPCommand.configJSON(appBundle: app, locations: locations,
+                                             fileManager: NoBundledToolsFileManager())
         let parsed = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         let circuit = try XCTUnwrap((parsed["mcpServers"] as? [String: Any])?["circuit"] as? [String: Any])
         XCTAssertEqual(circuit["command"] as? String, "/Applications/Circuit MCP.app/Contents/Resources/python/bin/python3")
@@ -27,7 +32,8 @@ final class MCPCommandTests: XCTestCase {
     /// slashes in every path have to survive the round trip unescaped and readable.
     func testTheConfigIsPastableJSON() throws {
         let app = URL(fileURLWithPath: "/Applications/Circuit MCP.app", isDirectory: true)
-        let json = try MCPCommand.configJSON(appBundle: app, locations: locations)
+        let json = try MCPCommand.configJSON(appBundle: app, locations: locations,
+                                             fileManager: NoBundledToolsFileManager())
         XCTAssertTrue(json.contains("/Applications/Circuit MCP.app/Contents/Resources/python/bin/python3"), json)
         XCTAssertFalse(json.contains("\\/"), json)
         XCTAssertTrue(json.contains("\n"), "the config is pasted into a file, so it is pretty-printed")
@@ -38,7 +44,8 @@ final class MCPCommandTests: XCTestCase {
     /// against bundle-internal paths, disagreeing with the app about the very same install.
     func testTheConfigCarriesEveryFolderTheAppsOwnServerGetsAndNothingElse() throws {
         let app = URL(fileURLWithPath: "/Applications/Circuit MCP.app", isDirectory: true)
-        let json = try MCPCommand.configJSON(appBundle: app, locations: locations)
+        let json = try MCPCommand.configJSON(appBundle: app, locations: locations,
+                                             fileManager: NoBundledToolsFileManager())
         let parsed = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         let circuit = try XCTUnwrap((parsed["mcpServers"] as? [String: Any])?["circuit"] as? [String: Any])
         let env = try XCTUnwrap(circuit["env"] as? [String: String])
