@@ -10,6 +10,8 @@
     <string>Circuit MCP</string>
     <key>CFBundleExecutable</key>
     <string>CircuitMCP</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>io.github.jacobtdang.circuitmcp</string>
     <key>CFBundleInfoDictionaryVersion</key>

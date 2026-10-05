@@ -5,7 +5,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="${1:-}"
-[ -n "$APP" ] || APP="$ROOT/dist/Circuit MCP.app"
+[ -n "$APP" ] || APP="$ROOT/dist/Circuit MCP.noindex/Circuit MCP.app"
 PY="$APP/Contents/Resources/python/bin/python3"
 fail() { echo "check_python_runtime: $*" >&2; exit 1; }
 

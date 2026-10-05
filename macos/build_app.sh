@@ -5,7 +5,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="Circuit MCP"
-APP="$ROOT/dist/$APP_NAME.app"
+# Spotlight indexes every .app it can see. A folder whose name ends in
+# .noindex is skipped, so the checkout copy does not sit next to the one
+# installed in /Applications.
+APP="$ROOT/dist/$APP_NAME.noindex/$APP_NAME.app"
 RESOURCES="$APP/Contents/Resources"
 WORK="$ROOT/build/macos"
 SITE="$RESOURCES/python/lib/python3.12/site-packages"
@@ -144,6 +147,8 @@ stage_app() {
   [ "$(lipo -archs "$bin")" = "arm64" ] || fail "built $(lipo -archs "$bin"), expected arm64"
   mkdir -p "$APP/Contents/MacOS"
   cp "$bin" "$APP/Contents/MacOS/CircuitMCP"
+  [ -f "$ROOT/macos/Resources/AppIcon.icns" ] || fail "macos/Resources/AppIcon.icns is missing; run macos/make_app_icon.sh"
+  cp "$ROOT/macos/Resources/AppIcon.icns" "$RESOURCES/AppIcon.icns"
   sed "s/__VERSION__/$VERSION/g" "$ROOT/macos/Resources/Info.plist" >"$APP/Contents/Info.plist"
   plutil -lint "$APP/Contents/Info.plist" >/dev/null || fail "the generated Info.plist is invalid"
 }
