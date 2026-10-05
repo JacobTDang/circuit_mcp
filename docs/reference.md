@@ -256,11 +256,13 @@ file.
 
 ## MATLAB bridge
 
-`matlab_status` reports whether MATLAB is enabled and whether a session is already
+`matlab_status` reports whether MATLAB is usable and whether a session is already
 warm, without starting the Engine. `matlab_eval` runs code in one persistent
 session and returns the captured text; when a figure is present afterward, the
 current figure comes back as a PNG on the tool result.
 
+To use the bridge, install the engine matching your MATLAB release (e.g.,
+`python -m pip install /Applications/MATLAB_R2026a.app/extern/engines/python`).
 Once enabled, the agent can run anything MATLAB can, including `system()`. Treat
 that as local trusted use only — the same trust boundary as sitting at the MATLAB
 desktop. Set `CIRCUIT_MCP_ENABLE_MATLAB=1` only in the shell of a session that

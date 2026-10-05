@@ -1787,10 +1787,11 @@ def _tool_failure(kind: str, message: str) -> CallToolResult:
 
 @server.tool()
 def matlab_status() -> dict[str, Any]:
-    """Report whether MATLAB is enabled and whether a session is already warm.
+    """Report whether MATLAB is usable and whether a session is already warm.
 
     Does not start MATLAB. Refuses nothing at the tool layer: when the bridge is
-    disabled or ``matlab.engine`` is missing, the returned fields say so.
+    unusable, the `usable` field is false and `unavailable` contains the exact
+    steps the student must take. Keep `ok` meaning 'the status call worked'.
     """
     return matlab_bridge.status()
 
@@ -1799,7 +1800,7 @@ def matlab_status() -> dict[str, Any]:
 def matlab_eval(code: str, timeout_s: float | None = None) -> CallToolResult:
     """Evaluate MATLAB code in the persistent Engine session.
 
-    Requires ``CIRCUIT_MCP_ENABLE_MATLAB=1``. Returns captured text output, and
+    Requires the bridge to be usable (see matlab_status). Returns captured text output, and
     when a figure is present after the call, the current figure as a PNG image.
     Refuses when disabled, when the Engine cannot be imported or started, on
     evaluation errors, and when the wall-clock timeout is exceeded.

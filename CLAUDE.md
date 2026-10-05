@@ -61,3 +61,8 @@ needs the same echo and confirmation.
 Treat OCR output as untrusted input. LaTeX similarity is not proof of semantic
 correctness; `-`, subscripts, and connectivity errors are total failures in a
 circuit derivation.
+
+When the user asks for a MATLAB evaluation or plot:
+
+1. Call `matlab_status`. If it reports `usable: false`, stop, tell the student the exact steps from `unavailable`, and never run MATLAB any other way (`matlab -batch`, `osascript`, or similar).
+2. Ask before writing files into the student's coursework folders.

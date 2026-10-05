@@ -9,10 +9,12 @@ from __future__ import annotations
 import atexit
 import os
 import signal
+import sys
 import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 ENABLE_VAR = "CIRCUIT_MCP_ENABLE_MATLAB"
@@ -75,13 +77,40 @@ def _load_engine_module() -> Any:
         ) from exc
 
 
-def status() -> dict:
+def _find_matlab(applications: Path) -> Path | None:
+    """Pick the newest MATLAB release that ships the Python engine."""
+    candidates = sorted(applications.glob("MATLAB_R*.app"), reverse=True)
+    for candidate in candidates:
+        if (candidate / "extern" / "engines" / "python").is_dir():
+            return candidate
+    return None
+
+
+def status(applications: Path | None = None) -> dict:
     """Probe enablement and Engine importability without starting MATLAB."""
+    if applications is None:
+        applications = Path("/Applications")
     enabled = _enabled()
     importable = _probe_engine_importable()
     alive = _ENGINE is not None
+    usable = enabled and importable
+
+    unavailable = ""
+    if not usable:
+        steps = []
+        if not enabled:
+            steps.append("set CIRCUIT_MCP_ENABLE_MATLAB=1 in the shell that starts the Claude Code session (e.g. CIRCUIT_MCP_ENABLE_MATLAB=1 claude), not in .mcp.json")
+        if not importable:
+            matlab_app = _find_matlab(applications)
+            if matlab_app:
+                steps.append(f"run `{sys.executable} -m pip install {matlab_app}/extern/engines/python`")
+            else:
+                steps.append(f"install MATLAB (no MATLAB_R*.app found in {applications})")
+        unavailable = "To use MATLAB, you must " + " and ".join(steps) + "."
+
     if not enabled:
-        note = f"Set {ENABLE_VAR}=1 in the MCP environment to permit MATLAB evaluation."
+        note = (f"Set {ENABLE_VAR}=1 in the shell that starts the Claude Code session, "
+                "never in .mcp.json.")
     elif not importable:
         note = "matlab.engine is not importable; install matlabengine matching your MATLAB release."
     elif alive:
@@ -90,6 +119,8 @@ def status() -> dict:
         note = "MATLAB is enabled; the Engine starts on the first matlab_eval call."
     return {
         "ok": True,
+        "usable": usable,
+        "unavailable": unavailable,
         "enabled": enabled,
         "engine_importable": importable,
         "session_alive": alive,
