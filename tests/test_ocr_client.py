@@ -8,6 +8,7 @@ import time
 
 import pytest
 
+from circuit_mcp import paths
 from circuit_mcp.ocr_client import MAX_IMAGE_BYTES, OCRWorker
 
 
@@ -17,7 +18,6 @@ def _configuration(tmp_path: Path):
     (model / "unimernet_test.pth").write_bytes(b"placeholder")
     (model / "config.json").write_text("{}")
     (model / "tokenizer.json").write_text("{}")
-    import sys
     return Path(sys.executable), model, "cpu"
 
 
@@ -191,3 +191,23 @@ def test_a_page_is_refused_before_the_worker_starts_when_it_is_not_png(monkeypat
     result = worker.transcribe_page(b"not png", timeout=5)
     assert result["error"] == "bad_image"
     assert worker.pid is None
+
+
+def test_ocr_availability_app(monkeypatch, tmp_path):
+    worker = OCRWorker()
+    monkeypatch.setattr(worker, "_configuration", lambda: (tmp_path / "missing-python", tmp_path / "missing-model", "auto"))
+    monkeypatch.setattr(paths, "running_from_app", lambda: True)
+
+    res = worker.availability()
+    assert res["ok"] is False
+    assert "iPad page → Handwriting recogniser → Install" in res["message"]
+
+
+def test_ocr_availability_checkout(monkeypatch, tmp_path):
+    worker = OCRWorker()
+    monkeypatch.setattr(worker, "_configuration", lambda: (tmp_path / "missing-python", tmp_path / "missing-model", "auto"))
+    monkeypatch.setattr(paths, "running_from_app", lambda: False)
+
+    res = worker.availability()
+    assert res["ok"] is False
+    assert "setup_ocr.sh" in res["message"]

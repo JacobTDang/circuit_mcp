@@ -111,3 +111,11 @@ def test_ffmpeg_lookup(tmp_path, monkeypatch):
     monkeypatch.delenv("CIRCUIT_MCP_FFMPEG")
     monkeypatch.setattr("shutil.which", lambda name: str(ffmpeg) if name == "ffmpeg" else None)
     assert paths.ffmpeg() == ffmpeg
+
+
+def test_running_from_app(monkeypatch):
+    monkeypatch.setattr(paths, "REPO_ROOT", paths.Path("/Applications/Circuit MCP.app/Contents/Resources/circuit_mcp"))
+    assert paths.running_from_app() is True
+
+    monkeypatch.setattr(paths, "REPO_ROOT", paths.Path("/Users/user/Projects/circuit_mcp"))
+    assert paths.running_from_app() is False

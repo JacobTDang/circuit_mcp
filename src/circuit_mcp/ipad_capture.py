@@ -60,6 +60,8 @@ class IPadCaptureService:
         This project does not build the receiver, and the packaged app does not
         carry it, so "not built" was only ever true of a checkout.
         """
+        if paths.running_from_app():
+            return "AirPlay needs UxPlay, which is missing. The app is damaged and should be reinstalled."
         return ("AirPlay needs UxPlay and there is none on this machine. There is no "
                 "Homebrew formula for it, so build one with scripts/setup_ipad_capture.sh "
                 "-- it needs Homebrew for cmake, GStreamer and libplist -- then reopen "

@@ -130,3 +130,8 @@ def ffmpeg() -> Path | None:
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return candidate
     return None
+
+
+def running_from_app() -> bool:
+    """Return True if the server is running from inside the macOS app bundle."""
+    return ".app/Contents/Resources" in str(REPO_ROOT)
