@@ -456,10 +456,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func copyMCPCommand() {
         guard let locations = requireLocations() else { return }
         do {
-            let json = try MCPCommand.configJSON(appBundle: Bundle.main.bundleURL, locations: locations)
+            let command = try MCPCommand.terminalCommand(appBundle: Bundle.main.bundleURL, locations: locations)
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(json, forType: .string)
-            presentAlert("MCP command copied.", "Paste it into your Claude Code MCP configuration.")
+            NSPasteboard.general.setString(command, forType: .string)
+            presentAlert("Terminal command copied.",
+                         "Paste the command into Terminal. It registers (Self.displayName) with Claude Code for every folder (user scope).")
         } catch MCPCommandError.translocated {
             presentAlert("Move \(Self.displayName) to Applications first.",
                          "macOS is running the app from a temporary copy, so its path would change after a restart.")

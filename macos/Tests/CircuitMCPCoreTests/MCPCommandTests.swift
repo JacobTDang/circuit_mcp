@@ -28,15 +28,27 @@ final class MCPCommandTests: XCTestCase {
         }
     }
 
-    /// The user pastes this into a JSON file by hand, so the apostrophe in the app name and the
-    /// slashes in every path have to survive the round trip unescaped and readable.
-    func testTheConfigIsPastableJSON() throws {
-        let app = URL(fileURLWithPath: "/Applications/Circuit MCP.app", isDirectory: true)
-        let json = try MCPCommand.configJSON(appBundle: app, locations: locations,
-                                             fileManager: NoBundledToolsFileManager())
-        XCTAssertTrue(json.contains("/Applications/Circuit MCP.app/Contents/Resources/python/bin/python3"), json)
-        XCTAssertFalse(json.contains("\\/"), json)
-        XCTAssertTrue(json.contains("\n"), "the config is pasted into a file, so it is pretty-printed")
+    func testTheTerminalCommandShellQuotesSpacesAndApostrophesInTheBundlePath() throws {
+        let app = URL(fileURLWithPath: "/Applications/Student's Circuit MCP.app", isDirectory: true)
+        let command = try MCPCommand.terminalCommand(appBundle: app, locations: locations,
+                                                     fileManager: NoBundledToolsFileManager())
+        XCTAssertTrue(command.hasPrefix("claude mcp add-json -s user circuit '"), command)
+        XCTAssertTrue(command.contains("Student'\\''s Circuit MCP.app"), command)
+        XCTAssertFalse(command.contains("\n"), "a Terminal command must stay on one line")
+    }
+
+    func testTheTerminalCommandCarriesOnlyTheInnerServerObjectAsJSON() throws {
+        let app = URL(fileURLWithPath: "/Applications/Student's Circuit MCP.app", isDirectory: true)
+        let command = try MCPCommand.terminalCommand(appBundle: app, locations: locations,
+                                                     fileManager: NoBundledToolsFileManager())
+        let prefix = "claude mcp add-json -s user circuit '"
+        let quoted = String(command.dropFirst(prefix.count).dropLast())
+        let json = quoted.replacingOccurrences(of: "'\\''", with: "'")
+        let server = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertNil(server["mcpServers"])
+        XCTAssertEqual(server["command"] as? String,
+                       "/Applications/Student's Circuit MCP.app/Contents/Resources/python/bin/python3")
+        XCTAssertEqual(server["args"] as? [String], ["-m", "circuit_mcp.server"])
     }
 
     /// A client started from this config runs the same server the app runs, so it has to reach
