@@ -4,9 +4,14 @@ import XCTest
 final class MCPCommandTests: XCTestCase {
     private let locations = try! AppLocations.current(environment: [:], homeLibrary: URL(fileURLWithPath: "/Users/someone/Library"))
 
+    private final class NoBundledToolsFileManager: FileManager {
+        override func isExecutableFile(atPath path: String) -> Bool { false }
+    }
+
     func testTheConfigPointsClaudeCodeAtTheBundledPythonAndTheAppData() throws {
         let app = URL(fileURLWithPath: "/Applications/Circuit MCP.app", isDirectory: true)
-        let json = try MCPCommand.configJSON(appBundle: app, locations: locations)
+        let json = try MCPCommand.configJSON(appBundle: app, locations: locations,
+                                             fileManager: NoBundledToolsFileManager())
         let parsed = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         let circuit = try XCTUnwrap((parsed["mcpServers"] as? [String: Any])?["circuit"] as? [String: Any])
         XCTAssertEqual(circuit["command"] as? String, "/Applications/Circuit MCP.app/Contents/Resources/python/bin/python3")
@@ -23,14 +28,50 @@ final class MCPCommandTests: XCTestCase {
         }
     }
 
-    /// The user pastes this into a JSON file by hand, so the apostrophe in the app name and the
-    /// slashes in every path have to survive the round trip unescaped and readable.
-    func testTheConfigIsPastableJSON() throws {
+    func testTheTerminalCommandShellQuotesSpacesAndApostrophesInTheBundlePath() throws {
+        let app = URL(fileURLWithPath: "/Applications/Student's Circuit MCP.app", isDirectory: true)
+        let command = try MCPCommand.terminalCommand(appBundle: app, locations: locations,
+                                                     fileManager: NoBundledToolsFileManager())
+        XCTAssertTrue(command.hasPrefix("claude mcp add-json -s user circuit '"), command)
+        XCTAssertTrue(command.contains("Student'\\''s Circuit MCP.app"), command)
+        XCTAssertFalse(command.contains("\n"), "a Terminal command must stay on one line")
+    }
+
+    func testTheTerminalCommandCarriesOnlyTheInnerServerObjectAsJSON() throws {
+        let app = URL(fileURLWithPath: "/Applications/Student's Circuit MCP.app", isDirectory: true)
+        let command = try MCPCommand.terminalCommand(appBundle: app, locations: locations,
+                                                     fileManager: NoBundledToolsFileManager())
+        let prefix = "claude mcp add-json -s user circuit '"
+        let quoted = String(command.dropFirst(prefix.count).dropLast())
+        let json = quoted.replacingOccurrences(of: "'\\''", with: "'")
+        let server = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertNil(server["mcpServers"])
+        XCTAssertEqual(server["command"] as? String,
+                       "/Applications/Student's Circuit MCP.app/Contents/Resources/python/bin/python3")
+        XCTAssertEqual(server["args"] as? [String], ["-m", "circuit_mcp.server"])
+    }
+
+    func testTheRegistrationCommandNamesTheClaudeExecutableThatWillRun() throws {
         let app = URL(fileURLWithPath: "/Applications/Circuit MCP.app", isDirectory: true)
-        let json = try MCPCommand.configJSON(appBundle: app, locations: locations)
-        XCTAssertTrue(json.contains("/Applications/Circuit MCP.app/Contents/Resources/python/bin/python3"), json)
-        XCTAssertFalse(json.contains("\\/"), json)
-        XCTAssertTrue(json.contains("\n"), "the config is pasted into a file, so it is pretty-printed")
+        let claude = URL(fileURLWithPath: "/Users/student/My Tools/claude")
+        let command = try MCPCommand.terminalCommand(appBundle: app, locations: locations,
+                                                     fileManager: NoBundledToolsFileManager(),
+                                                     claudeExecutable: claude)
+        XCTAssertTrue(command.hasPrefix("'/Users/student/My Tools/claude' mcp add-json"), command)
+    }
+
+    func testClaudeDiscoveryChecksUserAndPackageManagerInstallLocations() {
+        final class ExecutableFileManager: FileManager {
+            let executable: String
+            init(_ executable: String) { self.executable = executable }
+            override func isExecutableFile(atPath path: String) -> Bool { path == executable }
+        }
+        let home = URL(fileURLWithPath: "/Users/student", isDirectory: true)
+        for path in ["/Users/student/.local/bin/claude", "/opt/homebrew/bin/claude",
+                     "/usr/local/bin/claude", "/Users/student/.claude/local/claude"] {
+            XCTAssertEqual(MCPCommand.findClaude(homeDirectory: home,
+                                                 fileManager: ExecutableFileManager(path))?.path, path)
+        }
     }
 
     /// A client started from this config runs the same server the app runs, so it has to reach
@@ -38,7 +79,8 @@ final class MCPCommandTests: XCTestCase {
     /// against bundle-internal paths, disagreeing with the app about the very same install.
     func testTheConfigCarriesEveryFolderTheAppsOwnServerGetsAndNothingElse() throws {
         let app = URL(fileURLWithPath: "/Applications/Circuit MCP.app", isDirectory: true)
-        let json = try MCPCommand.configJSON(appBundle: app, locations: locations)
+        let json = try MCPCommand.configJSON(appBundle: app, locations: locations,
+                                             fileManager: NoBundledToolsFileManager())
         let parsed = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         let circuit = try XCTUnwrap((parsed["mcpServers"] as? [String: Any])?["circuit"] as? [String: Any])
         let env = try XCTUnwrap(circuit["env"] as? [String: String])

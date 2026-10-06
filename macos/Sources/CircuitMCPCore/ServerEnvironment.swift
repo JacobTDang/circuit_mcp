@@ -12,12 +12,14 @@ public enum ServerEnvironment {
     /// client started from the generated config needs. The app's own server adds the process
     /// settings and the keys on top of it. A client given any less answers for the same install
     /// with bundle-internal paths the app never uses.
-    static func clientVariables(locations: AppLocations, appBundle: URL? = nil) -> [String: String] {
+    static func clientVariables(locations: AppLocations, appBundle: URL? = nil,
+                                fileManager: FileManager = .default) -> [String: String] {
         dataVariables(locations: locations)
             .merging(writableFolderVariables(locations: locations)) { existing, _ in existing }
-            .merging(simulatorVariables(appBundle: appBundle)) { existing, _ in existing }
-            .merging(usbCaptureVariables(appBundle: appBundle)) { existing, _ in existing }
-            .merging(receiverVariables(locations: locations, appBundle: appBundle)) { existing, _ in existing }
+            .merging(simulatorVariables(appBundle: appBundle, fileManager: fileManager)) { existing, _ in existing }
+            .merging(usbCaptureVariables(appBundle: appBundle, fileManager: fileManager)) { existing, _ in existing }
+            .merging(receiverVariables(locations: locations, appBundle: appBundle,
+                                       fileManager: fileManager)) { existing, _ in existing }
     }
 
     /// The USB-C capture helper the app carries, when it carries one.
