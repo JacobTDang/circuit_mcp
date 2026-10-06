@@ -56,7 +56,7 @@ set up.
 | iPad capture | `scripts/setup_ipad_capture.sh` | [ipad-capture.md](docs/ipad-capture.md) |
 | Handwriting OCR (about 2 GB) | `scripts/setup_ocr.sh`, or install from the iPad page | [reference](docs/reference.md#handwriting-recognition) |
 | Teaching videos | the `vendor/showman` submodule, Node, and an OpenRouter key in `.env` | [reference](docs/reference.md#teaching-videos) |
-| MATLAB | `CIRCUIT_MCP_ENABLE_MATLAB=1` in the shell only, never in `.mcp.json` | [reference](docs/reference.md#matlab-bridge) |
+| MATLAB | Install `matlabengine` from `/Applications/MATLAB.../extern/engines/python`, then set `CIRCUIT_MCP_ENABLE_MATLAB=1` in the shell only, never in `.mcp.json` | [reference](docs/reference.md#matlab-bridge) |
 | Lab instruments | `CIRCUIT_MCP_ENABLE_INSTRUMENTS=1`, read-only VISA; the checked-in `.mcp.json` sets it | [reference](docs/reference.md#configuration) |
 
 ## Checking work on an iPad

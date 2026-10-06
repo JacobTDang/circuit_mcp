@@ -116,6 +116,13 @@ class OCRWorker:
         python, model, device = self._configuration()
         checkpoint = list(model.glob("unimernet_*.pth")) if model.is_dir() else []
         available = python.is_file() and len(checkpoint) == 1
+        if available:
+            message = "UniMERNet worker files are available."
+        elif paths.running_from_app():
+            message = "OCR is not installed. Go to the iPad page → Handwriting recogniser → Install."
+        else:
+            message = "OCR is not installed. Run scripts/setup_ocr.sh."
+
         return {
             "ok": available,
             "backend": "unimernet",
@@ -123,11 +130,7 @@ class OCRWorker:
             "model_dir": str(model),
             "requested_device": device,
             "process_running": self.pid is not None,
-            "message": (
-                "UniMERNet worker files are available."
-                if available
-                else "OCR is not installed. Run scripts/setup_ocr.sh."
-            ),
+            "message": message,
         }
 
     def _start(self) -> subprocess.Popen:

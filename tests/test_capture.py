@@ -8,6 +8,12 @@ import pytest
 
 from circuit_mcp import capture, screen_recording
 
+
+@pytest.fixture(autouse=True)
+def isolated_marker(monkeypatch, tmp_path):
+    monkeypatch.setattr(screen_recording, '_marker', lambda: tmp_path / 'screen_recording_requested')
+
+
 PNG = b"\x89PNG\r\n\x1a\n" + b"test-image"
 
 

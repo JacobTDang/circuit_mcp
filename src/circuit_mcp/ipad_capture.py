@@ -21,7 +21,6 @@ from .processes import stop_within
 RUNTIME = paths.runtime_dir()
 WINDOW_INFO = RUNTIME / "bin" / "window_info"
 SCREEN_CAPTURE = Path("/usr/sbin/screencapture")
-FFMPEG = Path(shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg")
 MAX_FRAME_BYTES = 25 * 1024 * 1024
 
 
@@ -29,23 +28,14 @@ class IPadCaptureError(RuntimeError):
     pass
 
 
-def _packaged_app() -> bool:
-    """True when this module was loaded from inside a .app bundle.
-
-    A checkout builds the helper with scripts/setup_ipad_capture.sh. The app
-    is supposed to carry it, so the same missing file there is a broken
-    bundle rather than a setup step the student can run. ``__file__`` is read
-    at call time so a test can point it into a bundle.
-    """
-    return ".app/Contents/" in Path(__file__).resolve().as_posix()
-
-
 def _usb_helper() -> tuple[Path, None] | tuple[None, str]:
     """The helper to run, or the sentence to show when there is none.
 
     A variable that names a non-executable is that error. It is not replaced
     with the checkout's copy: that would let a broken bundle look healthy on
-    a machine that had built the helper.
+    a machine that had built the helper. A checkout builds the helper with
+    scripts/setup_ipad_capture.sh; the app is supposed to carry it, so the same
+    missing file there is a broken bundle rather than a setup step.
     """
     try:
         path = paths.usb_capture()
@@ -53,7 +43,7 @@ def _usb_helper() -> tuple[Path, None] | tuple[None, str]:
         return None, str(exc)
     if path.is_file() and os.access(path, os.X_OK):
         return path, None
-    if _packaged_app():
+    if paths.running_from_app():
         return None, "USB capture helper is missing from this app. The bundle is broken."
     return None, ("USB capture helper is not built. "
                   "A checkout builds it with scripts/setup_ipad_capture.sh.")
@@ -90,10 +80,18 @@ class IPadCaptureService:
         This project does not build the receiver, and the packaged app does not
         carry it, so "not built" was only ever true of a checkout.
         """
+        if paths.running_from_app():
+            return "AirPlay needs UxPlay, which is missing. The app is damaged and should be reinstalled."
         return ("AirPlay needs UxPlay and there is none on this machine. There is no "
                 "Homebrew formula for it, so build one with scripts/setup_ipad_capture.sh "
                 "-- it needs Homebrew for cmake, GStreamer and libplist -- then reopen "
                 "this page.")
+
+    @staticmethod
+    def _decoder_unavailable() -> str:
+        """Tell the student why AirPlay decoding is unavailable and how to add it."""
+        return ("AirPlay needs ffmpeg to turn the mirrored stream into a picture, so install "
+                "it with Homebrew (`brew install ffmpeg`) and reopen this page.")
 
     def _clear_streams(self) -> None:
         for path in self._stream_dir.glob("airplay-frame*.h264"):
@@ -258,11 +256,19 @@ class IPadCaptureService:
                 connected = connected or time.monotonic() - self._stream_active_at < 12
         usb, usb_error = self._refresh_usb_async()
         receiver = paths.uxplay()
+        ffmpeg = paths.ffmpeg()
+        airplay_ok = receiver is not None and ffmpeg is not None
+        airplay_unavailable = ""
+        if not receiver:
+            airplay_unavailable = self._airplay_unavailable()
+        elif not ffmpeg:
+            airplay_unavailable = self._decoder_unavailable()
         helper, _missing = _usb_helper()
+
         return {
-            "ok": receiver is not None or helper is not None,
-            "airplay": {"available": receiver is not None, "running": running,
-                        "unavailable": "" if receiver else self._airplay_unavailable(),
+            "ok": airplay_ok or helper is not None,
+            "airplay": {"available": airplay_ok, "running": running,
+                        "unavailable": airplay_unavailable,
                         "connected": connected, "stream_ready": stream_ready,
                         "headless": True,
                         "receiver": "Circuit Capture",
@@ -311,6 +317,9 @@ class IPadCaptureService:
         with self._frame_lock:
             if self._frame_cached and time.monotonic() - self._frame_cached_at < 0.45:
                 return dict(self._frame_cached)
+            ffmpeg = paths.ffmpeg()
+            if ffmpeg is None:
+                raise IPadCaptureError(self._decoder_unavailable())
             with tempfile.TemporaryDirectory(prefix="ipad-airplay-") as directory:
                 stream = Path(directory) / "frame.h264"
                 output = Path(directory) / "frame.png"
@@ -318,7 +327,7 @@ class IPadCaptureService:
                 if source is None:
                     raise IPadCaptureError("AirPlay frame is not ready yet")
                 shutil.copyfile(source, stream)
-                result = subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error",
+                result = subprocess.run([str(ffmpeg), "-hide_banner", "-loglevel", "error",
                                          "-i", str(stream), "-fps_mode", "passthrough",
                                          "-update", "1", "-y", str(output)],
                                         capture_output=True, text=True,

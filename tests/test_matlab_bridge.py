@@ -426,3 +426,45 @@ def test_shutdown_is_idempotent(monkeypatch):
     bridge.shutdown()
     assert eng.quit_calls >= 1
     assert bridge.status()["session_alive"] is False
+
+
+def test_status_when_usable(tmp_path, monkeypatch):
+    monkeypatch.setenv("CIRCUIT_MCP_ENABLE_MATLAB", "1")
+    monkeypatch.setattr(bridge, "_probe_engine_importable", lambda: True)
+    monkeypatch.setattr(bridge, "_ENGINE", None)
+    s = bridge.status(applications=tmp_path)
+    assert s["usable"] is True
+    assert s["unavailable"] == ""
+
+
+def test_status_when_engine_missing_with_matlab_found(tmp_path, monkeypatch):
+    monkeypatch.setenv("CIRCUIT_MCP_ENABLE_MATLAB", "1")
+    monkeypatch.setattr(bridge, "_probe_engine_importable", lambda: False)
+    monkeypatch.setattr(bridge, "_ENGINE", None)
+    matlab_dir = tmp_path / "MATLAB_R2026a.app"
+    engines_dir = matlab_dir / "extern" / "engines" / "python"
+    engines_dir.mkdir(parents=True)
+    s = bridge.status(applications=tmp_path)
+    assert s["usable"] is False
+    assert f"pip install {matlab_dir}/extern/engines/python" in s["unavailable"]
+    assert "CIRCUIT_MCP_ENABLE_MATLAB" not in s["unavailable"]
+
+
+def test_status_when_engine_missing_with_no_matlab(tmp_path, monkeypatch):
+    monkeypatch.setenv("CIRCUIT_MCP_ENABLE_MATLAB", "1")
+    monkeypatch.setattr(bridge, "_probe_engine_importable", lambda: False)
+    monkeypatch.setattr(bridge, "_ENGINE", None)
+    s = bridge.status(applications=tmp_path)
+    assert s["usable"] is False
+    assert f"no MATLAB_R*.app found in {tmp_path}" in s["unavailable"]
+
+
+def test_status_when_disabled(tmp_path, monkeypatch):
+    monkeypatch.delenv("CIRCUIT_MCP_ENABLE_MATLAB", raising=False)
+    monkeypatch.setattr(bridge, "_probe_engine_importable", lambda: True)
+    monkeypatch.setattr(bridge, "_ENGINE", None)
+    s = bridge.status(applications=tmp_path)
+    assert s["usable"] is False
+    assert "set CIRCUIT_MCP_ENABLE_MATLAB=1" in s["unavailable"]
+    assert "shell that starts the Claude Code session" in s["note"]
+    assert "never in .mcp.json" in s["note"]

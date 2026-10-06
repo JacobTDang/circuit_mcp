@@ -15,6 +15,8 @@ from circuit_mcp.matlab_bridge import EvalResult, MatlabError
 def test_matlab_status_returns_the_bridge_status_unchanged(monkeypatch):
     payload = {
         "ok": True,
+        "usable": True,
+        "unavailable": "",
         "enabled": True,
         "engine_importable": True,
         "session_alive": False,

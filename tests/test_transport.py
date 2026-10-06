@@ -28,12 +28,29 @@ R2 2 0 {R2}
 def _configured_server(data_dir: Path) -> StdioServerParameters:
     config = json.loads((ROOT / ".mcp.json").read_text())
     circuit = config["mcpServers"]["circuit"]
+    isolated = data_dir.parent
     return StdioServerParameters(
         command=str(ROOT / circuit["command"]),
         args=[str(ROOT / arg) if arg == "run_server.py" else arg for arg in circuit["args"]],
         cwd=str(ROOT),
-        env={**circuit.get("env", {}), "CIRCUIT_MCP_DATA_DIR": str(data_dir)},
+        env={
+            **circuit.get("env", {}),
+            "CIRCUIT_MCP_DATA_DIR": str(data_dir),
+            "CIRCUIT_MCP_SHOWMAN_DATA_DIR": str(isolated / "showman"),
+            "CIRCUIT_MCP_RUNTIME_DIR": str(isolated / "runtime"),
+            "CIRCUIT_MCP_WORKSPACE_CONFIG": str(isolated / "workspace.json"),
+        },
     )
+
+
+def test_configured_server_isolates_every_writable_location(tmp_path):
+    root = tmp_path / "isolated"
+    environment = _configured_server(root / "command_center").env
+
+    assert environment["CIRCUIT_MCP_DATA_DIR"] == str(root / "command_center")
+    assert environment["CIRCUIT_MCP_SHOWMAN_DATA_DIR"] == str(root / "showman")
+    assert environment["CIRCUIT_MCP_RUNTIME_DIR"] == str(root / "runtime")
+    assert environment["CIRCUIT_MCP_WORKSPACE_CONFIG"] == str(root / "workspace.json")
 
 
 async def _exercise_server(data_dir: Path) -> None:

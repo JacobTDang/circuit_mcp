@@ -5,7 +5,7 @@ import concurrent.futures
 
 import pytest
 
-from circuit_mcp import ipad_capture
+from circuit_mcp import ipad_capture, paths
 
 PNG = b"\x89PNG\r\n\x1a\nframe"
 
@@ -21,6 +21,7 @@ def test_airplay_frame_is_preferred_and_hashed(monkeypatch, tmp_path):
         open(command[-1], "wb").write(PNG)
         return subprocess.CompletedProcess(command, 0, "", "")
     monkeypatch.setattr(ipad_capture.subprocess, "run", run)
+    monkeypatch.setattr(ipad_capture.paths, "ffmpeg", lambda: tmp_path / "ffmpeg")
     result = service.capture("auto")
     assert result["source"] == "airplay"
     assert result["headless"] is True
@@ -41,6 +42,7 @@ def test_airplay_frame_cache_shares_decode_between_fast_pollers(monkeypatch, tmp
         open(command[-1], "wb").write(PNG)
         return subprocess.CompletedProcess(command, 0, "", "")
     monkeypatch.setattr(ipad_capture.subprocess, "run", run)
+    monkeypatch.setattr(ipad_capture.paths, "ffmpeg", lambda: tmp_path / "ffmpeg")
     first = service.capture("airplay")
     second = service.capture("airplay")
     assert first["png"] == second["png"] == PNG
@@ -122,9 +124,7 @@ def test_a_missing_helper_in_the_app_names_a_broken_bundle(tmp_path, monkeypatch
     """The app is supposed to carry the helper. The setup script is a checkout step."""
     monkeypatch.delenv("CIRCUIT_MCP_USB_CAPTURE", raising=False)
     monkeypatch.setenv("CIRCUIT_MCP_RUNTIME_DIR", str(tmp_path / "runtime"))
-    monkeypatch.setattr(
-        ipad_capture, "__file__",
-        str(tmp_path / "Circuit MCP.app/Contents/Resources/python/lib/circuit_mcp/ipad_capture.py"))
+    monkeypatch.setattr(ipad_capture.paths, "running_from_app", lambda: True)
     usb = _usb_status()
     assert usb["available"] is False
     assert "bundle is broken" in usb["error"]
@@ -179,3 +179,25 @@ def test_forked_child_cannot_run_parent_receiver_cleanup(monkeypatch):
     monkeypatch.setattr(ipad_capture.os, "getpid", lambda: service._owner_pid)
     service.close()
     assert calls == [True]
+
+
+def test_missing_ffmpeg_is_an_explicit_error(monkeypatch):
+    service = ipad_capture.IPadCaptureService()
+    monkeypatch.setattr(ipad_capture.paths, "ffmpeg", lambda: None)
+    monkeypatch.setattr(ipad_capture.paths, "uxplay", lambda: "/usr/bin/uxplay")
+    service._client_connected = True
+    assert not service.status()["airplay"]["available"]
+    assert "brew install ffmpeg" in service.status()["airplay"]["unavailable"]
+
+    with pytest.raises(ipad_capture.IPadCaptureError, match="brew install ffmpeg"):
+        service.capture("airplay")
+
+
+def test_airplay_unavailable_app(monkeypatch):
+    monkeypatch.setattr(paths, "running_from_app", lambda: True)
+    assert "damaged and should be reinstalled" in ipad_capture.IPadCaptureService._airplay_unavailable()
+
+
+def test_airplay_unavailable_checkout(monkeypatch):
+    monkeypatch.setattr(paths, "running_from_app", lambda: False)
+    assert "setup_ipad_capture.sh" in ipad_capture.IPadCaptureService._airplay_unavailable()

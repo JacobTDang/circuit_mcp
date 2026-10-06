@@ -16,6 +16,11 @@ from circuit_mcp import capture, screen_recording
 
 
 @pytest.fixture(autouse=True)
+def isolated_marker(monkeypatch, tmp_path):
+    monkeypatch.setattr(screen_recording, '_marker', lambda: tmp_path / 'screen_recording_requested')
+
+
+@pytest.fixture(autouse=True)
 def forget_the_prompt(monkeypatch):
     monkeypatch.setattr(screen_recording, "_ASKED", False, raising=False)
 
@@ -51,6 +56,8 @@ def test_the_state_comes_from_the_framework_not_from_a_guess(monkeypatch):
     monkeypatch.setattr(screen_recording, "_core_graphics", lambda: FakeCoreGraphics(True))
     assert screen_recording.permission_state() == "granted"
     monkeypatch.setattr(screen_recording, "_core_graphics", lambda: FakeCoreGraphics(False))
+    assert screen_recording.permission_state() == "not_determined"
+    screen_recording._marker().touch()
     assert screen_recording.permission_state() == "denied"
 
 
@@ -70,6 +77,9 @@ def test_asking_for_access_prompts_once_and_reports_what_came_back(monkeypatch):
 
 def test_the_workspace_status_reports_the_real_permission(monkeypatch):
     monkeypatch.setattr(screen_recording, "_core_graphics", lambda: FakeCoreGraphics(False))
+    status = capture.capture_status()
+    assert status["permission"] == "not_determined"
+    screen_recording._marker().touch()
     status = capture.capture_status()
     assert status["permission"] == "denied"
     assert "Screen Recording" in status["message"]

@@ -118,3 +118,28 @@ def test_usb_capture_refuses_a_variable_that_is_not_executable(tmp_path, monkeyp
 def test_usb_capture_falls_back_to_the_checkout_runtime(tmp_path, monkeypatch):
     monkeypatch.setenv("CIRCUIT_MCP_RUNTIME_DIR", str(tmp_path / "runtime"))
     assert paths.usb_capture() == (tmp_path / "runtime" / "bin" / "ipad_usb_capture").resolve()
+
+
+def test_ffmpeg_lookup(tmp_path, monkeypatch):
+    monkeypatch.delenv("CIRCUIT_MCP_FFMPEG", raising=False)
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setattr("circuit_mcp.paths.HOMEBREW_PREFIXES", [])
+    assert paths.ffmpeg() is None
+
+    ffmpeg = tmp_path / "ffmpeg"
+    ffmpeg.touch()
+    ffmpeg.chmod(0o755)
+    monkeypatch.setenv("CIRCUIT_MCP_FFMPEG", str(ffmpeg))
+    assert paths.ffmpeg() == ffmpeg
+
+    monkeypatch.delenv("CIRCUIT_MCP_FFMPEG")
+    monkeypatch.setattr("shutil.which", lambda name: str(ffmpeg) if name == "ffmpeg" else None)
+    assert paths.ffmpeg() == ffmpeg
+
+
+def test_running_from_app(monkeypatch):
+    monkeypatch.setattr(paths, "REPO_ROOT", paths.Path("/Applications/Circuit MCP.app/Contents/Resources/circuit_mcp"))
+    assert paths.running_from_app() is True
+
+    monkeypatch.setattr(paths, "REPO_ROOT", paths.Path("/Users/user/Projects/circuit_mcp"))
+    assert paths.running_from_app() is False
