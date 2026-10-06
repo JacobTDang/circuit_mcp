@@ -195,6 +195,41 @@ def test_every_tool_returns_something_json_serialisable():
         json.dumps(result)  # raises TypeError on a stray SymPy object
 
 
+def test_workspace_status_identifies_the_checkout_data_folder(monkeypatch, tmp_path):
+    data = tmp_path / ".local" / "command_center"
+    monkeypatch.delenv("CIRCUIT_MCP_DATA_DIR", raising=False)
+    monkeypatch.setattr(server_module, "default_data_dir", lambda: data)
+    monkeypatch.setattr(server_module, "_capture_status", lambda: {"ok": True})
+
+    status = workspace_status()
+
+    assert status["data_dir"] == str(data)
+    assert status["data_source"] == "checkout"
+
+
+def test_workspace_status_identifies_the_apps_data_folder(monkeypatch, tmp_path):
+    data = tmp_path / "Library" / "Application Support" / "CircuitMCP" / "command_center"
+    monkeypatch.setenv("CIRCUIT_MCP_DATA_DIR", str(data))
+    monkeypatch.setattr(server_module, "default_data_dir", lambda: data)
+    monkeypatch.setattr(server_module, "_capture_status", lambda: {"ok": True})
+
+    status = workspace_status()
+
+    assert status["data_dir"] == str(data)
+    assert status["data_source"] == "app"
+
+
+def test_startup_says_which_data_folder_the_server_uses(monkeypatch, tmp_path, capsys):
+    data = tmp_path / "command_center"
+    monkeypatch.setattr(server_module, "default_data_dir", lambda: data)
+    monkeypatch.setattr(server_module._WORKER, "prewarm", lambda: None)
+    monkeypatch.setattr(server_module.server, "run", lambda **_kwargs: None)
+
+    server_module.main()
+
+    assert f"data folder: {data}" in capsys.readouterr().err
+
+
 def test_rendered_expressions_carry_both_a_readable_and_an_exact_form():
     rendered = derive(RC_LOWPASS, 1, 0, 2, 0, "finite")["transfer_function"]
     assert set(rendered) == {"text", "srepr"}

@@ -161,6 +161,29 @@ final class ServerControllerTests: XCTestCase {
         wait(for: [gone], timeout: 5)
     }
 
+    /// macOS answers EPERM, not ESRCH, while a SIGKILLed group holds only zombies. That is a
+    /// group still emptying, so it is waited out rather than reported as a failed kill.
+    func testAGroupOfZombiesIsWaitedOutRatherThanReportedAsSurvivors() {
+        var answers: [Int32] = [EPERM, EPERM, 0, EPERM, ESRCH]
+        let survivor = ServerController.groupSurvivor(42, within: 2) { _ in answers.removeFirst() }
+        XCTAssertNil(survivor)
+        XCTAssertTrue(answers.isEmpty)
+    }
+
+    func testAGroupThatNeverEmptiesNamesWhatTheLastCheckSaw() {
+        let unsignalable = ServerController.groupSurvivor(42, within: 0.05) { _ in EPERM }
+        XCTAssertEqual(unsignalable, "process group 42 still had members 0.05s after SIGKILL (killpg: Operation not permitted)")
+        let alive = ServerController.groupSurvivor(42, within: 0.05) { _ in 0 }
+        XCTAssertEqual(alive, "process group 42 still had members 0.05s after SIGKILL")
+    }
+
+    func testACheckThatCannotRunIsAFailureAtOnce() {
+        var calls = 0
+        let survivor = ServerController.groupSurvivor(42, within: 2) { _ in calls += 1; return EINVAL }
+        XCTAssertEqual(survivor, "killpg(42, 0) after SIGKILL: Invalid argument")
+        XCTAssertEqual(calls, 1)
+    }
+
     func testAMissingExecutableIsALaunchFailure() throws {
         let server = ServerController(configuration: ServerConfiguration(
             executable: URL(fileURLWithPath: "/nonexistent/python3"), arguments: [], environment: [:],
