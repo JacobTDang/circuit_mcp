@@ -159,19 +159,19 @@ public final class ServerController {
 
         kill(target, SIGTERM)
         if exitSignal.wait(timeout: .now() + configuration.stopGracePeriod) == .success {
-            // Only ESRCH means the group is empty. Any other errno is a check that did not
-            // happen, and reporting that as a clean stop would hide a still-running group.
-            if killpg(target, 0) != 0 {
-                let failure = errno
-                guard failure == ESRCH else {
-                    return .killFailed(reason: "killpg(\(target), 0) after SIGTERM: \(String(cString: strerror(failure)))")
-                }
-                return .stoppedGracefully
+            // Only ESRCH means the group is empty. EPERM is members that cannot be signalled --
+            // children already dead and not yet reaped -- so it takes the same SIGKILL-and-wait
+            // path as a live child. Any other errno is a check that did not happen, and
+            // reporting that as a clean stop would hide a still-running group.
+            let remaining = Self.probeGroup(target)
+            if remaining == ESRCH { return .stoppedGracefully }
+            guard remaining == 0 || remaining == EPERM else {
+                return .killFailed(reason: "killpg(\(target), 0) after SIGTERM: \(String(cString: strerror(remaining)))")
             }
             killpg(target, SIGKILL)  // the server exited but left children in its group
             // The children were force-killed, so this branch owes the same confirmation the
             // escalation branch does: a group that did not empty is not a successful stop.
-            if let survivor = groupSurvivor(target, within: Self.groupEmptyWait) {
+            if let survivor = Self.groupSurvivor(target, within: Self.groupEmptyWait) {
                 return .killFailed(reason: survivor)
             }
             return .killed
@@ -182,7 +182,7 @@ public final class ServerController {
         guard exitSignal.wait(timeout: .now() + Self.killExitWait) == .success else {
             return .killFailed(reason: "process \(target) did not report its exit within \(Self.killExitWait)s of SIGKILL")
         }
-        if let survivor = groupSurvivor(target, within: Self.groupEmptyWait) {
+        if let survivor = Self.groupSurvivor(target, within: Self.groupEmptyWait) {
             return .killFailed(reason: survivor)
         }
         return .killed
@@ -232,21 +232,30 @@ public final class ServerController {
         }
     }
 
+    /// `killpg(target, 0)` as a value: 0 while the group has a member this process may signal,
+    /// otherwise the errno. Captured once, as `stop()` does above: the interpolation between two
+    /// reads of errno can allocate, and an allocation is free to leave a different errno behind.
+    static func probeGroup(_ target: pid_t) -> Int32 {
+        killpg(target, 0) == 0 ? 0 : errno
+    }
+
     /// Waits for the process group to empty after a SIGKILL: nil once it has, otherwise why it
     /// could not be confirmed gone. Members reaped by launchd stay in the group as zombies for
-    /// a moment, so a single probe would name a survivor that is already dead.
-    private func groupSurvivor(_ target: pid_t, within seconds: TimeInterval) -> String? {
+    /// a moment, so a single probe would name a survivor that is already dead. While the group
+    /// holds only zombies macOS answers EPERM rather than 0 -- a zombie cannot be signalled --
+    /// so EPERM is a group still emptying, waited out like a live member, never success.
+    static func groupSurvivor(_ target: pid_t, within seconds: TimeInterval,
+                              probe: (pid_t) -> Int32 = probeGroup) -> String? {
         let deadline = Date().addingTimeInterval(seconds)
         while true {
-            guard killpg(target, 0) == 0 else {
-                // Captured once, as `stop()` does above: the interpolation between two reads of
-                // errno can allocate, and an allocation is free to leave a different errno behind.
-                let failure = errno
-                guard failure != ESRCH else { return nil }
-                return "killpg(\(target), 0) after SIGKILL: \(String(cString: strerror(failure)))"
+            let answer = probe(target)
+            if answer == ESRCH { return nil }
+            guard answer == 0 || answer == EPERM else {
+                return "killpg(\(target), 0) after SIGKILL: \(String(cString: strerror(answer)))"
             }
             guard Date() < deadline else {
-                return "process group \(target) still had members \(seconds)s after SIGKILL"
+                let detail = answer == EPERM ? " (killpg: \(String(cString: strerror(answer))))" : ""
+                return "process group \(target) still had members \(seconds)s after SIGKILL\(detail)"
             }
             usleep(5_000)
         }

@@ -318,7 +318,7 @@ has no `/opt/homebrew` for the original paths to resolve against. It reads back
 what the staged files load and refuses rather than shipping a binary that dies
 at launch on the machine the app exists for.
 
-That produces `dist/Circuit MCP.app` and `dist/CircuitMCP-<version>.dmg`.
+That produces `dist/Circuit MCP.noindex/Circuit MCP.app` and `dist/CircuitMCP-<version>.dmg`. The app is staged in a folder whose name ends in `.noindex` so Spotlight lists the installed copy and not this one as well.
 
 - **Data:** `~/Library/Application Support/CircuitMCP/`. To bring over a
   checkout's `.local/command_center`, use **Import Existing Data…**. Stop

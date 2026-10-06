@@ -303,6 +303,26 @@ def test_app_js_rasterises_a_schematic_on_a_white_ground(tmp_path, monkeypatch):
         assert "toBlob" in png
 
 
+def test_app_js_keeps_the_schematic_blob_until_a_download_can_read_it(tmp_path, monkeypatch):
+    """Revoking the object URL in the same turn as the click races WKWebView.
+
+    The app turns the click into a download only after the navigation delegate
+    runs, and the bytes are read after the save panel returns. A browser still
+    downloads from the same `<a download>` click, so the filename stays.
+    """
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        png = app_script.split("window.schematicPng=", 1)[1].split("const baseCardBody", 1)[0]
+        assert "link.download=`schematic-${id}.png`" in png
+        click = png.index("link.click()")
+        revoke = png.index("URL.revokeObjectURL")
+        assert "setTimeout" in png[click:revoke], "the revoke has to wait until the download has the bytes"
+        # The save panel is in front of the user for as long as they take.
+        # A delay of a turn is the race this is fixing.
+        delay_ms = int(png[revoke:].split(",", 1)[1].split(")", 1)[0])
+        assert delay_ms >= 60_000
+
+
 def test_app_js_never_puts_a_solution_on_the_desk(tmp_path, monkeypatch):
     """Closing a desk card deletes it, and that must never reach finished homework."""
     with _browser(tmp_path, monkeypatch) as browser:

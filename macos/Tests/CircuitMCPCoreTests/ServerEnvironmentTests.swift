@@ -99,6 +99,57 @@ extension ServerEnvironmentTests {
     }
 }
 
+/// The USB-C capture helper the app carries. Without it, AirPlay being blocked
+/// (a campus network that filters mDNS) leaves the desk with no iPad to read.
+extension ServerEnvironmentTests {
+    private func usbBundle(withHelper: Bool, executable: Bool = true) throws -> URL {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("circuitmcp-usb-\(UUID().uuidString)/CircuitMCP.app", isDirectory: true)
+        let binary = AppLocations.bundledUSBCapture(in: root)
+        try FileManager.default.createDirectory(at: binary.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        if withHelper {
+            let mode: NSNumber = executable ? 0o755 : 0o644
+            FileManager.default.createFile(atPath: binary.path, contents: Data("#!/bin/sh\n".utf8),
+                                           attributes: [.posixPermissions: mode])
+        }
+        addTeardownBlock { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
+        return root
+    }
+
+    func testTheBundledUSBHelperIsNamedWhenTheAppCarriesOne() throws {
+        let app = try usbBundle(withHelper: true)
+        let variables = ServerEnvironment.variables(locations: locations, secrets: [:],
+                                                    home: "/Users/someone", appBundle: app)
+        XCTAssertEqual(variables["CIRCUIT_MCP_USB_CAPTURE"],
+                       app.appendingPathComponent("Contents/Resources/ipad_usb_capture").path)
+    }
+
+    /// Naming a helper that is not there is worse than naming none: `paths.usb_capture()`
+    /// refuses a variable it cannot run, so every capture would fail with a broken-path
+    /// message instead of the missing-helper one.
+    func testNoUSBVariableWhenTheBundleCarriesNone() throws {
+        let app = try usbBundle(withHelper: false)
+        let variables = ServerEnvironment.variables(locations: locations, secrets: [:],
+                                                    home: "/Users/someone", appBundle: app)
+        XCTAssertNil(variables["CIRCUIT_MCP_USB_CAPTURE"])
+    }
+
+    func testNoUSBVariableWhenTheBundledHelperIsNotExecutable() throws {
+        let app = try usbBundle(withHelper: true, executable: false)
+        let variables = ServerEnvironment.variables(locations: locations, secrets: [:],
+                                                    home: "/Users/someone", appBundle: app)
+        XCTAssertNil(variables["CIRCUIT_MCP_USB_CAPTURE"])
+    }
+
+    func testTheGeneratedMCPConfigNamesTheBundledUSBHelper() throws {
+        let app = try usbBundle(withHelper: true)
+        let json = try MCPCommand.configJSON(appBundle: app, locations: locations)
+        XCTAssertTrue(json.contains("\"CIRCUIT_MCP_USB_CAPTURE\""), json)
+        XCTAssertTrue(json.contains("Contents/Resources/ipad_usb_capture"), json)
+    }
+}
+
 /// The AirPlay receiver the app carries. UxPlay is GStreamer, which finds its plugins through
 /// the environment rather than through its own load commands, so naming the binary is not
 /// enough: without the plugin path, the scanner and a writable registry, a bundled GStreamer

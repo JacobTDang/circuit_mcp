@@ -1968,6 +1968,19 @@ def instrument_query(
     )
 
 
+def _data_location() -> dict[str, str]:
+    """The store this process uses, in terms useful to a person diagnosing registration."""
+    data = default_data_dir()
+    configured = os.environ.get("CIRCUIT_MCP_DATA_DIR")
+    if configured and "Library/Application Support/CircuitMCP" in str(data):
+        source = "app"
+    elif configured:
+        source = "configured"
+    else:
+        source = "checkout"
+    return {"data_dir": str(data), "data_source": source}
+
+
 @server.tool()
 def workspace_status() -> dict[str, Any]:
     """Can this Mac capture a mirrored iPad workspace?
@@ -1977,7 +1990,7 @@ def workspace_status() -> dict[str, Any]:
     ``granted``, ``denied``, or ``unavailable`` where the question cannot be
     asked, in which case the capture attempt itself stays the authority.
     """
-    return _guarded("workspace_status")
+    return {**_guarded("workspace_status"), **_data_location()}
 
 
 @server.tool(structured_output=False)
@@ -2228,6 +2241,12 @@ def main() -> None:
     if _WORKER_FLAG in sys.argv[1:]:
         _serve_forever()
         return
+    location = _data_location()
+    print(
+        f"circuit_mcp data folder: {location['data_dir']} "
+        f"({location['data_source']} data)",
+        file=sys.stderr,
+    )
     # Pay the worker's start-up now rather than inside the first tool call, so
     # the first question of a session answers as fast as the rest. A failure
     # here is said out loud on stderr and then left alone: every tool call

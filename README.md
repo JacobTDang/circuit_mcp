@@ -39,6 +39,11 @@ python3.12 -m venv .venv
 ```
 
 The checked-in [`.mcp.json`](.mcp.json) registers the server with Claude Code.
+That project registration deliberately uses this checkout's `.local/command_center` data. The
+macOS app's **Register with Claude Code…** command instead creates a user-scope registration that
+uses `~/Library/Application Support/CircuitMCP/command_center`, the same data shown on the app's
+desk. Inside this checkout the project registration takes precedence; `workspace_status` reports
+the active `data_dir` and whether it is checkout or app data.
 [`CLAUDE.md`](CLAUDE.md) is the tutoring workflow the agent follows.
 
 ### Optional add-ons
@@ -80,7 +85,7 @@ macos/build_app.sh
 macos/smoke_test.sh
 ```
 
-That makes `dist/Circuit MCP.app` and a `.dmg`. In the app, **Copy MCP Command**
+That makes `dist/Circuit MCP.noindex/Circuit MCP.app` and a `.dmg`. The `.noindex` folder keeps Spotlight from listing the build next to the installed app. In the app, **Copy MCP Command**
 gives you the line to paste into Claude Code. The app is not notarized, so
 another Mac needs one extra step the first time; see
 [opening it on another Mac](docs/reference.md#opening-it-on-another-mac).

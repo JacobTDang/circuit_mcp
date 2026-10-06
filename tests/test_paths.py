@@ -12,7 +12,7 @@ from circuit_mcp import paths
 VARIABLES = (
     "CIRCUIT_MCP_DATA_DIR", "CIRCUIT_MCP_SHOWMAN_DATA_DIR", "CIRCUIT_MCP_RUNTIME_DIR",
     "CIRCUIT_MCP_WORKSPACE_CONFIG", "CIRCUIT_MCP_OCR_PYTHON", "CIRCUIT_MCP_OCR_MODEL",
-    "CIRCUIT_MCP_NGSPICE",
+    "CIRCUIT_MCP_NGSPICE", "CIRCUIT_MCP_USB_CAPTURE",
 )
 
 
@@ -86,14 +86,38 @@ def test_the_runtime_tools_follow_the_runtime_variable(tmp_path):
            "PYTHONPATH": str(paths.REPO_ROOT / "src")}
     completed = subprocess.run(
         [sys.executable, "-c",
-         "from circuit_mcp import ipad_capture as c, paths; "
-         "print(paths.uxplay() or paths.runtime_dir() / 'uxplay' / 'bin' / 'uxplay'); print(c.USB_CAPTURE)"],
+         "from circuit_mcp import paths; "
+         "print(paths.uxplay() or paths.runtime_dir() / 'uxplay' / 'bin' / 'uxplay'); print(paths.usb_capture())"],
         env=env, capture_output=True, text=True, timeout=120,
     )
     assert completed.returncode == 0, completed.stderr
     runtime = (tmp_path / "runtime").resolve()
     assert completed.stdout.split() == [str(runtime / "uxplay" / "bin" / "uxplay"),
                                         str(runtime / "bin" / "ipad_usb_capture")]
+
+
+def test_usb_capture_is_the_named_executable(tmp_path, monkeypatch):
+    helper = tmp_path / "ipad_usb_capture"
+    helper.write_text("#!/bin/sh\n")
+    helper.chmod(0o755)
+    monkeypatch.setenv("CIRCUIT_MCP_USB_CAPTURE", str(helper))
+    assert paths.usb_capture() == helper
+
+
+def test_usb_capture_refuses_a_variable_that_is_not_executable(tmp_path, monkeypatch):
+    present = tmp_path / "not-executable"
+    present.write_text("#!/bin/sh\n")
+    monkeypatch.setenv("CIRCUIT_MCP_USB_CAPTURE", str(present))
+    with pytest.raises(ValueError, match="CIRCUIT_MCP_USB_CAPTURE"):
+        paths.usb_capture()
+    monkeypatch.setenv("CIRCUIT_MCP_USB_CAPTURE", str(tmp_path / "absent"))
+    with pytest.raises(ValueError, match="CIRCUIT_MCP_USB_CAPTURE"):
+        paths.usb_capture()
+
+
+def test_usb_capture_falls_back_to_the_checkout_runtime(tmp_path, monkeypatch):
+    monkeypatch.setenv("CIRCUIT_MCP_RUNTIME_DIR", str(tmp_path / "runtime"))
+    assert paths.usb_capture() == (tmp_path / "runtime" / "bin" / "ipad_usb_capture").resolve()
 
 
 def test_ffmpeg_lookup(tmp_path, monkeypatch):

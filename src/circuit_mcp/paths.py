@@ -110,6 +110,24 @@ def uxplay() -> Path | None:
     return None
 
 
+def usb_capture() -> Path:
+    """The USB-C capture helper: the one the app names, else the checkout's build.
+
+    Unset is the checkout, which builds the helper with
+    scripts/setup_ipad_capture.sh into RUNTIME/bin. A variable that names
+    something unrunnable is a failure: the app sets it deliberately, and
+    falling back to the runtime folder there would hide a broken bundle on
+    a machine that had a working helper.
+    """
+    value = _override("CIRCUIT_MCP_USB_CAPTURE")
+    if value:
+        binary = Path(value).expanduser().absolute()
+        if not (binary.is_file() and os.access(binary, os.X_OK)):
+            raise ValueError(f"CIRCUIT_MCP_USB_CAPTURE names {binary}, which is not an executable file")
+        return binary
+    return (runtime_dir() / "bin" / "ipad_usb_capture").absolute()
+
+
 def ffmpeg() -> Path | None:
     """Find ffmpeg by override, PATH, then Homebrew prefixes; None means none exists.
 

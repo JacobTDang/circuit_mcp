@@ -1,8 +1,9 @@
 import AppKit
+import CircuitMCPCore
 import WebKit
 
 /// The desk in a WKWebView, with the four browser features the page relies on.
-final class WebWindow: NSObject, WKUIDelegate, WKNavigationDelegate {
+final class WebWindow: NSObject, WKUIDelegate, WKNavigationDelegate, WKDownloadDelegate {
     /// A policy cancel is reported as a frame load interrupted in WebKit's own domain, which has
     /// no symbol in the SDK.
     private static let webKitErrorDomain = "WebKitErrorDomain"
@@ -82,15 +83,68 @@ final class WebWindow: NSObject, WKUIDelegate, WKNavigationDelegate {
     }
 
     // Anything outside the server's origin opens in the default browser.
+    // A download (Save PNG) has to be answered `.download` or WebKit shows the
+    // blob as the page. The choice itself is `NavigationPolicy`, so it can be
+    // tested without a web view.
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        // No URL yet is WebKit's own initial load. Cancelling it leaves a blank desk.
         guard let url = navigationAction.request.url, let root = serverRoot else { return decisionHandler(.allow) }
-        let sameOrigin = url.scheme == root.scheme && url.host == root.host && url.port == root.port
-        if sameOrigin || ["about", "blob", "data"].contains(url.scheme ?? "") {
-            return decisionHandler(.allow)
+        // A nil target frame is a new window. Treating it as the desk is what
+        // stops a blob from opening over the page when it is not a download.
+        let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
+        switch NavigationPolicy.decide(url: url, serverRoot: root,
+                                        shouldPerformDownload: navigationAction.shouldPerformDownload,
+                                        isMainFrame: isMainFrame) {
+        case .allow:
+            decisionHandler(.allow)
+        case .download:
+            decisionHandler(.download)
+        case .openOutside:
+            openOutside(url)
+            decisionHandler(.cancel)
+        case .cancel:
+            if let scheme = url.scheme?.lowercased(), scheme != "blob", scheme != "data" {
+                NSLog("CircuitMCP did not open %@: only http and https links leave the desk.", url.absoluteString)
+            }
+            decisionHandler(.cancel)
         }
-        openOutside(url)
-        decisionHandler(.cancel)
+    }
+
+    /// `.download` does nothing until something adopts the download. Without
+    /// this, WebKit drops the file on the floor after the policy returns.
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    /// The suggested name is what Save PNG put in the `<a download>` attribute
+    /// (`schematic-<id>.png`). A cancelled panel passes nil, which cancels the
+    /// download rather than writing somewhere the user did not choose.
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse,
+                  suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.nameFieldStringValue = suggestedFilename
+        let finish: (NSApplication.ModalResponse) -> Void = { result in
+            completionHandler(result == .OK ? panel.url : nil)
+        }
+        if let window = webView.window {
+            panel.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            finish(panel.runModal())
+        }
+    }
+
+    /// A failed download used to vanish: the policy had already cancelled the
+    /// navigation, so nothing reached `onLoadFailure`. The user has to hear it.
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        NSLog("CircuitMCP: a download failed: %@ (resume data %ld bytes)",
+              error.localizedDescription, resumeData?.count ?? 0)
+        let alert = NSAlert()
+        alert.messageText = "The file was not saved."
+        alert.informativeText = error.localizedDescription
+        alert.runModal()
     }
 
     /// Hands a URL the page chose to the rest of the Mac. Only the two schemes a link can
