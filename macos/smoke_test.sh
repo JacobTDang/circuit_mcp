@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # bash 3.2 parses the apostrophe inside a ${...:-default} as an unterminated quote, so the
 # default is assigned on its own line -- the same shape check_python_runtime.sh uses.
 APP="${1:-}"
-[ -n "$APP" ] || APP="$ROOT/dist/Circuit MCP.app"
+[ -n "$APP" ] || APP="$ROOT/dist/Circuit MCP.noindex/Circuit MCP.app"
 check=""
 home=""
 launched=no

@@ -47,6 +47,11 @@ public struct AppLocations: Equatable {
         bundle.appendingPathComponent("Contents/Resources/ngspice/bin/ngspice")
     }
 
+    /// The USB-C capture helper the app carries, compiled by `macos/build_app.sh`.
+    public static func bundledUSBCapture(in bundle: URL) -> URL {
+        bundle.appendingPathComponent("Contents/Resources/ipad_usb_capture")
+    }
+
     /// The AirPlay receiver the app carries, staged by `macos/stage_uxplay.sh`.
     public static func bundledUxplay(in bundle: URL) -> URL {
         bundledGStreamer(in: bundle).appendingPathComponent("bin/uxplay")

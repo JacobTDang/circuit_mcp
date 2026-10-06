@@ -76,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ])
         }
         window.contentView = content
+        restorePageZoom()
 
         status.onOpenLog = { [weak self] in self?.openLogs() }
         status.onRestart = { [weak self] in self?.restartServer() }
@@ -369,6 +370,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(withTitle: "Copy MCP Command", action: #selector(copyMCPCommand), keyEquivalent: "").target = self
         appMenu.addItem(withTitle: "Open Logs", action: #selector(openLogsMenu), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
+        // Standard position: the Hide group sits immediately above Quit. Without
+        // these items the Mac-wide shortcuts do nothing in this app.
+        let hide = appMenu.addItem(withTitle: "Hide \(Self.displayName)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        hide.target = NSApp
+        let hideOthers = appMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        hideOthers.target = NSApp
+        let showAll = appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
+        showAll.target = NSApp
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit \(Self.displayName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         main.addItem(submenu: appMenu, title: Self.displayName)
 
@@ -384,6 +395,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         main.addItem(submenu: edit, title: "Edit")
 
         let view = NSMenu(title: "View")
+        // "+" is Command-Shift-Equals, which the menu draws as ⌘+. One item can
+        // carry only one equivalent, so ⌘= (the key people actually press) is a
+        // second, hidden item with the same action.
+        view.addItem(withTitle: "Zoom In", action: #selector(zoomIn(_:)), keyEquivalent: "+").target = self
+        let zoomInEquals = view.addItem(withTitle: "Zoom In", action: #selector(zoomIn(_:)), keyEquivalent: "=")
+        zoomInEquals.keyEquivalentModifierMask = .command
+        zoomInEquals.isHidden = true
+        zoomInEquals.target = self
+        view.addItem(withTitle: "Zoom Out", action: #selector(zoomOut(_:)), keyEquivalent: "-").target = self
+        view.addItem(withTitle: "Actual Size", action: #selector(actualSize(_:)), keyEquivalent: "0").target = self
+        view.addItem(.separator())
         view.addItem(withTitle: "Reload Page", action: #selector(reloadDesk), keyEquivalent: "r").target = self
         main.addItem(submenu: view, title: "View")
 
@@ -394,6 +416,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.windowsMenu = windowMenu
 
         NSApp.mainMenu = main
+    }
+
+    private static let pageZoomKey = "CircuitMCPPageZoom"
+
+    /// A missing preference is actual size. `double(forKey:)` would return 0,
+    /// and clamping 0 lands on the minimum, so the first launch would open
+    /// the desk already zoomed out.
+    private func restorePageZoom() {
+        let stored = UserDefaults.standard.object(forKey: Self.pageZoomKey) as? Double
+        web.webView.pageZoom = DeskZoom.clamp(stored ?? DeskZoom.actual)
+    }
+
+    private func setPageZoom(_ zoom: Double) {
+        let clamped = DeskZoom.clamp(zoom)
+        web.webView.pageZoom = clamped
+        UserDefaults.standard.set(clamped, forKey: Self.pageZoomKey)
+    }
+
+    @objc private func zoomIn(_ sender: Any?) {
+        setPageZoom(DeskZoom.zoomIn(from: web.webView.pageZoom))
+    }
+
+    @objc private func zoomOut(_ sender: Any?) {
+        setPageZoom(DeskZoom.zoomOut(from: web.webView.pageZoom))
+    }
+
+    @objc private func actualSize(_ sender: Any?) {
+        setPageZoom(DeskZoom.actual)
     }
 
     @objc private func reloadDesk() {

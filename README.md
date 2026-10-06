@@ -85,7 +85,7 @@ macos/build_app.sh
 macos/smoke_test.sh
 ```
 
-That makes `dist/Circuit MCP.app` and a `.dmg`. In the app, **Copy MCP Command**
+That makes `dist/Circuit MCP.noindex/Circuit MCP.app` and a `.dmg`. The `.noindex` folder keeps Spotlight from listing the build next to the installed app. In the app, **Copy MCP Command**
 gives you the line to paste into Claude Code. The app is not notarized, so
 another Mac needs one extra step the first time; see
 [opening it on another Mac](docs/reference.md#opening-it-on-another-mac).

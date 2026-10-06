@@ -10,6 +10,8 @@
     <string>Circuit MCP</string>
     <key>CFBundleExecutable</key>
     <string>CircuitMCP</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>io.github.jacobtdang.circuitmcp</string>
     <key>CFBundleInfoDictionaryVersion</key>
@@ -26,6 +28,10 @@
          refuses the discovery silently and the iPad never sees a receiver. -->
     <key>NSLocalNetworkUsageDescription</key>
     <string>Circuit MCP runs a private AirPlay receiver on this Mac so your iPad can mirror its screen to the desk. Nothing leaves your local network.</string>
+    <!-- The USB-C fallback opens the iPad as a camera. Without this macOS
+         refuses the device silently and capture has no second path. -->
+    <key>NSCameraUsageDescription</key>
+    <string>Circuit MCP opens an iPad connected over USB-C as a camera so the desk can capture its screen when AirPlay is unavailable. The picture stays on this Mac.</string>
     <key>NSBonjourServices</key>
     <array>
         <string>_airplay._tcp</string>

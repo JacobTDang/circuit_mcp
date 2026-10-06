@@ -17,8 +17,24 @@ public enum ServerEnvironment {
         dataVariables(locations: locations)
             .merging(writableFolderVariables(locations: locations)) { existing, _ in existing }
             .merging(simulatorVariables(appBundle: appBundle, fileManager: fileManager)) { existing, _ in existing }
+            .merging(usbCaptureVariables(appBundle: appBundle, fileManager: fileManager)) { existing, _ in existing }
             .merging(receiverVariables(locations: locations, appBundle: appBundle,
                                        fileManager: fileManager)) { existing, _ in existing }
+    }
+
+    /// The USB-C capture helper the app carries, when it carries one.
+    ///
+    /// Unset, `paths.usb_capture()` falls back to the checkout's
+    /// `RUNTIME/bin/ipad_usb_capture`, which is what a checkout wants. Set to a
+    /// binary that is not there it would be worse than unset: `paths.usb_capture()`
+    /// refuses a variable it cannot run, so a bundle built without the helper
+    /// would fail every capture on a machine that had a working helper the whole time.
+    static func usbCaptureVariables(appBundle: URL?,
+                                    fileManager: FileManager = .default) -> [String: String] {
+        guard let appBundle else { return [:] }
+        let binary = AppLocations.bundledUSBCapture(in: appBundle)
+        guard fileManager.isExecutableFile(atPath: binary.path) else { return [:] }
+        return ["CIRCUIT_MCP_USB_CAPTURE": binary.path]
     }
 
     /// The AirPlay receiver the app carries, when it carries one.

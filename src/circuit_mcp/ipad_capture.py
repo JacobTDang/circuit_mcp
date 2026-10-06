@@ -20,7 +20,6 @@ from .processes import stop_within
 
 RUNTIME = paths.runtime_dir()
 WINDOW_INFO = RUNTIME / "bin" / "window_info"
-USB_CAPTURE = RUNTIME / "bin" / "ipad_usb_capture"
 SCREEN_CAPTURE = Path("/usr/sbin/screencapture")
 FFMPEG = Path(shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg")
 MAX_FRAME_BYTES = 25 * 1024 * 1024
@@ -28,6 +27,36 @@ MAX_FRAME_BYTES = 25 * 1024 * 1024
 
 class IPadCaptureError(RuntimeError):
     pass
+
+
+def _packaged_app() -> bool:
+    """True when this module was loaded from inside a .app bundle.
+
+    A checkout builds the helper with scripts/setup_ipad_capture.sh. The app
+    is supposed to carry it, so the same missing file there is a broken
+    bundle rather than a setup step the student can run. ``__file__`` is read
+    at call time so a test can point it into a bundle.
+    """
+    return ".app/Contents/" in Path(__file__).resolve().as_posix()
+
+
+def _usb_helper() -> tuple[Path, None] | tuple[None, str]:
+    """The helper to run, or the sentence to show when there is none.
+
+    A variable that names a non-executable is that error. It is not replaced
+    with the checkout's copy: that would let a broken bundle look healthy on
+    a machine that had built the helper.
+    """
+    try:
+        path = paths.usb_capture()
+    except ValueError as exc:
+        return None, str(exc)
+    if path.is_file() and os.access(path, os.X_OK):
+        return path, None
+    if _packaged_app():
+        return None, "USB capture helper is missing from this app. The bundle is broken."
+    return None, ("USB capture helper is not built. "
+                  "A checkout builds it with scripts/setup_ipad_capture.sh.")
 
 
 class IPadCaptureService:
@@ -184,10 +213,11 @@ class IPadCaptureService:
         return cached
 
     def _discover_usb_devices(self) -> tuple[list[dict], str | None]:
-        if not USB_CAPTURE.is_file():
-            return [], "USB helper is not built"
+        helper, missing = _usb_helper()
+        if missing is not None:
+            return [], missing
         try:
-            result = subprocess.run([str(USB_CAPTURE), "--list"], capture_output=True,
+            result = subprocess.run([str(helper), "--list"], capture_output=True,
                                     text=True, timeout=8, check=False)
             if result.returncode:
                 return [], result.stderr.strip() or "USB discovery failed"
@@ -228,15 +258,16 @@ class IPadCaptureService:
                 connected = connected or time.monotonic() - self._stream_active_at < 12
         usb, usb_error = self._refresh_usb_async()
         receiver = paths.uxplay()
+        helper, _missing = _usb_helper()
         return {
-            "ok": receiver is not None or USB_CAPTURE.is_file(),
+            "ok": receiver is not None or helper is not None,
             "airplay": {"available": receiver is not None, "running": running,
                         "unavailable": "" if receiver else self._airplay_unavailable(),
                         "connected": connected, "stream_ready": stream_ready,
                         "headless": True,
                         "receiver": "Circuit Capture",
                         "pin": pin, "pid": pid, "started_at": started, "logs": logs},
-            "usb": {"available": USB_CAPTURE.is_file(), "connected": bool(usb),
+            "usb": {"available": helper is not None, "connected": bool(usb),
                     "devices": usb, "error": usb_error},
             "active_source": "airplay" if connected and stream_ready else ("usb" if usb else None),
         }
@@ -262,11 +293,12 @@ class IPadCaptureService:
         if source in {"auto", "airplay"} and (airplay_connected or (airplay_running and stream_ready)):
             return self._capture_airplay_frame(stream_file)
         if source in {"auto", "usb"}:
-            if not USB_CAPTURE.is_file():
-                raise IPadCaptureError("USB capture helper is not built")
+            helper, missing = _usb_helper()
+            if missing is not None:
+                raise IPadCaptureError(missing)
             with tempfile.TemporaryDirectory(prefix="ipad-usb-") as directory:
                 output = Path(directory) / "frame.png"
-                result = subprocess.run([str(USB_CAPTURE), "--output", str(output)],
+                result = subprocess.run([str(helper), "--output", str(output)],
                                         capture_output=True, text=True, timeout=15, check=False)
                 if result.returncode == 0 and output.is_file():
                     return self._result(output.read_bytes(), "usb", {})
