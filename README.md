@@ -1,6 +1,6 @@
 # circuit_mcp
 
-![circuit_mcp: a sign error found at the step it happened, then the schematic, breadboard build and expected scope readings for the same circuit](docs/media/circuit-mcp.gif)
+![circuit_mcp: a sign error found at the step it happened, then the Mac app registering with Claude Code, the agent's schematic, breadboard and expected-readings cards landing on the desk, and the schematic saved as a PNG](docs/media/circuit-mcp.gif)
 
 An MCP server that checks circuit homework without doing it for you. Give it
 your working and it finds the first step that is wrong. The language model only
