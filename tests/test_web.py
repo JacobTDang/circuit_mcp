@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import threading
 from io import BytesIO
 
 import pytest
 from fastapi.testclient import TestClient
-from pypdf import PdfReader, PdfWriter, errors
+from pypdf import PdfReader, errors
 
 from circuit_mcp import ipad_capture, paths, web
 from circuit_mcp.cards import build_card
+from tests.fixtures.pdfs import encrypted_pdf, text_pdf
 
 
 def client(tmp_path, monkeypatch):
@@ -215,17 +217,8 @@ def test_upload_rejects_unsafe_type_and_oversized_stream(tmp_path, monkeypatch):
         assert not list(web.FILES.glob("*"))
 
 
-def _encrypted_pdf(user_password: str) -> bytes:
-    writer = PdfWriter()
-    writer.add_blank_page(width=612, height=792)
-    writer.encrypt(user_password=user_password, owner_password="owner", algorithm="RC4-128")
-    stream = BytesIO()
-    writer.write(stream)
-    return stream.getvalue()
-
-
 @pytest.mark.parametrize(("content", "failure", "sentence"), [
-    (_encrypted_pdf("secret"), errors.FileNotDecryptedError, "needs a password to open"),
+    (encrypted_pdf("secret"), errors.FileNotDecryptedError, "needs a password to open"),
     (b"this is not a pdf", errors.PdfStreamError, "is not a readable PDF"),
     (b"", errors.EmptyFileError, "is not a readable PDF"),
 ], ids=["open-password", "damaged", "empty"])
@@ -246,9 +239,49 @@ def test_an_unreadable_pdf_is_refused_with_a_sentence_and_leaves_no_file(
 def test_a_pdf_locked_only_against_editing_still_uploads(tmp_path, monkeypatch):
     with client(tmp_path, monkeypatch) as browser:
         response = browser.post("/api/library", data={"category": "lecture"},
-                                files={"file": ("owner.pdf", _encrypted_pdf(""), "application/pdf")})
+                                files={"file": ("owner.pdf", encrypted_pdf(""), "application/pdf")})
     assert response.status_code == 200
     assert response.json()["item"]["pages"] == 1
+
+
+def test_reading_an_upload_does_not_hold_up_the_rest_of_the_desk(tmp_path, monkeypatch):
+    """Issue #121: extraction ran on the event loop, so a long PDF froze every other request."""
+    extracting, answered = threading.Event(), threading.Event()
+    answered_while_reading = []
+
+    def slow_extract(path, extension):
+        extracting.set()
+        answered_while_reading.append(answered.wait(5))
+        return "slow lecture notes on op-amps", 1
+
+    monkeypatch.setattr(web, "_extract", slow_extract)
+    uploads = []
+    with client(tmp_path, monkeypatch) as browser:
+        upload = threading.Thread(target=lambda: uploads.append(browser.post(
+            "/api/library", files={"file": ("slow.pdf", b"%PDF-", "application/pdf")})))
+        upload.start()
+        assert extracting.wait(5)
+        assert browser.get("/healthz").status_code == 200
+        assert browser.get("/api/canvas").status_code == 200
+        answered.set()
+        upload.join(10)
+        found = browser.get("/api/library?q=op-amps").json()["items"]
+    assert answered_while_reading == [True], "nothing was answered until the PDF had been read"
+    assert uploads[0].status_code == 200
+    assert [item["name"] for item in found] == ["slow.pdf"]
+
+
+def test_an_uploaded_pdf_keeps_its_text_up_to_the_limit_and_is_searchable(tmp_path, monkeypatch):
+    pdf = text_pdf([f"page {number} of the capacitor chapter" for number in range(1, 41)])
+    kept = "\n".join(page.extract_text() for page in PdfReader(BytesIO(pdf)).pages)[:100]
+    monkeypatch.setattr(web, "TEXT_LIMIT", 100)
+    with client(tmp_path, monkeypatch) as browser:
+        item = browser.post("/api/library",
+                            files={"file": ("long.pdf", pdf, "application/pdf")}).json()["item"]
+        found = browser.get("/api/library?q=capacitor").json()["items"]
+    assert item["pages"] == 40
+    assert web._db().get_document(item["id"])["text"] == kept
+    assert [entry["id"] for entry in found] == [item["id"]]
 
 
 def test_unknown_tool_and_invalid_host_are_rejected(tmp_path, monkeypatch):

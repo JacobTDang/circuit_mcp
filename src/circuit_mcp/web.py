@@ -16,11 +16,10 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from pypdf import PdfReader
 from pypdf.errors import FileNotDecryptedError, PdfReadError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import paths, screen_recording, solution_sheet
+from . import paths, pdf_text, screen_recording, solution_sheet
 from .ocr_client import OCR_WORKER
 from .ocr_install import OCR_INSTALLER, OCRInstallError
 from .storage import CommandCenterDB, StorageError
@@ -68,6 +67,7 @@ HISTORY = DATA / "history.jsonl"
 DATABASE = DATA / "circuit_mcp.sqlite3"
 TRASH = DATA / "trash"
 MAX_UPLOAD = 50 * 1024 * 1024
+TEXT_LIMIT = 2_000_000
 ALLOWED = {
     ".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg", ".txt": "text/plain", ".md": "text/markdown",
@@ -175,10 +175,9 @@ def _record(kind: str, name: str, ok: bool, entity_type: str | None = None,
 
 def _extract(path: Path, extension: str) -> tuple[str, int | None]:
     if extension == ".pdf":
-        reader = PdfReader(path)
-        return "\n".join((page.extract_text() or "") for page in reader.pages)[:2_000_000], len(reader.pages)
+        return pdf_text.extract(path, TEXT_LIMIT)
     if extension in {".txt", ".md", ".csv"}:
-        return path.read_text(errors="replace")[:2_000_000], None
+        return path.read_text(errors="replace")[:TEXT_LIMIT], None
     return "", None
 
 
@@ -388,7 +387,10 @@ def library(q: str = "", category: str = "") -> dict[str, Any]:
 
 
 @app.post("/api/library")
-async def upload(file: UploadFile = File(...), category: str = Form("homework")) -> dict[str, Any]:
+def upload(file: UploadFile = File(...), category: str = Form("homework")) -> dict[str, Any]:
+    # A plain def runs in the threadpool. This waits seconds for a long PDF's text and on
+    # SQLite, and on the event loop that wait held up every other request: the board's
+    # poll, the iPad, /healthz.
     _prepare()
     if category not in {"homework", "lecture", "reference", "solution"}:
         raise HTTPException(400, "invalid category")
@@ -402,7 +404,7 @@ async def upload(file: UploadFile = File(...), category: str = Form("homework"))
     digest = hashlib.sha256()
     try:
         with target.open("xb") as stream:
-            while chunk := await file.read(1024 * 1024):
+            while chunk := file.file.read(1024 * 1024):
                 size += len(chunk)
                 if size > MAX_UPLOAD:
                     raise HTTPException(413, "file exceeds 50 MB")
