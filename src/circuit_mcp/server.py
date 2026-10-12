@@ -187,10 +187,13 @@ def _rendered_matrix(matrix: dict | None) -> dict | None:
 
 
 def _stringified(counterexample: dict | None) -> dict[str, str] | None:
-    """A counterexample's keys are SymPy symbols; JSON needs strings."""
+    """A counterexample's keys are SymPy symbols; JSON needs strings.
+
+    A value can be complex, and ``str`` would write its imaginary unit as ``I``.
+    """
     if not counterexample:
         return None
-    return {str(symbol): str(value) for symbol, value in counterexample.items()}
+    return {str(symbol): as_text(value) for symbol, value in counterexample.items()}
 
 
 def _failure(kind: str, message: str) -> dict[str, Any]:
@@ -1259,6 +1262,13 @@ def check_equivalence(expr_a: str, expr_b: str, attempt_id: str | None = None) -
     is a proof, ``numeric`` is random substitution -- conclusive when it finds a
     disagreement, strong evidence when it does not. A disagreement comes with a
     ``counterexample``: the values at which the two sides differ.
+
+    The random values are positive, which cannot tell ``Abs(x)``, ``re(x)`` or
+    ``conjugate(x)`` from ``x``. Inside those, ``sign``, ``arg``, ``im``,
+    ``Max``, ``Min``, ``Heaviside`` and a root of a square such as
+    ``sqrt(x^2)``, symbols are also tried at negative and complex values, so
+    ``Abs(Vo)`` is not ``Vo``; ``detail`` names the values that broke it. A
+    phasor written with ``j`` keeps the symbols beside ``j`` real.
 
     Both sides are parsed onto one set of symbols, so ``Rf`` on the left is the
     same object as ``Rf`` on the right.

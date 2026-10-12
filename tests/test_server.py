@@ -1233,6 +1233,36 @@ def test_derive_refuses_text_that_would_read_a_value_named_e_back_as_eulers_numb
     assert "'e'" in result["message"]
 
 
+@pytest.mark.parametrize("left, right", [("Abs(Vo)", "Vo"), ("re(Z)", "Z"), ("conjugate(H)", "H")])
+def test_a_magnitude_real_part_or_conjugate_is_not_its_argument(left, right):
+    result = check_equivalence(left, right)
+    assert result["ok"] is True
+    assert result["equivalent"] is False
+    assert result["counterexample"]
+
+
+def test_a_complex_counterexample_is_written_with_j():
+    result = check_equivalence("re(Z)", "Z")
+    value = result["counterexample"]["Z"]
+    assert "j" in value and "I" not in value
+    assert check_equivalence(f"re({value})", value)["equivalent"] is False
+
+
+def test_a_derivation_that_drops_a_magnitude_is_not_an_equality():
+    result = check_derivation(["Abs(Vo)/R", "Vo/R"], "Vo/R")
+    assert result["ok"] is False
+    assert result["kind"] == "algebra"
+
+
+def test_a_walkthrough_that_drops_a_magnitude_is_refused():
+    result = canvas_card_add("walkthrough", "magnitude", {
+        "truth": "Vo",
+        "steps": [{"expression": "Abs(Vo)"}, {"expression": "Vo"}],
+    })
+    assert result["ok"] is False
+    assert result["error"] == "card_refused"
+
+
 @pytest.mark.parametrize("name", ["check_equivalence", "check_derivation", "check_setup",
                                   "canvas_card_add"])
 def test_every_expression_tool_says_how_I_E_j_and_e_are_read(name):

@@ -521,6 +521,20 @@ def test_the_display_parse_reads_the_same_notation():
     assert parse_as_written("2j").has(sp.I)
 
 
+def test_a_real_part_of_a_phasor_written_with_j_is_kept_whole():
+    """Distributed, re(R + j*X) is re(R) - im(X): nothing says R and X are real parts."""
+    from circuit_mcp.parsing import parse_as_written
+
+    R, X = sp.symbols("R X")
+    for name in ("re", "im", "conjugate"):
+        parsed = parse_expression(f"{name}(R + j*X)")
+        assert parsed.atoms(getattr(sp, name)) == {getattr(sp, name)(R + sp.I * X, evaluate=False)}
+        assert equivalent(parsed, getattr(sp, name)(R + sp.I * X)).equivalent
+        assert parse_as_written(f"{name}(R + j*X)").has(sp.I)
+    assert parse_expression("re(3 + 4j)") == 3
+    assert parse_expression("re(Z)") == sp.re(sp.Symbol("Z"))
+
+
 def test_a_sum_over_j_says_why_j_is_not_an_index():
     with pytest.raises(ParseError, match="imaginary unit"):
         parse_expression("sum_n(R_j, j, 1, n)")

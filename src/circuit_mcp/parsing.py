@@ -214,6 +214,22 @@ def _bounded_sum(expression: object, index: object, lower: object, upper: object
     return sp.Sum(expression, (index, lower, upper))
 
 
+def _phase_part(function):
+    """``re``, ``im`` or ``conjugate``, kept whole when its argument is written with ``j``.
+
+    SymPy distributes them over such an argument -- ``re(R + j*X)`` becomes
+    ``re(R) - im(X)`` -- which erases the one sign that ``R`` and ``X`` are a
+    phasor's real parts. ``equivalence`` reads that sign to decide which symbols
+    may be complex. The value is the same either way, and a number still
+    evaluates. ``evaluate`` is accepted because ``parse_as_written`` passes it.
+    """
+    def call(argument, evaluate=True):
+        argument = sp.sympify(argument)
+        phasor = argument.has(sp.I) and bool(argument.free_symbols)
+        return function(argument, evaluate=evaluate and not phasor)
+    return call
+
+
 # The functions a string may call.
 _FUNCTIONS: dict[str, object] = {
     "par": _parallel,
@@ -234,10 +250,10 @@ _FUNCTIONS: dict[str, object] = {
     "tanh": sp.tanh,
     "Abs": sp.Abs,
     "sign": sp.sign,
-    "re": sp.re,
-    "im": sp.im,
+    "re": _phase_part(sp.re),
+    "im": _phase_part(sp.im),
     "arg": sp.arg,
-    "conjugate": sp.conjugate,
+    "conjugate": _phase_part(sp.conjugate),
     "Max": sp.Max,
     "Min": sp.Min,
     "Heaviside": sp.Heaviside,
