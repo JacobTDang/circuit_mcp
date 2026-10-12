@@ -664,9 +664,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let source = panel.url else { return }
 
+        let importer = DataImporter()
+        let destination = locations.commandCenterDirectory
         let confirm = NSAlert()
         confirm.messageText = "Import \(source.lastPathComponent)?"
-        confirm.informativeText = "The server stops while the folder is copied. Your current data stays where it is until the copy is complete, and is then moved to a backup folder, not deleted. Cancelling or quitting during the copy leaves your data as it was."
+        confirm.informativeText = "The server stops while the folder is copied. Your current data stays where it is until the copy is complete, and is then kept as a backup until your next import. Cancelling or quitting during the copy leaves your data as it was."
+        do {
+            let replaced = try importer.backupsDeletedByNextImport(at: destination)
+            if !replaced.isEmpty {
+                confirm.informativeText += "\n\nOnly the latest import's backup is kept, so this import deletes:\n"
+                    + replaced.map { "  \($0.path)" }.joined(separator: "\n")
+            }
+        } catch {
+            confirm.informativeText += "\n\nThis import deletes the backup from your previous import, and the backups could not be listed to name it: \(error)"
+        }
         confirm.addButton(withTitle: "Import")
         confirm.addButton(withTitle: "Cancel")
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
@@ -685,17 +696,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.importProgressTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.showImportProgress(progress) }
             }
-            let importer = DataImporter()
-            let destination = locations.commandCenterDirectory
             // The copy is unbounded -- it is the user's whole notebook -- and on the main thread
             // it freezes the window that is asking them to wait for it, progress bar included.
             DispatchQueue.global().async {
                 let report: (title: String, detail: String, cancelled: Bool)
                 do {
                     let result = try importer.importCommandCenter(from: source, to: destination, progress: progress)
-                    report = ("Data imported.",
-                              result.backup.map { "The previous app data is in \($0.path)." } ?? "There was no previous app data.",
-                              false)
+                    report = ("Data imported.", result.summary, false)
                 } catch is CancellationError {
                     report = ("Import cancelled.", "Nothing was changed: your data is as it was before the import.", true)
                 } catch {

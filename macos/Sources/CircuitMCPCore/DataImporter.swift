@@ -47,7 +47,13 @@ extension DataImportError: CustomStringConvertible, LocalizedError {
 }
 
 public struct ImportResult: Equatable {
+    /// Where the data the import replaced is now, or nil when there was none.
     public let backup: URL?
+    /// The earlier imports' backups this import deleted.
+    public let deletedBackups: [URL]
+    /// What the success alert says: where the replaced data is, how long it is kept, and what was
+    /// deleted or could not be. The alert used to name the backup and stop there.
+    public let summary: String
 }
 
 /// What an import left on disk, so a failure can be explained in terms the student can act on.
@@ -64,7 +70,12 @@ public struct ImportRecovery: Equatable {
 }
 
 /// One-time copy of an existing command-center folder into the app's data folder.
-/// Nothing of the student's is ever deleted: existing app data is moved aside, not removed.
+///
+/// The data an import replaces is kept as `command_center.backup-<time>` until the next successful
+/// import, which deletes it: one backup at most, holding what the latest import replaced. Keeping
+/// every one had repeated imports grow Application Support by a whole notebook each. A folder named
+/// `command_center.before-import-<time>` is data an import moved aside and could not put back, and
+/// may be the student's only copy; nothing deletes one of those.
 ///
 /// The folder is copied beside the data folder first, and the data folder is only moved aside once
 /// that copy is complete, so putting the copy in place is two renames. The copy is the long part
@@ -139,11 +150,14 @@ public struct DataImporter {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(identifier: "UTC")
         formatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+        let stamp = formatter.string(from: now)
         let aside = destination.deletingLastPathComponent()
-            .appendingPathComponent("\(destination.lastPathComponent).before-import-\(formatter.string(from: now))", isDirectory: true)
+            .appendingPathComponent("\(destination.lastPathComponent).before-import-\(stamp)", isDirectory: true)
+        let kept = destination.deletingLastPathComponent()
+            .appendingPathComponent("\(Self.backupPrefix(for: destination))\(stamp)", isDirectory: true)
         let replacesData = fileManager.fileExists(atPath: destination.path)
-        if replacesData, fileManager.fileExists(atPath: aside.path) {
-            throw DataImportError.backupExists(aside.path)
+        if replacesData, let taken = [aside, kept].first(where: { fileManager.fileExists(atPath: $0.path) }) {
+            throw DataImportError.backupExists(taken.path)
         }
 
         let staging = Self.stagingFolder(for: destination)
@@ -180,7 +194,78 @@ public struct DataImporter {
             discard(staging)
             throw error
         }
-        return ImportResult(backup: backup)
+        guard let backup else {
+            // Nothing was replaced, so no backup was made, and the one an earlier import left is
+            // still the latest: it stays.
+            return ImportResult(backup: nil, deletedBackups: [], summary: "There was no previous app data.")
+        }
+        return keepOnly(backup, as: kept, beside: destination)
+    }
+
+    /// `command_center.backup-`: the only folders the retention policy ever deletes.
+    private static func backupPrefix(for destination: URL) -> String {
+        "\(destination.lastPathComponent).backup-"
+    }
+
+    /// The backups of earlier imports, which the next import that replaces data deletes. The
+    /// confirmation names them, while the student can still move one somewhere safe.
+    public func backupsDeletedByNextImport(at destination: URL) throws -> [URL] {
+        guard fileManager.fileExists(atPath: destination.path) else { return [] }
+        return try backups(beside: destination)
+    }
+
+    private func backups(beside destination: URL) throws -> [URL] {
+        let parent = destination.deletingLastPathComponent()
+        let prefix = Self.backupPrefix(for: destination)
+        return try fileManager.contentsOfDirectory(atPath: parent.path).filter { $0.hasPrefix(prefix) }.sorted()
+            .map { parent.appendingPathComponent($0, isDirectory: true) }
+    }
+
+    /// The retention policy, run once this import's copy is in place: what it replaced becomes
+    /// the one backup, and every earlier import's backup is deleted.
+    ///
+    /// The data is moved aside as `before-import-` and only renamed to `backup-` here, after the
+    /// import has succeeded, so a folder a failed import could not put back never carries the name
+    /// that is deleted. Which backup survives is decided by which import made it, not by the time
+    /// in its name: a clock set back would otherwise delete the newest. The import has already
+    /// succeeded, so nothing here can fail it; what cleanup could not do is said in the summary.
+    private func keepOnly(_ aside: URL, as kept: URL, beside destination: URL) -> ImportResult {
+        var sentences: [String] = []
+        let backup: URL
+        do {
+            try fileManager.moveItem(at: aside, to: kept)
+            backup = kept
+            sentences.append("Your previous data is in \(kept.path). It is kept until your next import, which deletes it.")
+        } catch {
+            backup = aside
+            sentences.append("""
+                Your previous data is in \(aside.path). It could not be renamed as this import's \
+                backup (\(error.localizedDescription)), so later imports will not delete it: delete \
+                it yourself once you no longer need it.
+                """)
+        }
+
+        var deleted: [URL] = []
+        do {
+            for earlier in try backups(beside: destination) where earlier.lastPathComponent != backup.lastPathComponent {
+                do {
+                    try fileManager.removeItem(at: earlier)
+                    deleted.append(earlier)
+                } catch {
+                    sentences.append("\(earlier.path) could not be deleted (\(error.localizedDescription)). Delete it in Finder to free its space.")
+                }
+            }
+        } catch {
+            sentences.append("""
+                The backups of earlier imports could not be listed to delete them \
+                (\(error.localizedDescription)). They are in \(destination.deletingLastPathComponent().path).
+                """)
+        }
+        if !deleted.isEmpty {
+            let paths = deleted.map { "  \($0.path)" }.joined(separator: "\n")
+            sentences.insert("The backup from your previous import was deleted to free its space:\n\(paths)", at: 1)
+        }
+        return ImportResult(backup: backup, deletedBackups: deleted, summary: sentences.joined(separator: "\n\n"))
     }
 
     /// `FileManager`'s own recursive copy, which keeps what a copy of the folder should --
