@@ -16,7 +16,7 @@ from html import escape
 from typing import Any
 
 from . import parts as P
-from .breadboard import COLUMNS, GROUND, RAIL_ORDER, Layout, parse_build, place, strip_of
+from .breadboard import COLUMNS, GROUND, RAIL_ORDER, TIE_RESISTOR, Layout, parse_build, place, strip_of
 
 Hole = tuple
 Box = tuple    # (x0, y0, x1, y1)
@@ -73,6 +73,7 @@ def _signal_nets(layout: Layout) -> list[str]:
     candidates = [net for use in layout.build.opamps for net in (use.out, use.inn, use.inp)]
     candidates += [net for part in layout.placed for net in part["nodes"]]
     candidates += [item["net"] for item in layout.attachments]
+    candidates += [net for chip in layout.chips for net in chip["nets"].values()]   # unused sections' followers
     order: list[str] = []
     for net in candidates:
         if net not in POWER_COLOURS and net not in order:
@@ -151,9 +152,17 @@ def steps(layout: Layout) -> list[Step]:
     )]
     for placed in layout.chips:
         chip = build.chips[placed["ref"]]
-        listed.append(("chip", placed,
-                       f"{placed['ref']} {chip.part}: straddle the trench with pin 1 at f{placed['col0']} "
-                       f"(notch to the left); pin {chip.vplus} (V+) and pin {chip.vminus} (V-) are wired below."))
+        text = (f"{placed['ref']} {chip.part}: straddle the trench with pin 1 at f{placed['col0']} "
+                f"(notch to the left); pin {chip.vplus} (V+) and pin {chip.vminus} (V-) are wired below.")
+        tied = placed["tied"]
+        if len(tied) == 1:
+            text += (f" Unused section {tied[0]} is tied off below as a follower: OUT to IN-, and IN+ to ground "
+                     f"through {TIE_RESISTOR}Ω, so it cannot float, oscillate, or couple noise into the circuit.")
+        elif tied:
+            text += (f" Unused sections {', '.join(tied[:-1])} and {tied[-1]} are tied off below as followers: OUT "
+                     f"to IN-, and IN+ to ground through {TIE_RESISTOR}Ω, so none can float, oscillate, or couple "
+                     f"noise into the circuit.")
+        listed.append(("chip", placed, text))
     for part in layout.placed:
         label = f"{part['ref']} {part['value']}{P.UNITS.get(part['kind'], '')}".strip()
         if part["kind"] == "pot":
@@ -477,10 +486,14 @@ class _Labeller:
 
 
 def _around(anchor: Point, half: tuple, size: tuple) -> list:
-    """Spots above, below, and to either side of a body, stepping outward."""
+    """Spots above, below, and to either side of a body, stepping outward.
+
+    Eight rings reach past the tags already round a chip, which an unused
+    section's tie-off resistor, beside the chip at the board's edge, needs.
+    """
     (ax, ay), (hw, hh), (w, h) = anchor, half, size
     boxes = []
-    for ring in range(6):
+    for ring in range(8):
         gap = 3 + ring * PITCH / 2
         for shift in (0.0, -PITCH, PITCH, -2 * PITCH, 2 * PITCH):
             left = ax - w / 2 + shift

@@ -24,6 +24,24 @@ CHIP_COL0 = 12          # one chip occupies columns 12..18
 # and six right of the second; a third would leave too few for the parts.
 CHIP_COL0S = {0: (), 1: (CHIP_COL0,), 2: (6, 18)}
 MAX_CHIPS = max(CHIP_COL0S)
+# An unused op-amp section is tied off as a unity-gain follower, OUT wired to
+# IN-, with IN+ held at ground through this resistor; left floating, its inputs
+# pick up noise and it can oscillate or rail, disturbing the sections in use.
+# TI's LM324 guideline (SLOA277, 7.2) asks for a linear follower with no input on
+# a low-impedance node, and 7.1 forbids wiring any input straight to ground or a
+# rail: its input diode conducts when the V- pin rises above ground at power-up,
+# so the resistor limits that current, well under the LMC660's 5 mA input limit.
+# The same tie suits both chips. Ground is inside both input ranges, which reach
+# V- and end 1.5 V (LM324) or 2.3 V (LMC660) below V+ -- the LMC660 is rail to
+# rail at its output only -- and place() checks that against the supply. On a
+# split supply the follower sits at 0 V, mid-supply and linear. On a single
+# supply ground is V-, which both inputs accept, and the output rests at its low
+# limit: TI's "soft VOL", stable and drawing slightly less current on the LM324,
+# and within the LMC660's rail-to-rail output. A mid-supply divider would keep it
+# linear at the cost of two more resistors per section on a student's board. The
+# expected card simulates only the build's own sections, since a follower at
+# ground draws nothing from them.
+TIE_RESISTOR = "10k"
 GROUND = "gnd"
 # The four rails, top to bottom as the board is drawn. Everything that depends
 # on rail order derives from this: the collision model below, and the renderer's
@@ -659,6 +677,12 @@ def _place_multi_pin(layout: Layout, part: Part) -> None:
     _record(layout, part, ends)
 
 
+def _unused_sections(build: Build, ref: str) -> list[P.OpAmpSection]:
+    """The sections of chip `ref` that no opamp in the build uses."""
+    used = {use.section for use in build.opamps if use.chip == ref}
+    return [section for section in build.chips[ref].sections if section.name not in used]
+
+
 def _chip_claims(layout: Layout) -> dict[tuple, str]:
     """The net on each strip a chip pin sits in."""
     return {strip_of(chip["pins"][pin]): net for chip in layout.chips for pin, net in chip["nets"].items()}
@@ -703,7 +727,9 @@ def _wire_nets(layout: Layout) -> None:
     """
     owners = _net_strips(layout)
     power = [net for net in ("vplus", "vminus", GROUND) if net in owners]
-    for net in power + sorted(set(owners) - set(power)):
+    # The build's nets before the tie-offs, so its wires keep their place in the list.
+    others = sorted(set(owners) - set(power), key=lambda net: (net not in layout.build.nets(), net))
+    for net in power + others:
         strips = sorted(owners[net], key=str)
         start = layout.homes.get(net, strips[0])
         joined, waiting = [start], [strip for strip in strips if strip != start]
@@ -797,7 +823,18 @@ def place(build: Build) -> Layout:
             if use.chip == ref:
                 section = chip.section(use.section)
                 nets.update({section.inp: use.inp, section.inn: use.inn, section.out: use.out})
-        layout.chips.append({"ref": ref, "part": chip.part, "col0": col0, "pins": pins, "nets": nets})
+        tied = _unused_sections(build, ref)
+        if tied and build.vplus < chip.input_headroom_high:
+            raise BuildError(
+                f"{ref} {chip.part}: ground is outside its input common-mode range on a +{build.vplus:g} V supply "
+                f"(the range ends {chip.input_headroom_high:g} V below V+), so its unused sections cannot be "
+                f"tied off at ground; raise supply.vplus")
+        for section in tied:
+            # The hyphen keeps these names apart from any net a build can name.
+            name = f"{ref}{section.name}"
+            nets.update({section.inp: f"{name}-in", section.inn: f"{name}-out", section.out: f"{name}-out"})
+        layout.chips.append({"ref": ref, "part": chip.part, "col0": col0, "pins": pins, "nets": nets,
+                             "tied": [section.name for section in tied]})
         for pin, net in nets.items():
             if net not in layout.homes:
                 _assign_home(layout, net, strip_of(pins[pin]))
@@ -809,6 +846,12 @@ def place(build: Build) -> Layout:
     for part in build.parts:
         if part.kind not in ("pot", "led"):
             _place_two_terminal(layout, part)
+    # The build's own parts choose their holes first; a tie-off only needs its IN+
+    # strip's outer hole and the ground rail beside it.
+    for chip in layout.chips:
+        for section in chip["tied"]:
+            name = f"{chip['ref']}{section}"
+            _place_two_terminal(layout, Part(f"{name}-tie", "resistor", TIE_RESISTOR, (f"{name}-in", GROUND)))
     _wire_nets(layout)
     for source in build.sources:
         hole = _clip_hole(layout, source.node, f"the {source.ref} lead")
@@ -866,6 +909,21 @@ def verify(layout: Layout) -> None:
 
     def union(a, b):
         parent[find(a)] = find(b)
+
+    # Every pin is wired, and a section the build does not use is a follower with
+    # IN+ held at ground through a part, never on it directly: the connectivity
+    # check below then proves each of those wires is really on the board.
+    for chip in layout.chips:
+        nets = chip["nets"]
+        for pin in range(1, layout.build.chips[chip["ref"]].pins + 1):
+            if pin not in nets:
+                raise BuildError(f"layout error: {chip['ref']} pin {pin} is left floating")
+        for section in _unused_sections(layout.build, chip["ref"]):
+            inp = nets[section.inp]
+            held = inp != GROUND and any(set(part["nodes"]) == {inp, GROUND} for part in layout.placed)
+            if nets[section.out] != nets[section.inn] or not held:
+                raise BuildError(f"layout error: unused section {chip['ref']}{section.name} is not tied off as a "
+                                 f"follower with IN+ held at ground through a resistor")
 
     claims: dict[tuple, str] = {**layout.strip_net, **_chip_claims(layout)}
     for part in layout.placed:

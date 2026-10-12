@@ -151,7 +151,8 @@ from tests.fixtures import lab1  # noqa: E402
 def test_every_lab1_circuit_places_and_verifies(name):
     layout = place(parse_build(lab1.ALL[name]))
     verify(layout)
-    assert len(layout.placed) == len(lab1.ALL[name]["parts"])
+    unused = 4 - len(lab1.ALL[name].get("opamps", [])) if lab1.ALL[name].get("chips") else 0
+    assert len(layout.placed) == len(lab1.ALL[name]["parts"]) + unused   # one tie-off resistor per unused section
 
 
 def test_the_chip_straddles_the_trench_with_pin_one_bottom_left():
@@ -494,7 +495,7 @@ def test_jumper_steps_name_the_wire_colour_the_drawing_uses():
     jumpers = [step for step in wire_list(layout) if step.startswith("Jumper")]
     assert jumpers
     for step in jumpers:
-        named = re.match(r"Jumper, (\w+) \((\w+)\): ", step)
+        named = re.match(r"Jumper, (\w+) \(([\w-]+)\): ", step)
         assert named and colours[named.group(2)] == named.group(1), step
 
 
@@ -782,6 +783,7 @@ def _assert_wired_as_built(layout):
     Independent of verify(): it never reads the placer's strip claims or homes,
     only holes, so a placer that claims a net it never wired cannot pass.
     """
+    from circuit_mcp import parts as P
     from circuit_mcp.breadboard import MAX_SPAN, RAIL_ORDER
 
     build = layout.build
@@ -813,12 +815,16 @@ def _assert_wired_as_built(layout):
     if build.dual_supply:
         terminals.append((("rail", "top+"), "vminus"))
     nodes = {part.ref: part.nodes for part in build.parts}
+    ties = []   # anything placed that the build does not list must tie off an unused section
     for part in layout.placed:
-        assert part["ref"] in nodes, f"{part['ref']} is not in the build"
-        terminals += [(strip_of(hole), net) for net, hole in zip(nodes[part["ref"]], part["ends"])]
+        if part["ref"] in nodes:
+            terminals += [(strip_of(hole), net) for net, hole in zip(nodes[part["ref"]], part["ends"])]
+        else:
+            ties.append(part)
         cols = [hole[2] if hole[0] == "rail" else hole[1] for hole in part["ends"]]
         assert max(cols) - min(cols) <= MAX_SPAN, f"{part['ref']} is stretched across {part['ends']}"
-    assert sorted(p["ref"] for p in layout.placed) == sorted(nodes), "a part of the build was never placed"
+    assert sorted(p["ref"] for p in layout.placed if p["ref"] in nodes) == sorted(nodes), "a part of the build was never placed"
+    unused_inputs = []
     assert [chip["ref"] for chip in layout.chips] == list(build.chips), "a chip of the build was never placed"
     for placed in layout.chips:
         chip = build.chips[placed["ref"]]
@@ -831,6 +837,22 @@ def _assert_wired_as_built(layout):
             section = chip.section(use.section)
             terminals += [(strip_of(pins[section.inp]), use.inp), (strip_of(pins[section.inn]), use.inn),
                           (strip_of(pins[section.out]), use.out)]
+        used = {use.section for use in build.opamps if use.chip == placed["ref"]}
+        for section in (section for section in chip.sections if section.name not in used):
+            # An unused section is a follower, OUT on IN-, on a node of its own.
+            name = f"{placed['ref']}{section.name}"
+            terminals += [(strip_of(pins[section.out]), f"{name} follower"),
+                          (strip_of(pins[section.inn]), f"{name} follower"),
+                          (strip_of(pins[section.inp]), f"{name} IN+")]
+            unused_inputs.append((name, find(strip_of(pins[section.inp]))))
+    # Each unused IN+ is held at ground through a 10 kΩ resistor of its own, never wired to it directly.
+    ground = find(("rail", "bot-"))
+    for name, node in unused_inputs:
+        held = [part for part in ties if part["kind"] == "resistor" and P.parse_value(part["value"]) == 10e3
+                and {find(strip_of(end)) for end in part["ends"]} == {node, ground}]
+        assert len(held) == 1, f"{name}: IN+ is not held at ground through one 10 kΩ resistor"
+        terminals += [(strip_of(end), f"{name} IN+" if find(strip_of(end)) == node else GROUND) for end in held[0]["ends"]]
+    assert len(ties) == len(unused_inputs), f"placed parts that are neither the build's nor a tie-off: {ties}"
     clips = {source.ref: source.node for source in build.sources} | {probe.label: probe.node for probe in build.probes}
     terminals += [(strip_of(item["hole"]), clips[item["ref"]]) for item in layout.attachments]
 
@@ -1057,3 +1079,86 @@ def test_the_build_format_says_how_many_chips_a_board_takes():
 
     assert MAX_CHIPS == 2
     assert "one or two chips" in " ".join(server.canvas_card_add.__doc__.split())
+
+
+# --- unused sections are tied off -------------------------------------------------
+
+def _sections_build(part, used, dual):
+    """A follower driving a load on each used section of one chip; the rest are the placer's to tie off."""
+    return {"supply": {"vplus": 15, "vminus": -15 if dual else 0}, "chips": [{"ref": "U1", "part": part}],
+            "parts": [{"ref": f"RL{s}", "kind": "resistor", "value": "10k", "nodes": [f"out{s}", "gnd"]} for s in used],
+            "opamps": [{"ref": f"U1{s}", "chip": "U1", "section": s, "inp": f"in{s}", "inn": f"out{s}", "out": f"out{s}"}
+                       for s in used]}
+
+
+@pytest.mark.parametrize("dual", [True, False], ids=["dual", "single"])
+@pytest.mark.parametrize("part", ["LM324", "LMC660"])
+@pytest.mark.parametrize("used", ["A", "D", "AC", "BD", "ABC", "BCD", "ABCD"])
+def test_every_section_is_used_or_tied_off_as_a_follower_held_at_ground(used, part, dual):
+    layout = place(parse_build(_sections_build(part, used, dual)))
+    _assert_wired_as_built(layout)   # proves each tie-off from the holes alone
+    ties = sorted(p["ref"] for p in layout.placed if p["ref"] not in {f"RL{s}" for s in used})
+    assert ties == [f"U1{s}-tie" for s in "ABCD" if s not in used]
+
+
+def test_both_chips_tie_off_their_own_unused_sections():
+    layout = place(parse_build(ISSUE_126_CASCADE))
+    _assert_wired_as_built(layout)
+    assert sorted(p["ref"] for p in layout.placed if p["ref"].endswith("-tie")) == [
+        f"{chip}{s}-tie" for chip in ("U1", "U2") for s in "BCD"]
+
+
+def test_the_tie_offs_are_steps_in_the_wire_list_and_entries_in_the_legend():
+    layout = place(parse_build(lab1.EXP1_NONINVERTING))
+    wires = wire_list(layout)
+    chip_step = next(w for w in wires if w.startswith("U1 LM324"))
+    assert "Unused sections B, C and D are tied off" in chip_step, chip_step
+    for s in "BCD":
+        assert any(w.startswith(f"U1{s}-tie 10kΩ: ") and "rail" in w for w in wires), s
+        assert any(re.match(rf"Jumper, \w+ \(U1{s}-out\): ", w) for w in wires), s
+    legend = {n["net"]: n["members"] for n in nets(layout)}
+    assert legend["U1B-out"] == ["U1 pin 6 (IN- B)", "U1 pin 7 (OUT B)"]
+    assert legend["U1B-in"] == ["U1 pin 5 (IN+ B)", "U1B-tie"]
+    assert "U1B-tie" in legend["gnd"]
+
+
+def test_a_chip_with_every_section_in_use_has_nothing_to_tie_off():
+    layout = place(parse_build(_sections_build("LM324", "ABCD", True)))
+    assert not [p for p in layout.placed if p["ref"].endswith("-tie")]
+    assert "nused" not in next(w for w in wire_list(layout) if w.startswith("U1 LM324"))
+
+
+def test_verify_refuses_an_unused_section_whose_resistor_is_missing():
+    layout = place(parse_build(lab1.EXP1_NONINVERTING))
+    layout.placed = [p for p in layout.placed if p["ref"] != "U1C-tie"]
+    with pytest.raises(BuildError, match="unused section U1C is not tied off"):
+        verify(layout)
+
+
+def test_verify_refuses_an_unused_input_wired_straight_to_ground():
+    """TI's LM324 guideline, section 7.1: no input directly on ground or a rail."""
+    layout = place(parse_build(lab1.EXP1_NONINVERTING))
+    layout.chips[0]["nets"][5] = GROUND
+    with pytest.raises(BuildError, match="unused section U1B is not tied off"):
+        verify(layout)
+
+
+def test_verify_refuses_an_unused_follower_without_its_wire():
+    layout = place(parse_build(lab1.EXP1_NONINVERTING))
+    layout.jumpers = [j for j in layout.jumpers if j["net"] != "U1D-out"]
+    with pytest.raises(BuildError, match="net U1D-out is split"):
+        verify(layout)
+
+
+def test_verify_refuses_a_chip_pin_left_floating():
+    layout = place(parse_build(lab1.EXP1_NONINVERTING))
+    del layout.chips[0]["nets"][10]
+    with pytest.raises(BuildError, match="U1 pin 10 is left floating"):
+        verify(layout)
+
+
+@pytest.mark.parametrize("part,vplus", [("LM324", 1.4), ("LMC660", 2.2)])
+def test_a_supply_that_puts_ground_outside_the_input_range_is_refused(part, vplus):
+    """The tie-off holds IN+ at ground, which must sit inside the chip's input common-mode range."""
+    with pytest.raises(BuildError, match=rf"U1 {part}: ground is outside its input common-mode range"):
+        place(parse_build(_sections_build(part, "A", dual=True) | {"supply": {"vplus": vplus, "vminus": -5}}))

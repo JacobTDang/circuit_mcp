@@ -32,6 +32,7 @@ class Chip:
     sections: tuple[OpAmpSection, ...]
     headroom_high: float  # volts the output stops short of V+
     headroom_low: float   # volts the output stops short of V-
+    input_headroom_high: float  # volts below V+ where the input common-mode range ends; both reach V-
 
     def section(self, name: str) -> OpAmpSection:
         for section in self.sections:
@@ -52,9 +53,11 @@ QUAD_DIP14 = (
 CHIPS: dict[str, Chip] = {
     # LM324: output reaches V+ - 1.5 V; low side is within tens of mV of V- when
     # sinking little current, 0.5 V is a conservative figure for a loaded output.
-    "LM324": Chip("LM324", 14, 4, 11, QUAD_DIP14, headroom_high=1.5, headroom_low=0.5),
-    # LMC660: rail-to-rail output.
-    "LMC660": Chip("LMC660", 14, 4, 11, QUAD_DIP14, headroom_high=0.1, headroom_low=0.1),
+    # Inputs work from V- up to V+ - 1.5 V (TI SLOS066, 25 C).
+    "LM324": Chip("LM324", 14, 4, 11, QUAD_DIP14, headroom_high=1.5, headroom_low=0.5, input_headroom_high=1.5),
+    # LMC660: rail-to-rail output, but not input: inputs work from V- - 0.1 V up
+    # to V+ - 2.3 V (TI SNOSC51D, 25 C).
+    "LMC660": Chip("LMC660", 14, 4, 11, QUAD_DIP14, headroom_high=0.1, headroom_low=0.1, input_headroom_high=2.3),
 }
 
 
