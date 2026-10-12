@@ -30,6 +30,31 @@ def test_dashboard_and_real_tool_execution(tmp_path, monkeypatch):
         assert result["equivalent"] is True
 
 
+def test_status_lists_the_tools_whether_the_workspace_file_is_missing_or_empty(tmp_path, monkeypatch):
+    """Issue #143: a `{}` workspace file 500ed /api/status, so the bench never got its tools."""
+    config = paths.workspace_config()
+    with client(tmp_path, monkeypatch) as browser:
+        assert not config.exists()
+        missing = browser.get("/api/status")
+        config.write_text("{}")
+        empty = browser.get("/api/status")
+    for response in (missing, empty):
+        assert response.status_code == 200
+        assert "derive" in response.json()["tools"]
+    assert empty.json()["workspace_configuration"]["configured"] is False
+
+
+def test_app_js_loads_the_other_panes_when_the_status_fails(tmp_path, monkeypatch):
+    """Issue #143: every pane loaded after the status, so one failed status left them all empty."""
+    with client(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+    refresh = app_script.split("async function refresh(){", 1)[1].split("\n", 1)[0]
+    # The status has its own catch, and the notebook and board load after it either way.
+    status_block_ends = "renderTools(s.tools)}catch(e){toast(e.message)}try{"
+    assert status_block_ends in refresh
+    assert refresh.index(status_block_ends) < refresh.index("loadLibrary(),loadProblems()")
+
+
 def test_the_bench_check_tools_are_exposed_in_the_command_center():
     assert {"compare_readings", "summing_dac_output"} <= set(web.TOOLS)
 
