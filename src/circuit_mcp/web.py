@@ -6,6 +6,7 @@ import json
 import mimetypes
 import os
 import re
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -811,10 +812,20 @@ def database_integrity() -> dict[str, Any]:
     return {"ok": database["ok"] and files["ok"], "database": database, "files": files}
 
 
+_BACKUP_RUNNING = threading.Lock()
+
+
 @app.post("/api/database/backup")
 def backup_database() -> dict[str, Any]:
-    destination = DATA / "backups" / time.strftime("circuit-mcp-%Y%m%d-%H%M%S.sqlite3")
-    result = _db().backup(destination)
+    # Each backup is a whole copy of the database; a burst of them only fills the disk.
+    if not _BACKUP_RUNNING.acquire(blocking=False):
+        raise HTTPException(409, "A backup is already running. Ask again once it has finished.")
+    try:
+        # Named by the second alone, two backups in one second would share a name.
+        stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        result = _db().backup(DATA / "backups" / f"circuit-mcp-{stamp}.sqlite3")
+    finally:
+        _BACKUP_RUNNING.release()
     _record("backup", Path(result["path"]).name, True, "database", None,
             {"sha256": result["sha256"], "size_bytes": result["size_bytes"]})
     return result
