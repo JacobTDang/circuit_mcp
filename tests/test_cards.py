@@ -249,6 +249,19 @@ def test_tied_sources_are_refused_by_the_breadboard_and_expected_cards_alike():
             build_card(kind, "x", build)
 
 
+def test_a_repeated_probe_label_is_refused_by_the_breadboard_and_expected_cards_alike():
+    """The expected card used to return two readings both labelled CH1."""
+    build = {"supply": {"vplus": 5, "vminus": 0},
+             "parts": [{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": ["vin", "out"]},
+                       {"ref": "R2", "kind": "resistor", "value": "1k", "nodes": ["out", "gnd"]}],
+             "sources": [{"ref": "VS", "kind": "dc", "node": "vin", "volts": 2}],
+             "probes": [{"label": "CH1", "node": "vin", "role": "input"},
+                        {"label": "CH1", "node": "out", "role": "output"}]}
+    for kind in ("breadboard", "expected"):
+        with pytest.raises(CardError, match="probe label 'CH1' is used twice"):
+            build_card(kind, "x", build)
+
+
 # --- schematic ----------------------------------------------------------------
 
 INVERTING_NETLIST = "Vs 1 0 {V}\nRi 1 2 10e3\nRf 2 3 100e3\nE1 3 0 opamp 0 2 {A}"

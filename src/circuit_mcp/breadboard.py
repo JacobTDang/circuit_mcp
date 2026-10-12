@@ -288,6 +288,14 @@ def parse_build(content: Any) -> Build:
         label = str(entry.get("label", "")).strip()
         if not label or len(label) > MAX_PROBE_LABEL:
             raise BuildError(f"probe label must be 1 to {MAX_PROBE_LABEL} characters")
+        # A measured reading finds its probe by label, ignoring case, so two
+        # labels that read alike would leave it two places to go.
+        twin = next((probe.label for probe in probes if probe.label.casefold() == label.casefold()), None)
+        if twin == label:
+            raise BuildError(f"probe label {label!r} is used twice; give each probe its own label")
+        if twin is not None:
+            raise BuildError(f"probe labels {twin!r} and {label!r} differ only in case, and a reading "
+                             f"is matched to its probe ignoring case; give each probe its own label")
         node = _node(entry.get("node"), f"probe {label}")
         if node not in known:
             raise BuildError(f"probe {label!r}: node {node!r} is not in the build")

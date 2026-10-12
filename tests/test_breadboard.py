@@ -142,6 +142,19 @@ def test_a_probe_must_name_a_node_in_the_build():
         parse_build(spec(probes=[{"label": "x", "node": "out", "role": "sideways"}]))
 
 
+def test_two_probes_cannot_share_a_label():
+    probes = [{"label": "CH1", "node": "vi", "role": "input"}, {"label": "CH1", "node": "out", "role": "output"}]
+    with pytest.raises(BuildError, match="probe label 'CH1' is used twice"):
+        parse_build(spec(probes=probes))
+
+
+def test_probe_labels_that_differ_only_in_case_are_refused_naming_both():
+    """A measured reading finds its probe ignoring case, so these two would be one probe."""
+    probes = [{"label": "CH1", "node": "vi"}, {"label": "ch1", "node": "out"}]
+    with pytest.raises(BuildError, match="probe labels 'CH1' and 'ch1' differ only in case"):
+        parse_build(spec(probes=probes))
+
+
 def test_rail_names_are_reserved():
     with pytest.raises(BuildError, match="reserved for the supply rails"):
         parse_build(spec(parts=[{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": ["vplus", "out"]}]))
