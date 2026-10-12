@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pypdf import PdfReader
+from pypdf.errors import FileNotDecryptedError, PdfReadError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import paths, screen_recording, solution_sheet
@@ -408,6 +409,14 @@ async def upload(file: UploadFile = File(...), category: str = Form("homework"))
                 stream.write(chunk)
                 digest.update(chunk)
         text, pages = _extract(target, extension)
+    except FileNotDecryptedError as exc:
+        target.unlink(missing_ok=True)
+        raise HTTPException(422, f"{original} needs a password to open. "
+                                 "Remove the password and upload it again.") from exc
+    except PdfReadError as exc:
+        target.unlink(missing_ok=True)
+        raise HTTPException(422, f"{original} is not a readable PDF ({exc}); it may be "
+                                 "damaged or only partly downloaded.") from exc
     except Exception:
         target.unlink(missing_ok=True)
         raise

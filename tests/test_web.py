@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from io import BytesIO
+
+import pytest
 from fastapi.testclient import TestClient
+from pypdf import PdfReader, PdfWriter, errors
 
 from circuit_mcp import ipad_capture, paths, web
 from circuit_mcp.cards import build_card
@@ -209,6 +213,42 @@ def test_upload_rejects_unsafe_type_and_oversized_stream(tmp_path, monkeypatch):
         assert browser.post("/api/library", files={"file": ("bad.exe", b"x")}).status_code == 415
         assert browser.post("/api/library", files={"file": ("large.txt", b"123456789")}).status_code == 413
         assert not list(web.FILES.glob("*"))
+
+
+def _encrypted_pdf(user_password: str) -> bytes:
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    writer.encrypt(user_password=user_password, owner_password="owner", algorithm="RC4-128")
+    stream = BytesIO()
+    writer.write(stream)
+    return stream.getvalue()
+
+
+@pytest.mark.parametrize(("content", "failure", "sentence"), [
+    (_encrypted_pdf("secret"), errors.FileNotDecryptedError, "needs a password to open"),
+    (b"this is not a pdf", errors.PdfStreamError, "is not a readable PDF"),
+    (b"", errors.EmptyFileError, "is not a readable PDF"),
+], ids=["open-password", "damaged", "empty"])
+def test_an_unreadable_pdf_is_refused_with_a_sentence_and_leaves_no_file(
+        tmp_path, monkeypatch, content, failure, sentence):
+    """Issue #131: a locked, damaged or empty PDF answered a bare 500."""
+    with pytest.raises(failure):
+        [page.extract_text() for page in PdfReader(BytesIO(content)).pages]
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.post("/api/library", data={"category": "lecture"},
+                                files={"file": ("week-3.pdf", content, "application/pdf")})
+    assert response.status_code == 422
+    assert sentence in response.json()["detail"]
+    assert "week-3.pdf" in response.json()["detail"]
+    assert not list(web.FILES.glob("*"))
+
+
+def test_a_pdf_locked_only_against_editing_still_uploads(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.post("/api/library", data={"category": "lecture"},
+                                files={"file": ("owner.pdf", _encrypted_pdf(""), "application/pdf")})
+    assert response.status_code == 200
+    assert response.json()["item"]["pages"] == 1
 
 
 def test_unknown_tool_and_invalid_host_are_rejected(tmp_path, monkeypatch):
