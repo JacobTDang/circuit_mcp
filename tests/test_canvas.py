@@ -156,6 +156,123 @@ def test_the_browser_cannot_author_cards(tmp_path, monkeypatch):
         assert browser.post("/api/canvas", json={"kind": "formula"}).status_code == 405
 
 
+# --- a solution is homework, not a desk card ----------------------------------
+
+SOLUTION = {
+    "given": [{"name": "R1", "value": 1000, "unit": "Ω"}, {"name": "R2", "value": 15000, "unit": "Ω"}],
+    "steps": [{"expression": "1 + R2/R1"}, {"expression": "16"}],
+    "answer": {"expression": "16", "unit": "V/V"},
+}
+
+
+def _desk_and_sheet(tmp_path, monkeypatch) -> TestClient:
+    """The MCP tools and the browser routes on one store, as the app runs them."""
+    browser = _browser(tmp_path, monkeypatch)
+    monkeypatch.setattr(server, "_storage", web._db)
+    return browser
+
+
+def _solved(page: int, tag: str = "hw3") -> dict:
+    problem = web._db().create_problem(f"Problem {page}", "op-amps", f"Problem {page}: find the gain.",
+                                       source_page=page)
+    web._db().tag_problem(problem["id"], tag)
+    added = server.canvas_card_add("solution", f"P{page} gain", SOLUTION, problem_id=problem["id"])
+    assert added["ok"] is True, added
+    return added["card"]
+
+
+def test_canvas_card_list_is_the_desk_and_never_returns_a_solution(tmp_path, monkeypatch):
+    with _desk_and_sheet(tmp_path, monkeypatch):
+        solution = _solved(1)
+        formula = server.canvas_card_add("formula", "gain", FORMULA, problem_id=solution["problem_id"])["card"]
+
+        assert [card["id"] for card in server.canvas_card_list()["items"]] == [formula["id"]]
+        assert [card["id"] for card in server.canvas_card_list(problem_id=solution["problem_id"])["items"]] \
+            == [formula["id"]]
+
+
+def test_canvas_card_remove_refuses_a_solution_and_leaves_it_on_the_sheet(tmp_path, monkeypatch):
+    with _desk_and_sheet(tmp_path, monkeypatch) as browser:
+        solution = _solved(1)
+
+        refused = server.canvas_card_remove(solution["id"])
+
+        assert refused["ok"] is False and refused["error"] == "not_a_desk_card"
+        assert "solutions sheet" in refused["message"]
+        assert web._db().get_card(solution["id"])["id"] == solution["id"]
+        sheet = browser.get("/solutions?tag=hw3").text
+    assert "no solution yet" not in sheet and 'class="answer"' in sheet
+
+
+def test_the_browser_cannot_close_a_solution(tmp_path, monkeypatch):
+    """The board never lists one, but the route must not rest on the id staying secret."""
+    with _desk_and_sheet(tmp_path, monkeypatch) as browser:
+        solution = _solved(1)
+
+        closed = browser.delete(f"/api/canvas/{solution['id']}")
+
+        assert closed.status_code == 409
+        assert "solutions sheet" in closed.json()["detail"]
+        assert "canvas_card_close" not in [event["kind"] for event in web._db().events()]
+        sheet = browser.get("/solutions?tag=hw3").text
+    assert "no solution yet" not in sheet and 'class="answer"' in sheet
+
+
+def test_a_solution_citing_its_own_problems_attempt_is_stored(tmp_path, monkeypatch):
+    with _desk_and_sheet(tmp_path, monkeypatch):
+        problem = web._db().create_problem("Problem 1", "op-amps", "find the gain")
+        attempt = web._db().create_attempt(problem["id"], "student")
+
+        added = server.canvas_card_add("solution", "P1 gain", {**SOLUTION, "attempt_id": attempt["id"]},
+                                       problem_id=problem["id"])
+
+    assert added["ok"] is True, added
+    assert added["card"]["payload"]["attempt_id"] == attempt["id"]
+
+
+def test_a_solution_citing_another_problems_attempt_is_refused(tmp_path, monkeypatch):
+    """The sheet prints the cited attempt's checks as this problem's evidence."""
+    with _desk_and_sheet(tmp_path, monkeypatch):
+        database = web._db()
+        mine = database.create_problem("HW1 P1 divider", "dividers", "find V2")
+        other = database.create_problem("HW1 P2 other", "dividers", "find V3")
+        borrowed = database.create_attempt(other["id"], "student")
+
+        refused = server.canvas_card_add("solution", "P1", {**SOLUTION, "attempt_id": borrowed["id"]},
+                                         problem_id=mine["id"])
+
+        assert refused["ok"] is False and refused["error"] == "wrong_attempt"
+        assert "HW1 P2 other" in refused["message"]
+        assert database.list_cards(kind="solution") == []
+
+
+def test_a_solution_citing_an_attempt_that_does_not_exist_is_refused(tmp_path, monkeypatch):
+    with _desk_and_sheet(tmp_path, monkeypatch):
+        problem = web._db().create_problem("Problem 3", "dividers", "find V_out")
+        for made_up in ("0123456789abcdef0123456789abcdef", "not-an-attempt"):
+            refused = server.canvas_card_add("solution", "P3", {**SOLUTION, "attempt_id": made_up},
+                                             problem_id=problem["id"])
+            assert refused["ok"] is False and refused["error"] == "wrong_attempt"
+            assert made_up in refused["message"]
+        assert web._db().list_cards(kind="solution") == []
+
+
+def test_clearing_the_desk_through_mcp_leaves_every_solution_on_the_sheet(tmp_path, monkeypatch):
+    """List the desk and remove everything listed -- the natural way to clear it between problems."""
+    with _desk_and_sheet(tmp_path, monkeypatch) as browser:
+        _solved(1)
+        _solved(2)
+        server.canvas_card_add("formula", "gain", FORMULA)
+
+        for card in server.canvas_card_list()["items"]:
+            assert server.canvas_card_remove(card["id"])["ok"] is True
+
+        assert server.canvas_card_list()["items"] == []
+        sheet = browser.get("/solutions?tag=hw3").text
+    assert "no solution yet" not in sheet
+    assert sheet.count('class="answer"') == 2
+
+
 def test_app_js_keeps_agent_card_layout_across_reload(tmp_path, monkeypatch):
     """readCanvas must keep formula/walkthrough/vocabulary or freeSpot reshuffles on refresh."""
     with _browser(tmp_path, monkeypatch) as browser:
@@ -304,7 +421,9 @@ def test_app_js_measures_the_canvas_after_hydration(tmp_path, monkeypatch):
         app_script = browser.get("/assets/app.js").text
         poll = app_script.split("async function pollCanvasCards()", 1)[1].split("pollCanvasCards();", 1)[0]
         hydration = poll.split("hydrated.forEach", 1)[1]
-        assert "fitCanvasHeight()" in hydration, "the canvas must be re-measured once the real bodies are in"
+        assert "renderCanvas()" in hydration, "the canvas must be re-measured once the real bodies are in"
+        render = app_script.split("function renderCanvas()", 1)[1].split("\n", 1)[0]
+        assert "fitCanvasHeight()" in render
 
 
 def test_app_js_states_the_output_swing_as_approximate(tmp_path, monkeypatch):
@@ -377,3 +496,90 @@ def test_app_js_opens_the_solutions_sheet_for_a_tag(tmp_path, monkeypatch):
         app_script = browser.get("/assets/app.js").text
         assert "/solutions?tag=" in app_script
         assert "encodeURIComponent(tag)" in app_script, "a tag must not be pasted into the URL raw"
+
+
+# --- where cards land on the desk ---------------------------------------------
+
+def _app_function(app_script: str, signature: str) -> str:
+    """One app.js function, which the file keeps on a single line."""
+    return app_script.split(signature, 1)[1].split("\n", 1)[0]
+
+
+def test_app_js_places_each_new_card_by_the_drawn_height_of_the_ones_before(tmp_path, monkeypatch):
+    """Issue #116: cards in one poll were spaced by a guessed 320px, so a 1,700px board was covered from row d."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        free = _app_function(app_script, "function freeSpot(")
+        assert "320" not in free, "freeSpot guesses the height of a card it has not drawn"
+        assert "cardBoxes()" in free, "freeSpot must measure the cards as they are drawn"
+        place = _app_function(app_script, "function placeCard(")
+        assert place.index("freeSpot(") < place.index("canvasItems.push(") < place.index("renderCanvas()"), \
+            "each new card must be drawn before the next one's spot is chosen"
+        poll = _app_function(app_script, "async function pollCanvasCards()")
+        assert "placeCard(card)" in poll
+        assert poll.index("hydrated.forEach") < poll.index("placeCard(card)"), \
+            "a saved card still showing 'loading card…' is measured at its placeholder height"
+
+
+def test_app_js_moves_a_covered_card_down_instead_of_leaving_it_buried(tmp_path, monkeypatch):
+    """A card clips its body, so a covered part cannot be scrolled into view; saved layouts from before #116 overlap."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        settle = _app_function(app_script, "function settleCanvas()")
+        assert "cardBoxes()" in settle
+        assert "box.y=" in settle and ".x=" not in settle, "a covered card moves straight down, never across"
+        assert "saveCanvas()" in settle, "the pulled-apart layout must be what a reload finds"
+        render = _app_function(app_script, "function renderCanvas()")
+        assert "settleCanvas()" in render, "every render, including the first after a reload, must leave no overlap"
+        drop = _app_function(app_script, "function bindDrags()").split("head.onpointerup=", 1)[1]
+        assert "settleCanvas()" in drop, "a card dropped on another must not stay on it until the next reload"
+
+
+def test_app_js_measures_a_card_where_it_will_end_up(tmp_path, monkeypatch):
+    """A card mid-slide reports its old offsetTop, and mid-resize its old height."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        boxes = _app_function(app_script, "function cardBoxes()")
+        assert "x:item.x,y:item.y" in boxes and "el.offsetWidth" in boxes and "el.offsetHeight" in boxes
+        rule = browser.get("/assets/canvas.css").text.split(".workspace-item{", 1)[1].split("}", 1)[0]
+        transition = rule.split("transition:", 1)[1].split(";", 1)[0]
+        assert "width" not in transition, "an animated width is read at its old value, so its height is wrong"
+
+
+def test_app_js_places_nothing_on_a_desk_it_cannot_measure(tmp_path, monkeypatch):
+    """On another tab the desk is display:none, so every card measures 0x0 and all would land on one spot."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        poll = _app_function(app_script, "async function pollCanvasCards()")
+        assert poll.index("if(!$('#workspaceCanvas').clientWidth)return") < poll.index("placeCard(card)")
+        assert poll.index("if(!$('#workspaceCanvas').clientWidth)return") < poll.index("cardsSignature=signature"), \
+            "a poll that placed nothing must not be stamped as done"
+        observer = _app_function(app_script, "function renderCanvas()").split("new ResizeObserver(", 1)[1]
+        assert "contentRect" not in observer, \
+            "the content box is 2px narrower than the border-box width a card is given, so each reload shrank it"
+        assert "el.offsetWidth" in observer and "if(!w||" in observer, "a hidden card reports width 0"
+
+
+def test_app_js_fit_sets_the_width_and_leaves_the_card_where_it_is(tmp_path, monkeypatch):
+    """Issue #127: Fit pulled the card up to y=40, over whatever was at the top of the desk."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        size = _app_function(app_script, "function sizeIPad(")
+        fit = size.split("mode==='fit'", 1)[1].split("}else{", 1)[0]
+        assert "item.y" not in fit and "style.top" not in fit, "Fit moves the card up the desk"
+        assert "item.x=Math.max(0,Math.min(item.x,canvas.clientWidth-item.w))" in fit, "a fitted card stays inside the canvas"
+        assert "settleCanvas()" in size, "a wider card must move what it now covers out of the way"
+
+
+def test_app_js_wraps_a_card_that_no_longer_fits_instead_of_sliding_it_over_its_neighbour(tmp_path, monkeypatch):
+    """Issue #129: narrowing the window clamped x, so the right-hand card of a row slid over the left-hand one."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        render = _app_function(app_script, "function renderCanvas()")
+        assert "Math.min(item.x,canvas.clientWidth-item.w)" not in render, "clamping x slides a card over its neighbour"
+        assert "if(item.x+item.w>width)item.x=" in render, "a card past the right edge starts a new row at the left"
+        assert "settleCanvas()" in render, "the wrapped card must then move below whatever it lands on"
+        assert "if(width){" in render, "a desk hidden behind another tab has no width to fit cards to"
+        show = _app_function(app_script, "function show(view)")
+        assert "if(view==='dashboard')renderCanvas()" in show, \
+            "a window resized while another tab was showing must be laid out when the desk comes back"

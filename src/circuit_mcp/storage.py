@@ -12,9 +12,10 @@ import os
 import re
 import shutil
 import sqlite3
+import tempfile
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -25,6 +26,10 @@ class StorageError(ValueError):
     """A bounded repository operation could not be completed."""
 
 
+class NotADeskCardError(StorageError):
+    """A solution was asked to leave the desk; it was never on it."""
+
+
 SCHEMA_VERSION = 3
 BASELINE_VERSION = 1
 COURSE_ID = "circuits"
@@ -33,6 +38,7 @@ CATEGORIES = {"homework", "lecture", "reference", "solution"}
 STATUSES = {"draft", "confirmed", "solved", "needs_review"}
 ATTEMPT_STATUSES = {"working", "correct", "incorrect", "partial", "gap"}
 UUID_RE = re.compile(r"^[0-9a-f]{32}$")
+TAG_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,49}")
 CARD_KINDS = ("formula", "walkthrough", "vocabulary", "breadboard", "expected", "schematic",
               "solution")
 
@@ -46,6 +52,15 @@ def _number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value) if math.isfinite(value) else None
+
+
+def _tag(tag: str) -> str:
+    """The one spelling a tag is stored under, refusing a tag no problem could carry."""
+    normalized = tag.casefold().strip()
+    if not TAG_RE.fullmatch(normalized):
+        raise StorageError(f"invalid tag {tag!r}: a tag is 1 to 50 letters, digits, hyphens and "
+                           "underscores, starting with a letter or digit.")
+    return normalized
 
 
 def _card(row: Any) -> dict[str, Any]:
@@ -701,8 +716,8 @@ class CommandCenterDB:
         if kind:
             clause, params = clause + " AND kind=?", [*params, kind]
         if without_kind:
-            # A solution is homework, not a desk card: closing a card on the
-            # board deletes it, and that must never reach finished work.
+            # A solution is homework, not a desk card, so whatever shows the
+            # desk -- the board or the agent's list -- leaves it out.
             clause, params = clause + " AND kind<>?", [*params, without_kind]
         with self._connect() as connection:
             rows = connection.execute(
@@ -713,11 +728,22 @@ class CommandCenterDB:
         return [_card(row) for row in rows]
 
     def delete_card(self, identifier: str) -> None:
+        """Take one card off the desk.
+
+        Every way of clearing the desk ends here, so this is where finished work
+        is kept: a solution is refused rather than trusting each caller to have
+        filtered it out first.
+        """
         with self.transaction() as connection:
-            connection.execute("UPDATE canvas_cards SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
-                               (time.time(), identifier))
-            if connection.execute("SELECT changes()").fetchone()[0] != 1:
+            row = connection.execute("SELECT kind FROM canvas_cards WHERE id=? AND deleted_at IS NULL",
+                                     (identifier,)).fetchone()
+            if row is None:
                 raise StorageError("card not found")
+            if row["kind"] == "solution":
+                raise NotADeskCardError(
+                    "That card is a problem's solution: it belongs to the solutions sheet, not the "
+                    "desk, so it is not removed from here.")
+            connection.execute("UPDATE canvas_cards SET deleted_at=? WHERE id=?", (time.time(), identifier))
 
     def get_problem(self, identifier: str) -> dict[str, Any]:
         with self._connect() as connection:
@@ -757,8 +783,7 @@ class CommandCenterDB:
 
     def tag_problem(self, identifier: str, tag: str) -> dict[str, Any]:
         self.get_problem(identifier)
-        normalized = tag.casefold().strip()
-        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,49}", normalized): raise StorageError("invalid tag")
+        normalized = _tag(tag)
         with self.transaction() as connection:
             connection.execute("INSERT OR IGNORE INTO tags(name) VALUES(?)", (normalized,))
             connection.execute("INSERT OR IGNORE INTO problem_tags(problem_id,tag_id) SELECT ?,id FROM tags WHERE name=?", (identifier, normalized))
@@ -776,17 +801,32 @@ class CommandCenterDB:
             problems = [dict(row) for row in connection.execute(
                 "SELECT p.* FROM problems p JOIN problem_tags pt ON pt.problem_id=p.id "
                 "JOIN tags t ON t.id=pt.tag_id WHERE t.name=? AND p.course_id=? "
-                "ORDER BY COALESCE(p.source_page, 1e9), p.created_at", (tag.casefold().strip(), COURSE_ID))]
+                "ORDER BY COALESCE(p.source_page, 1e9), p.created_at", (_tag(tag), COURSE_ID))]
             for problem in problems:
                 cards = [_card(row) for row in connection.execute(
                     "SELECT * FROM canvas_cards WHERE problem_id=? AND kind='solution' "
                     "AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1", (problem["id"],))]
                 problem["solution"] = cards[0] if cards else None
                 attempt_id = (cards[0]["payload"].get("attempt_id") if cards else None)
+                # Only an attempt at this same problem counts as its evidence: a
+                # card citing another problem's attempt, or one that does not
+                # exist, shows no checks and is flagged rather than reading as
+                # merely unchecked.
+                own = connection.execute("SELECT 1 FROM attempts WHERE id=? AND problem_id=?",
+                                         (attempt_id, problem["id"])).fetchone() if attempt_id else None
+                problem["foreign_attempt"] = bool(attempt_id) and own is None
                 problem["tool_calls"] = [dict(row) for row in connection.execute(
-                    "SELECT tool_name,verdict,created_at FROM tool_calls WHERE attempt_id=? "
-                    "ORDER BY created_at", (attempt_id,))] if attempt_id else []
+                    "SELECT t.tool_name,t.verdict,t.created_at FROM tool_calls t "
+                    "JOIN attempts a ON a.id=t.attempt_id WHERE t.attempt_id=? AND a.problem_id=? "
+                    "ORDER BY t.created_at", (attempt_id, problem["id"]))] if attempt_id else []
         return problems
+
+    def tags(self) -> list[str]:
+        """Every tag some problem carries: the sheets that exist."""
+        with self._connect() as connection:
+            return [row[0] for row in connection.execute(
+                "SELECT DISTINCT t.name FROM tags t JOIN problem_tags pt ON pt.tag_id=t.id "
+                "JOIN problems p ON p.id=pt.problem_id WHERE p.course_id=? ORDER BY t.name", (COURSE_ID,))]
 
     def create_attempt(self, problem_id: str, actor: str, answer: str = "", status: str = "working") -> dict[str, Any]:
         self.get_problem(problem_id)
@@ -806,9 +846,15 @@ class CommandCenterDB:
     def complete_attempt(self, identifier: str, answer: str, status: str, first_divergence: str | None = None) -> dict[str, Any]:
         if status not in ATTEMPT_STATUSES - {"working"}: raise StorageError("completed attempt needs a final status")
         with self.transaction() as connection:
+            row = connection.execute("SELECT status FROM attempts WHERE id=?", (identifier,)).fetchone()
+            if row is None: raise StorageError("attempt not found")
+            # A completion is final: its first divergence is the only record of
+            # the mistake, and overwriting it would also count a retry as a first try.
+            if row["status"] != "working":
+                raise StorageError(f"attempt {identifier} is already complete ({row['status']}): start a new "
+                                   "attempt with attempt_create for the retry, so this one stays on record.")
             connection.execute("UPDATE attempts SET answer=?,status=?,first_divergence=?,completed_at=? WHERE id=?",
                                (answer, status, first_divergence, time.time(), identifier))
-            if connection.execute("SELECT changes()").fetchone()[0] != 1: raise StorageError("attempt not found")
         return self.get_attempt(identifier)
 
     def record_tool_call(self, tool_name: str, arguments: dict[str, Any], result: dict[str, Any],
@@ -896,20 +942,32 @@ class CommandCenterDB:
                 "missing": missing, "mismatched": mismatched, "orphans": sorted(orphans)}
 
     def backup(self, destination: Path) -> dict[str, Any]:
+        """Copy the store to ``destination`` as one self-contained file.
+
+        Each copy is built in a temporary file of its own, created exclusively:
+        two backups that shared one deleted each other's while SQLite had it
+        mapped, and six at once killed the server with SIGBUS. A page copy of a
+        WAL store is itself in WAL mode, so the copy is switched to a rollback
+        journal before it is published; a restore then needs no -wal or -shm.
+        """
         target = destination.expanduser().resolve()
         if target == self.path or target.is_dir(): raise StorageError("backup destination must be a different file")
         target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = target.with_name(target.name + ".temporary")
-        temporary.unlink(missing_ok=True)
-        source_connection = self._connect()
-        backup_connection = sqlite3.connect(temporary)
+        descriptor, name = tempfile.mkstemp(prefix=f"{target.name}.", suffix=".temporary", dir=target.parent)
+        os.close(descriptor)
+        temporary = Path(name)
         try:
-            source_connection.backup(backup_connection)
-            backup_connection.execute("PRAGMA wal_checkpoint(FULL)")
-            check = backup_connection.execute("PRAGMA integrity_check").fetchone()[0]
-            if check != "ok": raise StorageError(f"backup integrity check failed: {check}")
-        finally:
-            backup_connection.close(); source_connection.close()
-        os.replace(temporary, target)
-        return {"ok": True, "path": str(target), "size_bytes": target.stat().st_size,
-                "sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
+            with closing(self._connect()) as source, closing(sqlite3.connect(temporary)) as copy:
+                source.backup(copy)
+                mode = copy.execute("PRAGMA journal_mode = DELETE").fetchone()[0]
+                if mode != "delete": raise StorageError(f"backup stayed in {mode} journal mode")
+                check = copy.execute("PRAGMA integrity_check").fetchone()[0]
+                if check != "ok": raise StorageError(f"backup integrity check failed: {check}")
+            published = temporary.read_bytes()
+            os.replace(temporary, target)
+        except Exception:
+            for leftover in ("", "-journal", "-wal", "-shm"):
+                temporary.with_name(temporary.name + leftover).unlink(missing_ok=True)
+            raise
+        return {"ok": True, "path": str(target), "size_bytes": len(published),
+                "sha256": hashlib.sha256(published).hexdigest()}
