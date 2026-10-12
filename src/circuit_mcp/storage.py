@@ -12,9 +12,10 @@ import os
 import re
 import shutil
 import sqlite3
+import tempfile
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -941,20 +942,32 @@ class CommandCenterDB:
                 "missing": missing, "mismatched": mismatched, "orphans": sorted(orphans)}
 
     def backup(self, destination: Path) -> dict[str, Any]:
+        """Copy the store to ``destination`` as one self-contained file.
+
+        Each copy is built in a temporary file of its own, created exclusively:
+        two backups that shared one deleted each other's while SQLite had it
+        mapped, and six at once killed the server with SIGBUS. A page copy of a
+        WAL store is itself in WAL mode, so the copy is switched to a rollback
+        journal before it is published; a restore then needs no -wal or -shm.
+        """
         target = destination.expanduser().resolve()
         if target == self.path or target.is_dir(): raise StorageError("backup destination must be a different file")
         target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = target.with_name(target.name + ".temporary")
-        temporary.unlink(missing_ok=True)
-        source_connection = self._connect()
-        backup_connection = sqlite3.connect(temporary)
+        descriptor, name = tempfile.mkstemp(prefix=f"{target.name}.", suffix=".temporary", dir=target.parent)
+        os.close(descriptor)
+        temporary = Path(name)
         try:
-            source_connection.backup(backup_connection)
-            backup_connection.execute("PRAGMA wal_checkpoint(FULL)")
-            check = backup_connection.execute("PRAGMA integrity_check").fetchone()[0]
-            if check != "ok": raise StorageError(f"backup integrity check failed: {check}")
-        finally:
-            backup_connection.close(); source_connection.close()
-        os.replace(temporary, target)
-        return {"ok": True, "path": str(target), "size_bytes": target.stat().st_size,
-                "sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
+            with closing(self._connect()) as source, closing(sqlite3.connect(temporary)) as copy:
+                source.backup(copy)
+                mode = copy.execute("PRAGMA journal_mode = DELETE").fetchone()[0]
+                if mode != "delete": raise StorageError(f"backup stayed in {mode} journal mode")
+                check = copy.execute("PRAGMA integrity_check").fetchone()[0]
+                if check != "ok": raise StorageError(f"backup integrity check failed: {check}")
+            published = temporary.read_bytes()
+            os.replace(temporary, target)
+        except Exception:
+            for leftover in ("", "-journal", "-wal", "-shm"):
+                temporary.with_name(temporary.name + leftover).unlink(missing_ok=True)
+            raise
+        return {"ok": True, "path": str(target), "size_bytes": len(published),
+                "sha256": hashlib.sha256(published).hexdigest()}
