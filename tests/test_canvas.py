@@ -156,6 +156,84 @@ def test_the_browser_cannot_author_cards(tmp_path, monkeypatch):
         assert browser.post("/api/canvas", json={"kind": "formula"}).status_code == 405
 
 
+# --- a solution is homework, not a desk card ----------------------------------
+
+SOLUTION = {
+    "given": [{"name": "R1", "value": 1000, "unit": "Ω"}, {"name": "R2", "value": 15000, "unit": "Ω"}],
+    "steps": [{"expression": "1 + R2/R1"}, {"expression": "16"}],
+    "answer": {"expression": "16", "unit": "V/V"},
+}
+
+
+def _desk_and_sheet(tmp_path, monkeypatch) -> TestClient:
+    """The MCP tools and the browser routes on one store, as the app runs them."""
+    browser = _browser(tmp_path, monkeypatch)
+    monkeypatch.setattr(server, "_storage", web._db)
+    return browser
+
+
+def _solved(page: int, tag: str = "hw3") -> dict:
+    problem = web._db().create_problem(f"Problem {page}", "op-amps", f"Problem {page}: find the gain.",
+                                       source_page=page)
+    web._db().tag_problem(problem["id"], tag)
+    added = server.canvas_card_add("solution", f"P{page} gain", SOLUTION, problem_id=problem["id"])
+    assert added["ok"] is True, added
+    return added["card"]
+
+
+def test_canvas_card_list_is_the_desk_and_never_returns_a_solution(tmp_path, monkeypatch):
+    with _desk_and_sheet(tmp_path, monkeypatch):
+        solution = _solved(1)
+        formula = server.canvas_card_add("formula", "gain", FORMULA, problem_id=solution["problem_id"])["card"]
+
+        assert [card["id"] for card in server.canvas_card_list()["items"]] == [formula["id"]]
+        assert [card["id"] for card in server.canvas_card_list(problem_id=solution["problem_id"])["items"]] \
+            == [formula["id"]]
+
+
+def test_canvas_card_remove_refuses_a_solution_and_leaves_it_on_the_sheet(tmp_path, monkeypatch):
+    with _desk_and_sheet(tmp_path, monkeypatch) as browser:
+        solution = _solved(1)
+
+        refused = server.canvas_card_remove(solution["id"])
+
+        assert refused["ok"] is False and refused["error"] == "not_a_desk_card"
+        assert "solutions sheet" in refused["message"]
+        assert web._db().get_card(solution["id"])["id"] == solution["id"]
+        sheet = browser.get("/solutions?tag=hw3").text
+    assert "no solution yet" not in sheet and 'class="answer"' in sheet
+
+
+def test_the_browser_cannot_close_a_solution(tmp_path, monkeypatch):
+    """The board never lists one, but the route must not rest on the id staying secret."""
+    with _desk_and_sheet(tmp_path, monkeypatch) as browser:
+        solution = _solved(1)
+
+        closed = browser.delete(f"/api/canvas/{solution['id']}")
+
+        assert closed.status_code == 409
+        assert "solutions sheet" in closed.json()["detail"]
+        assert "canvas_card_close" not in [event["kind"] for event in web._db().events()]
+        sheet = browser.get("/solutions?tag=hw3").text
+    assert "no solution yet" not in sheet and 'class="answer"' in sheet
+
+
+def test_clearing_the_desk_through_mcp_leaves_every_solution_on_the_sheet(tmp_path, monkeypatch):
+    """List the desk and remove everything listed -- the natural way to clear it between problems."""
+    with _desk_and_sheet(tmp_path, monkeypatch) as browser:
+        _solved(1)
+        _solved(2)
+        server.canvas_card_add("formula", "gain", FORMULA)
+
+        for card in server.canvas_card_list()["items"]:
+            assert server.canvas_card_remove(card["id"])["ok"] is True
+
+        assert server.canvas_card_list()["items"] == []
+        sheet = browser.get("/solutions?tag=hw3").text
+    assert "no solution yet" not in sheet
+    assert sheet.count('class="answer"') == 2
+
+
 def test_app_js_keeps_agent_card_layout_across_reload(tmp_path, monkeypatch):
     """readCanvas must keep formula/walkthrough/vocabulary or freeSpot reshuffles on refresh."""
     with _browser(tmp_path, monkeypatch) as browser:

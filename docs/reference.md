@@ -221,7 +221,9 @@ carrying that tag in page order, each with its prompt, the given values as
 chips, the drawn schematic, the numbered steps, an answer box with its unit,
 and a line saying which recorded checks stand behind it. A problem with no
 solution card still appears, saying so -- a sheet that quietly omits unfinished
-work hides the one thing worth seeing.
+work hides the one thing worth seeing. Clearing the desk never reaches a
+solution: the board and `canvas_card_list` do not show one, and
+`canvas_card_remove` and the board's close route refuse one.
 
 The page is rendered on the server, so what is handed in is what the tests
 assert. Export is the browser's own print: the stylesheet sets US Letter,

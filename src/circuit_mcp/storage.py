@@ -25,6 +25,10 @@ class StorageError(ValueError):
     """A bounded repository operation could not be completed."""
 
 
+class NotADeskCardError(StorageError):
+    """A solution was asked to leave the desk; it was never on it."""
+
+
 SCHEMA_VERSION = 3
 BASELINE_VERSION = 1
 COURSE_ID = "circuits"
@@ -701,8 +705,8 @@ class CommandCenterDB:
         if kind:
             clause, params = clause + " AND kind=?", [*params, kind]
         if without_kind:
-            # A solution is homework, not a desk card: closing a card on the
-            # board deletes it, and that must never reach finished work.
+            # A solution is homework, not a desk card, so whatever shows the
+            # desk -- the board or the agent's list -- leaves it out.
             clause, params = clause + " AND kind<>?", [*params, without_kind]
         with self._connect() as connection:
             rows = connection.execute(
@@ -713,11 +717,22 @@ class CommandCenterDB:
         return [_card(row) for row in rows]
 
     def delete_card(self, identifier: str) -> None:
+        """Take one card off the desk.
+
+        Every way of clearing the desk ends here, so this is where finished work
+        is kept: a solution is refused rather than trusting each caller to have
+        filtered it out first.
+        """
         with self.transaction() as connection:
-            connection.execute("UPDATE canvas_cards SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
-                               (time.time(), identifier))
-            if connection.execute("SELECT changes()").fetchone()[0] != 1:
+            row = connection.execute("SELECT kind FROM canvas_cards WHERE id=? AND deleted_at IS NULL",
+                                     (identifier,)).fetchone()
+            if row is None:
                 raise StorageError("card not found")
+            if row["kind"] == "solution":
+                raise NotADeskCardError(
+                    "That card is a problem's solution: it belongs to the solutions sheet, not the "
+                    "desk, so it is not removed from here.")
+            connection.execute("UPDATE canvas_cards SET deleted_at=? WHERE id=?", (time.time(), identifier))
 
     def get_problem(self, identifier: str) -> dict[str, Any]:
         with self._connect() as connection:

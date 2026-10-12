@@ -103,7 +103,7 @@ from .parsing import ParseError, parse_equation, parse_expression
 from .steps import check_steps, check_written
 from .spice import SpiceError, simulate_spice as _simulate_spice
 from .symbols import SubstitutionError, SymbolConflictError, bind
-from .storage import CommandCenterDB, StorageError, default_data_dir
+from .storage import CommandCenterDB, NotADeskCardError, StorageError, default_data_dir
 from .workspace import configure_workspace as _configure_workspace
 from .workspace import read_workspace as _read_workspace
 
@@ -1923,9 +1923,13 @@ def compare_readings(
 
 @server.tool()
 def canvas_card_list(problem_id: str | None = None, limit: int = 50) -> dict[str, Any]:
-    """Cards currently on the canvas, newest first, optionally for one problem."""
+    """Cards currently on the desk, newest first, optionally for one problem.
+
+    A ``solution`` is on its problem's solutions sheet, not the desk, so it is
+    never listed here.
+    """
     try:
-        items = _storage().list_cards(problem_id, limit)
+        items = _storage().list_cards(problem_id, limit, without_kind="solution")
     except StorageError as exc:
         return _failure("storage_error", str(exc))
     return {"ok": True, "items": items}
@@ -1933,9 +1937,15 @@ def canvas_card_list(problem_id: str | None = None, limit: int = 50) -> dict[str
 
 @server.tool()
 def canvas_card_remove(card_id: str) -> dict[str, Any]:
-    """Take one card off the canvas."""
+    """Take one card off the desk.
+
+    A ``solution`` is refused (``not_a_desk_card``): it belongs to its problem's
+    solutions sheet, so clearing the desk never takes finished work off it.
+    """
     try:
         _storage().delete_card(card_id)
+    except NotADeskCardError as exc:
+        return _failure("not_a_desk_card", str(exc))
     except StorageError as exc:
         return _failure("not_found", str(exc))
     return {"ok": True, "removed": card_id}

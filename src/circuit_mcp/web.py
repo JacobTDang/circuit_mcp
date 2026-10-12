@@ -22,7 +22,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from . import paths, screen_recording, solution_sheet
 from .ocr_client import OCR_WORKER
 from .ocr_install import OCR_INSTALLER, OCRInstallError
-from .storage import CommandCenterDB, StorageError
+from .storage import CommandCenterDB, NotADeskCardError, StorageError
 from .capture import CaptureError, capture_workspace as _capture_workspace
 from .workspace import configure_display as _configure_display
 from .ipad_capture import IPAD_CAPTURE, IPadCaptureError
@@ -676,6 +676,8 @@ def canvas_card_close(card_id: str) -> dict[str, Any]:
     try:
         card = database.get_card(card_id)
         database.delete_card(card_id)
+    except NotADeskCardError as exc:
+        raise HTTPException(409, str(exc)) from exc
     except StorageError as exc:
         raise HTTPException(404, str(exc)) from exc
     _record("canvas_card_close", f"{card['kind']}: {card['title'][:60]}", True,

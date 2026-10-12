@@ -158,8 +158,8 @@ capture and OCR, the course record, desk cards, and teaching videos.
 | `attempt_complete` | Complete an attempt with a graded workflow status |
 | `problem_tag` | Attach a normalized course tag |
 | `canvas_card_add` | Put a verified card on the desk (formula, walkthrough, vocabulary, schematic, breadboard, expected), or a problem's solution on its solutions sheet |
-| `canvas_card_list` | List the cards on the desk, newest first, optionally for one problem |
-| `canvas_card_remove` | Take one card off the desk |
+| `canvas_card_list` | List the cards on the desk, newest first, optionally for one problem; a solution is on its sheet, not the desk, and is never listed |
+| `canvas_card_remove` | Take one card off the desk; a solution is refused, because it belongs to its solutions sheet |
 | `visual_status` | Report whether the local renderer can author a visual |
 | `visual_generate` | Render one local teaching video from a brief and persist it |
 | `visual_list` | List locally rendered visuals, newest first |
