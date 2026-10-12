@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
+import sys
+import threading
+from io import BytesIO
 
-from circuit_mcp import ipad_capture, paths, web
+import pytest
+from fastapi.testclient import TestClient
+from pypdf import PdfReader, errors
+
+from circuit_mcp import ipad_capture, paths, pdf_text, web
 from circuit_mcp.cards import build_card
+from tests.fixtures.pdfs import encrypted_pdf, text_pdf
 
 
 def client(tmp_path, monkeypatch):
@@ -28,6 +35,31 @@ def test_dashboard_and_real_tool_execution(tmp_path, monkeypatch):
             json={"arguments": {"expr_a": "1/(s+1)", "expr_b": "1/(1+s)"}},
         ).json()
         assert result["equivalent"] is True
+
+
+def test_status_lists_the_tools_whether_the_workspace_file_is_missing_or_empty(tmp_path, monkeypatch):
+    """Issue #143: a `{}` workspace file 500ed /api/status, so the bench never got its tools."""
+    config = paths.workspace_config()
+    with client(tmp_path, monkeypatch) as browser:
+        assert not config.exists()
+        missing = browser.get("/api/status")
+        config.write_text("{}")
+        empty = browser.get("/api/status")
+    for response in (missing, empty):
+        assert response.status_code == 200
+        assert "derive" in response.json()["tools"]
+    assert empty.json()["workspace_configuration"]["configured"] is False
+
+
+def test_app_js_loads_the_other_panes_when_the_status_fails(tmp_path, monkeypatch):
+    """Issue #143: every pane loaded after the status, so one failed status left them all empty."""
+    with client(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+    refresh = app_script.split("async function refresh(){", 1)[1].split("\n", 1)[0]
+    # The status has its own catch, and the notebook and board load after it either way.
+    status_block_ends = "renderTools(s.tools)}catch(e){toast(e.message)}try{"
+    assert status_block_ends in refresh
+    assert refresh.index(status_block_ends) < refresh.index("loadLibrary(),loadProblems()")
 
 
 def test_the_bench_check_tools_are_exposed_in_the_command_center():
@@ -96,6 +128,21 @@ def test_app_js_surfaces_upstream_errors_and_guards_optional_fields(tmp_path, mo
         assert "data.errors" in app_script
         assert "Number.isFinite(result.durationSec)" in app_script
         assert "Number.isFinite(result.fps)" in app_script
+
+
+def test_app_js_shows_a_plain_text_error_as_its_status_and_text(tmp_path, monkeypatch):
+    """Issue #150: every body was parsed as JSON, so a plain-text 500 toasted a parser complaint."""
+    with client(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+    api = app_script.split("async function api(url,options={}){", 1)[1].split("\n", 1)[0]
+    # The body is parsed as JSON only when the server says it is JSON ...
+    assert "content-type" in api
+    assert api.index("content-type") < api.index("response.json()")
+    # ... anything else is reported by its status and the start of its own text ...
+    assert "response.text()" in api
+    assert "HTTP ${response.status}" in api
+    # ... and a JSON error keeps its detail sentence.
+    assert "throw new Error(apiErrorMessage(data))" in api
 
 
 def test_app_js_preserves_typed_briefs_without_a_document_wide_observer(tmp_path, monkeypatch):
@@ -170,6 +217,86 @@ def test_upload_rejects_unsafe_type_and_oversized_stream(tmp_path, monkeypatch):
         assert browser.post("/api/library", files={"file": ("bad.exe", b"x")}).status_code == 415
         assert browser.post("/api/library", files={"file": ("large.txt", b"123456789")}).status_code == 413
         assert not list(web.FILES.glob("*"))
+
+
+@pytest.mark.parametrize(("content", "failure", "sentence"), [
+    (encrypted_pdf("secret"), errors.FileNotDecryptedError, "needs a password to open"),
+    (b"this is not a pdf", errors.PdfStreamError, "is not a readable PDF"),
+    (b"", errors.EmptyFileError, "is not a readable PDF"),
+], ids=["open-password", "damaged", "empty"])
+def test_an_unreadable_pdf_is_refused_with_a_sentence_and_leaves_no_file(
+        tmp_path, monkeypatch, content, failure, sentence):
+    """Issue #131: a locked, damaged or empty PDF answered a bare 500."""
+    with pytest.raises(failure):
+        [page.extract_text() for page in PdfReader(BytesIO(content)).pages]
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.post("/api/library", data={"category": "lecture"},
+                                files={"file": ("week-3.pdf", content, "application/pdf")})
+    assert response.status_code == 422
+    assert sentence in response.json()["detail"]
+    assert "week-3.pdf" in response.json()["detail"]
+    assert not list(web.FILES.glob("*"))
+
+
+def test_a_pdf_locked_only_against_editing_still_uploads(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.post("/api/library", data={"category": "lecture"},
+                                files={"file": ("owner.pdf", encrypted_pdf(""), "application/pdf")})
+    assert response.status_code == 200
+    assert response.json()["item"]["pages"] == 1
+
+
+def test_a_pdf_that_takes_too_long_to_read_is_refused_and_leaves_no_file(tmp_path, monkeypatch):
+    """A PDF that sends pypdf into a loop held its upload, and its partial file, forever."""
+    monkeypatch.setattr(pdf_text, "_command",
+                        lambda path, limit: [sys.executable, "-c", "import time; time.sleep(60)"])
+    monkeypatch.setattr(pdf_text, "READ_SECONDS", 0.5)
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.post("/api/library", data={"category": "lecture"},
+                                files={"file": ("loop.pdf", text_pdf(["one page"]), "application/pdf")})
+    assert response.status_code == 422
+    assert response.json()["detail"].startswith("loop.pdf took longer than 0.5 s to read; it may be damaged")
+    assert not list(web.FILES.glob("*"))
+
+
+def test_reading_an_upload_does_not_hold_up_the_rest_of_the_desk(tmp_path, monkeypatch):
+    """Issue #121: extraction ran on the event loop, so a long PDF froze every other request."""
+    extracting, answered = threading.Event(), threading.Event()
+    answered_while_reading = []
+
+    def slow_extract(path, extension):
+        extracting.set()
+        answered_while_reading.append(answered.wait(5))
+        return "slow lecture notes on op-amps", 1
+
+    monkeypatch.setattr(web, "_extract", slow_extract)
+    uploads = []
+    with client(tmp_path, monkeypatch) as browser:
+        upload = threading.Thread(target=lambda: uploads.append(browser.post(
+            "/api/library", files={"file": ("slow.pdf", b"%PDF-", "application/pdf")})))
+        upload.start()
+        assert extracting.wait(5)
+        assert browser.get("/healthz").status_code == 200
+        assert browser.get("/api/canvas").status_code == 200
+        answered.set()
+        upload.join(10)
+        found = browser.get("/api/library?q=op-amps").json()["items"]
+    assert answered_while_reading == [True], "nothing was answered until the PDF had been read"
+    assert uploads[0].status_code == 200
+    assert [item["name"] for item in found] == ["slow.pdf"]
+
+
+def test_an_uploaded_pdf_keeps_its_text_up_to_the_limit_and_is_searchable(tmp_path, monkeypatch):
+    pdf = text_pdf([f"page {number} of the capacitor chapter" for number in range(1, 41)])
+    kept = "\n".join(page.extract_text() for page in PdfReader(BytesIO(pdf)).pages)[:100]
+    monkeypatch.setattr(web, "TEXT_LIMIT", 100)
+    with client(tmp_path, monkeypatch) as browser:
+        item = browser.post("/api/library",
+                            files={"file": ("long.pdf", pdf, "application/pdf")}).json()["item"]
+        found = browser.get("/api/library?q=capacitor").json()["items"]
+    assert item["pages"] == 40
+    assert web._db().get_document(item["id"])["text"] == kept
+    assert [entry["id"] for entry in found] == [item["id"]]
 
 
 def test_unknown_tool_and_invalid_host_are_rejected(tmp_path, monkeypatch):
@@ -384,6 +511,135 @@ def test_posting_attempt_id_inside_arguments_is_refused(tmp_path, monkeypatch):
         )
     assert response.status_code == 422
     assert "attempt_id" in response.json()["detail"]
+
+
+def test_a_context_query_too_long_to_search_is_refused_with_a_sentence(tmp_path, monkeypatch):
+    """Issue #132: /api/library refused this query with a 400, /api/context with a bare 500."""
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.get("/api/context", params={"q": "a" * 501})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "search query is too long"
+
+
+@pytest.mark.parametrize(("body", "sentence"), [
+    ('{"title":"t","topic":"x","prompt":"p","source_page":99999999999999999999}', "source_page must be"),
+    ('{"title":"t","topic":"x","prompt":"p","document_id":""}', "invalid document id"),
+    ('{"title":"\\ud800","topic":"x","prompt":"p"}', "title contains an unpaired surrogate"),
+], ids=["page-overflow", "empty-document-id", "lone-surrogate"])
+def test_a_problem_with_bad_input_is_refused_with_a_sentence(tmp_path, monkeypatch, body, sentence):
+    """Issue #132: each of these reached SQLite and answered a bare 500."""
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.post("/api/problems", content=body,
+                                headers={"content-type": "application/json"})
+        problems = browser.get("/api/problems").json()["items"]
+    assert response.status_code == 400
+    assert sentence in response.json()["detail"]
+    assert problems == []
+
+
+def test_board_writes_with_an_unpaired_surrogate_are_refused_with_a_sentence(tmp_path, monkeypatch):
+    """Issue #132: each of these reached SQLite and answered a bare 500."""
+    with client(tmp_path, monkeypatch) as browser:
+        document = browser.post("/api/library", files={
+            "file": ("rc.md", b"Find the RC pole", "text/markdown")}).json()["item"]
+        problem = browser.post("/api/problems", json={
+            "title": "RC pole", "topic": "filters", "prompt": "Find the pole"}).json()["problem"]
+        attempt = browser.post(f"/api/problems/{problem['id']}/attempts",
+                               json={"actor": "student"}).json()["attempt"]
+        transcription = web._db().add_transcription(document["id"], "1/(1+sRC)", "formula_ocr", "latex")
+        writes = [
+            ("PATCH", f"/api/problems/{problem['id']}/interpretation",
+             '{"circuit_interpretation":"R1 from 1 to \\ud800"}'),
+            ("POST", f"/api/problems/{problem['id']}/attempts", '{"actor":"student \\ud800"}'),
+            ("PATCH", f"/api/attempts/{attempt['id']}", '{"answer":"-1/RC \\ud800","status":"correct"}'),
+            ("POST", f"/api/transcriptions/{transcription['id']}/confirm",
+             '{"corrected_content":"1/(1+sRC) \\ud800"}'),
+        ]
+        answers = [(path, browser.request(method, path, content=body,
+                                          headers={"content-type": "application/json"}))
+                   for method, path, body in writes]
+    for path, response in answers:
+        assert response.status_code == 400, path
+        assert "contains an unpaired surrogate" in response.json()["detail"], path
+
+
+def _never_run(monkeypatch) -> list:
+    ran: list = []
+    monkeypatch.setitem(web.TOOLS, "alias_frequency",
+                        lambda **arguments: ran.append(arguments) or {"ok": True})
+    return ran
+
+
+def test_a_tool_call_for_an_unknown_attempt_is_refused_before_the_tool_runs(tmp_path, monkeypatch):
+    """Issue #132: the tool ran, recording it then raised, and the answer was lost in a bare 500."""
+    ran = _never_run(monkeypatch)
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.post("/api/tools/alias_frequency", json={
+            "arguments": {"input_hz": 1000, "sample_rate_hz": 800}, "attempt_id": "nope"})
+    assert response.status_code == 404
+    assert response.json()["detail"] == "attempt not found"
+    assert ran == []
+
+
+@pytest.mark.parametrize("number", ["1e400", "NaN", "-Infinity"])
+def test_a_tool_argument_that_is_not_a_finite_number_is_refused(tmp_path, monkeypatch, number):
+    """Issue #132: the JSON parser reads these as inf and nan, which no evidence row can hold."""
+    ran = _never_run(monkeypatch)
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.post(
+            "/api/tools/alias_frequency", headers={"content-type": "application/json"},
+            content='{"arguments":{"input_hz":%s,"sample_rate_hz":800}}' % number)
+    assert response.status_code == 422
+    assert "arguments.input_hz is not a finite number" in response.json()["detail"]
+    assert ran == []
+
+
+def test_a_result_that_overflows_comes_back_saying_it_was_not_recorded(tmp_path, monkeypatch):
+    """Issue #132: the tool succeeded, recording it raised, and the answer was thrown away."""
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.post("/api/tools/transimpedance", json={
+            "arguments": {"input_current_a": 1e308, "feedback_ohm": 1e308}})
+        events = browser.get("/api/history").json()["events"]
+    assert response.status_code == 200
+    result = response.json()
+    assert result["ok"] is True
+    assert result["transimpedance_ohm"] == -1e308
+    assert result["output_v"] is None
+    assert "evidence_id" not in result
+    assert result["evidence_warning"] == (
+        "not recorded as evidence: result.output_v is not a finite number (-inf)")
+    assert events[0]["name"] == "transimpedance"
+
+
+def test_an_unexpected_error_still_answers_json_with_its_reason(tmp_path, monkeypatch):
+    """Issue #132: a bug answered `Internal Server Error` in plain text, which said nothing."""
+    def broken():
+        raise RuntimeError("the receiver state is unreadable")
+
+    monkeypatch.setattr(web.IPAD_CAPTURE, "status", broken)
+    client(tmp_path, monkeypatch)
+    browser = TestClient(web.app, headers={"host": "localhost:2300"}, raise_server_exceptions=False)
+    response = browser.get("/api/ipad/status")
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "unexpected server error: RuntimeError: the receiver state is unreadable"}
+
+
+def test_a_foreign_write_is_refused_before_a_route_could_reach_the_json_500(tmp_path, monkeypatch):
+    """The cross-origin guard answers its own 403; only a crash past it becomes the JSON 500."""
+    def broken():
+        raise RuntimeError("the receiver could not be stopped")
+
+    monkeypatch.setattr(web.IPAD_CAPTURE, "stop_airplay", broken)
+    client(tmp_path, monkeypatch)
+    browser = TestClient(web.app, base_url="http://localhost:2300", raise_server_exceptions=False)
+    foreign = browser.post("/api/ipad/receiver/stop", headers={"Origin": "https://evil.example"})
+    own = browser.post("/api/ipad/receiver/stop", headers={"Origin": "http://localhost:2300"})
+    assert foreign.status_code == 403
+    assert "only the desk's own page" in foreign.json()["detail"]
+    assert own.status_code == 500
+    assert own.json() == {
+        "detail": "unexpected server error: RuntimeError: the receiver could not be stopped"}
 
 
 def test_the_canvas_feed_leaves_solutions_off_the_desk(tmp_path, monkeypatch):

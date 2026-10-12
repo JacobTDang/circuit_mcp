@@ -151,6 +151,58 @@ def test_repository_inputs_are_parameterized_and_bounded(tmp_path):
         db.complete_attempt("missing", "x", "working")
 
 
+@pytest.mark.parametrize(("change", "sentence"), [
+    ({"source_page": 99999999999999999999}, "source_page must be a whole number from 1 to"),
+    ({"source_page": 0}, "source_page must be a whole number from 1 to"),
+    ({"document_id": ""}, "invalid document id"),
+    ({"title": "\ud800"}, "title contains an unpaired surrogate"),
+    ({"prompt": "find R1 \udfff"}, "prompt contains an unpaired surrogate"),
+], ids=["page-overflow", "page-zero", "empty-document-id", "lone-surrogate-title", "lone-surrogate-prompt"])
+def test_a_problem_sqlite_cannot_store_is_refused_with_a_sentence(tmp_path, change, sentence):
+    """Issue #132: these escaped as OverflowError, IntegrityError and UnicodeEncodeError."""
+    db, _ = database(tmp_path)
+    with pytest.raises(StorageError, match=sentence):
+        db.create_problem(**{"title": "t", "topic": "x", "prompt": "p", **change})
+    assert db.list_problems() == []
+
+
+@pytest.mark.parametrize(("write", "field"), [
+    (lambda db, p, a, t: db.update_problem(p["id"], "R1 from 1 to \ud800", "confirmed"),
+     "circuit_interpretation"),
+    (lambda db, p, a, t: db.create_attempt(p["id"], "student \udc00"), "actor"),
+    (lambda db, p, a, t: db.create_attempt(p["id"], "student", answer="-1/RC \ud800"), "answer"),
+    (lambda db, p, a, t: db.confirm_transcription(t["id"], "1/(1+sRC) \ud800"), "corrected_content"),
+    (lambda db, p, a, t: db.complete_attempt(a["id"], "-1/RC \ud800", "correct"), "answer"),
+    (lambda db, p, a, t: db.complete_attempt(a["id"], "-1/RC", "incorrect", "sign \udfff"),
+     "first_divergence"),
+], ids=["interpretation", "attempt-actor", "attempt-answer", "transcription-correction",
+        "completed-answer", "first-divergence"])
+def test_text_with_an_unpaired_surrogate_is_refused_and_nothing_changes(tmp_path, write, field):
+    """Issue #132: these reached SQLite as a UnicodeEncodeError, and a correction did so only
+    after it had already rejected the transcription it was meant to replace."""
+    db, data = database(tmp_path)
+    document = add_document(db, data)
+    problem = db.create_problem("RC pole", "filters", "find the pole")
+    attempt = db.create_attempt(problem["id"], "student")
+    transcription = db.add_transcription(document["id"], "1/(1+sRC)", "formula_ocr", "latex")
+    with pytest.raises(StorageError, match=f"{field} contains an unpaired surrogate"):
+        write(db, problem, attempt, transcription)
+    assert db.get_problem(problem["id"])["status"] == "draft"
+    assert [item["id"] for item in db.attempt_history(problem["id"])] == [attempt["id"]]
+    assert db.get_attempt(attempt["id"])["status"] == "working"
+    assert db.get_transcription(transcription["id"])["status"] == "unconfirmed"
+
+
+def test_evidence_json_cannot_hold_is_refused_with_where_it_sits(tmp_path):
+    """Issue #132: a bare ValueError, which the MCP path's StorageError handler let through."""
+    db, _ = database(tmp_path)
+    with pytest.raises(StorageError, match=r"result\.output_v is not a finite number \(-inf\)"):
+        db.record_tool_call("transimpedance", {"input_current_a": 1e308, "feedback_ohm": 1e308},
+                            {"ok": True, "output_v": float("-inf")}, 1.0)
+    with pytest.raises(StorageError, match=r"arguments\.values\[1\] is not a finite number \(nan\)"):
+        db.record_tool_call("quantize", {"values": [0.5, float("nan")]}, {"ok": True}, 1.0)
+
+
 def test_concurrent_events_and_documents_do_not_lose_writes(tmp_path):
     db, data = database(tmp_path)
     errors = []
