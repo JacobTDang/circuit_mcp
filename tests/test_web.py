@@ -459,6 +459,53 @@ def test_the_sheet_needs_an_assignment_tag(tmp_path, monkeypatch):
         assert browser.get("/solutions").status_code == 400
 
 
+def test_the_sheet_refuses_a_tag_no_problem_could_carry(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as browser:
+        for impossible in ("hw3'\"<", "✓", "a\x00b", "-hw3", "x" * 51):
+            refused = browser.get("/solutions", params={"tag": impossible})
+            assert refused.status_code == 400, impossible
+            detail = refused.json()["detail"]
+            assert "letters, digits" in detail and detail.endswith("."), detail
+
+
+def test_a_tag_nobody_carries_says_so_lists_the_real_ones_and_offers_no_export(tmp_path, monkeypatch):
+    """A typo must read as 'no such tag', not as a blank page ready to hand in."""
+    with client(tmp_path, monkeypatch) as browser:
+        database = web._db()
+        for tag in ("hw3", "m2-hw1"):
+            problem = database.create_problem(f"{tag} P1", "dividers", "find V_out", source_page=1)
+            database.tag_problem(problem["id"], tag)
+
+        page = browser.get("/solutions?tag=nothing-here")
+
+    assert page.status_code == 404
+    assert "No problems are tagged" in page.text and "nothing-here" in page.text
+    assert 'href="/solutions?tag=hw3"' in page.text and 'href="/solutions?tag=m2-hw1"' in page.text
+    assert "Export PDF" not in page.text and "window.print" not in page.text
+    assert "<article" not in page.text
+
+
+def test_the_empty_sheet_says_when_no_problem_carries_any_tag(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as browser:
+        page = browser.get("/solutions?tag=hw3")
+
+    assert page.status_code == 404
+    assert "No problems are tagged" in page.text and "No problem carries a tag yet" in page.text
+    assert "Export PDF" not in page.text
+
+
+def test_the_sheet_tag_ignores_case(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as browser:
+        database = web._db()
+        problem = database.create_problem("Problem 1", "dividers", "find V_out", source_page=1)
+        database.tag_problem(problem["id"], "hw3")
+
+        page = browser.get("/solutions?tag=HW3")
+
+    assert page.status_code == 200
+    assert "<h2>Problem 1</h2>" in page.text and "Export PDF" in page.text
+
+
 def test_the_sheet_escapes_every_text_field(tmp_path, monkeypatch):
     with client(tmp_path, monkeypatch) as browser:
         database = web._db()

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from html import escape
 from typing import Any
+from urllib.parse import quote
 
 MISSING = "no solution yet"
 
@@ -61,6 +62,18 @@ def _solution(payload: dict[str, Any], calls: list[dict[str, Any]], foreign_atte
     )
 
 
+def _page(assignment: str, actions: str, main: str) -> str:
+    return (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        f"<title>{escape(assignment)} solutions</title>"
+        '<link rel="stylesheet" href="/assets/solution.css">'
+        "</head><body>"
+        f'<header class="sheet"><h1>{escape(assignment)}</h1>{actions}</header>'
+        f'<main>{main}</main>'
+        "</body></html>"
+    )
+
+
 def render(assignment: str, problems: list[dict[str, Any]]) -> str:
     """The whole sheet. ``problems`` is in the order it should be handed in."""
     blocks = []
@@ -73,13 +86,14 @@ def render(assignment: str, problems: list[dict[str, Any]]) -> str:
             f'<h2>{escape(problem["title"])}</h2></header>'
             f'<p class="prompt">{escape(problem.get("prompt", ""))}</p>{body}</article>'
         )
-    return (
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-        f"<title>{escape(assignment)} solutions</title>"
-        '<link rel="stylesheet" href="/assets/solution.css">'
-        "</head><body>"
-        f'<header class="sheet"><h1>{escape(assignment)}</h1>'
-        '<button type="button" onclick="window.print()">Export PDF</button></header>'
-        f'<main>{"".join(blocks)}</main>'
-        "</body></html>"
-    )
+    export = '<button type="button" onclick="window.print()">Export PDF</button>'
+    return _page(assignment, export, "".join(blocks))
+
+
+def render_unknown(assignment: str, tags: list[str]) -> str:
+    """A tag no problem carries: say so and name the real ones, with nothing to export."""
+    links = ", ".join(f'<a href="/solutions?tag={escape(quote(tag))}">{escape(tag)}</a>' for tag in tags)
+    known = (f'<p class="tags">Tags in use: {links}.</p>' if tags
+             else '<p class="tags">No problem carries a tag yet.</p>')
+    return _page(assignment, "",
+                 f'<p class="unknown">No problems are tagged <code>{escape(assignment)}</code>.</p>{known}')

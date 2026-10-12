@@ -103,6 +103,11 @@ figure.schematic svg { max-width: 100%; height: auto; color: var(--ink); }
   color: #b3261e;
 }
 
+.unknown { margin: 28px 0 8px; font-size: 18px; }
+.unknown code { font: 16px ui-monospace, Menlo, monospace; }
+.tags { margin: 0; color: var(--muted); }
+.tags a { color: var(--accent); font-family: ui-monospace, Menlo, monospace; }
+
 @page { size: letter; margin: 18mm 16mm; }
 @media print {
   header.sheet button { display: none; }

@@ -37,6 +37,7 @@ CATEGORIES = {"homework", "lecture", "reference", "solution"}
 STATUSES = {"draft", "confirmed", "solved", "needs_review"}
 ATTEMPT_STATUSES = {"working", "correct", "incorrect", "partial", "gap"}
 UUID_RE = re.compile(r"^[0-9a-f]{32}$")
+TAG_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,49}")
 CARD_KINDS = ("formula", "walkthrough", "vocabulary", "breadboard", "expected", "schematic",
               "solution")
 
@@ -50,6 +51,15 @@ def _number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value) if math.isfinite(value) else None
+
+
+def _tag(tag: str) -> str:
+    """The one spelling a tag is stored under, refusing a tag no problem could carry."""
+    normalized = tag.casefold().strip()
+    if not TAG_RE.fullmatch(normalized):
+        raise StorageError(f"invalid tag {tag!r}: a tag is 1 to 50 letters, digits, hyphens and "
+                           "underscores, starting with a letter or digit.")
+    return normalized
 
 
 def _card(row: Any) -> dict[str, Any]:
@@ -772,8 +782,7 @@ class CommandCenterDB:
 
     def tag_problem(self, identifier: str, tag: str) -> dict[str, Any]:
         self.get_problem(identifier)
-        normalized = tag.casefold().strip()
-        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,49}", normalized): raise StorageError("invalid tag")
+        normalized = _tag(tag)
         with self.transaction() as connection:
             connection.execute("INSERT OR IGNORE INTO tags(name) VALUES(?)", (normalized,))
             connection.execute("INSERT OR IGNORE INTO problem_tags(problem_id,tag_id) SELECT ?,id FROM tags WHERE name=?", (identifier, normalized))
@@ -791,7 +800,7 @@ class CommandCenterDB:
             problems = [dict(row) for row in connection.execute(
                 "SELECT p.* FROM problems p JOIN problem_tags pt ON pt.problem_id=p.id "
                 "JOIN tags t ON t.id=pt.tag_id WHERE t.name=? AND p.course_id=? "
-                "ORDER BY COALESCE(p.source_page, 1e9), p.created_at", (tag.casefold().strip(), COURSE_ID))]
+                "ORDER BY COALESCE(p.source_page, 1e9), p.created_at", (_tag(tag), COURSE_ID))]
             for problem in problems:
                 cards = [_card(row) for row in connection.execute(
                     "SELECT * FROM canvas_cards WHERE problem_id=? AND kind='solution' "
@@ -810,6 +819,13 @@ class CommandCenterDB:
                     "JOIN attempts a ON a.id=t.attempt_id WHERE t.attempt_id=? AND a.problem_id=? "
                     "ORDER BY t.created_at", (attempt_id, problem["id"]))] if attempt_id else []
         return problems
+
+    def tags(self) -> list[str]:
+        """Every tag some problem carries: the sheets that exist."""
+        with self._connect() as connection:
+            return [row[0] for row in connection.execute(
+                "SELECT DISTINCT t.name FROM tags t JOIN problem_tags pt ON pt.tag_id=t.id "
+                "JOIN problems p ON p.id=pt.problem_id WHERE p.course_id=? ORDER BY t.name", (COURSE_ID,))]
 
     def create_attempt(self, problem_id: str, actor: str, answer: str = "", status: str = "working") -> dict[str, Any]:
         self.get_problem(problem_id)

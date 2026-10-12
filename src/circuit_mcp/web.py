@@ -652,10 +652,15 @@ def solutions(tag: str = "") -> Response:
     """One assignment as one page, ready to read, check and hand in."""
     if not tag.strip():
         raise HTTPException(400, "name the assignment tag, for example /solutions?tag=m2-hw1")
+    database = _db()
     try:
-        problems = _db().solution_sheet(tag)
+        problems = database.solution_sheet(tag)
     except StorageError as exc:
         raise HTTPException(400, str(exc)) from exc
+    if not problems:
+        # A mistyped tag has to read as "no such sheet", not as a blank page ready to print.
+        return Response(content=solution_sheet.render_unknown(tag, database.tags()),
+                        status_code=404, media_type="text/html")
     return Response(content=solution_sheet.render(tag, problems), media_type="text/html")
 
 
