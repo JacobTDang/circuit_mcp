@@ -241,6 +241,18 @@ def test_app_js_keeps_a_build_step_with_the_drawing(tmp_path, monkeypatch):
         assert "overflow:visible" in card
 
 
+def test_app_js_pins_a_build_step_from_the_keyboard(tmp_path, monkeypatch):
+    """Enter did nothing, and once a net was pinned the keyboard could not light a step."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        focusin = app_script.split("addEventListener('focusin'", 1)[1].split("});", 1)[0]
+        assert "dataset.pinned)return" not in focusin
+        board = app_script.split("function boardFocus(", 1)[1]
+        assert "addEventListener('keydown'" in board
+        keys = board.split("addEventListener('keydown'", 1)[1].split("});", 1)[0]
+        assert "Escape" in keys and "Enter" in keys and "dataset.pinned" in keys
+
+
 def test_the_breadboard_drawing_has_no_minimum_width(tmp_path, monkeypatch):
     """min-width:560px stopped the second press of minus from shrinking the drawing."""
     with _browser(tmp_path, monkeypatch) as browser:
