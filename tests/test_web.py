@@ -498,6 +498,92 @@ def test_posting_attempt_id_inside_arguments_is_refused(tmp_path, monkeypatch):
     assert "attempt_id" in response.json()["detail"]
 
 
+def test_a_context_query_too_long_to_search_is_refused_with_a_sentence(tmp_path, monkeypatch):
+    """Issue #132: /api/library refused this query with a 400, /api/context with a bare 500."""
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.get("/api/context", params={"q": "a" * 501})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "search query is too long"
+
+
+@pytest.mark.parametrize(("body", "sentence"), [
+    ('{"title":"t","topic":"x","prompt":"p","source_page":99999999999999999999}', "source_page must be"),
+    ('{"title":"t","topic":"x","prompt":"p","document_id":""}', "invalid document id"),
+    ('{"title":"\\ud800","topic":"x","prompt":"p"}', "title contains an unpaired surrogate"),
+], ids=["page-overflow", "empty-document-id", "lone-surrogate"])
+def test_a_problem_with_bad_input_is_refused_with_a_sentence(tmp_path, monkeypatch, body, sentence):
+    """Issue #132: each of these reached SQLite and answered a bare 500."""
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.post("/api/problems", content=body,
+                                headers={"content-type": "application/json"})
+        problems = browser.get("/api/problems").json()["items"]
+    assert response.status_code == 400
+    assert sentence in response.json()["detail"]
+    assert problems == []
+
+
+def _never_run(monkeypatch) -> list:
+    ran: list = []
+    monkeypatch.setitem(web.TOOLS, "alias_frequency",
+                        lambda **arguments: ran.append(arguments) or {"ok": True})
+    return ran
+
+
+def test_a_tool_call_for_an_unknown_attempt_is_refused_before_the_tool_runs(tmp_path, monkeypatch):
+    """Issue #132: the tool ran, recording it then raised, and the answer was lost in a bare 500."""
+    ran = _never_run(monkeypatch)
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.post("/api/tools/alias_frequency", json={
+            "arguments": {"input_hz": 1000, "sample_rate_hz": 800}, "attempt_id": "nope"})
+    assert response.status_code == 404
+    assert response.json()["detail"] == "attempt not found"
+    assert ran == []
+
+
+@pytest.mark.parametrize("number", ["1e400", "NaN", "-Infinity"])
+def test_a_tool_argument_that_is_not_a_finite_number_is_refused(tmp_path, monkeypatch, number):
+    """Issue #132: the JSON parser reads these as inf and nan, which no evidence row can hold."""
+    ran = _never_run(monkeypatch)
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.post(
+            "/api/tools/alias_frequency", headers={"content-type": "application/json"},
+            content='{"arguments":{"input_hz":%s,"sample_rate_hz":800}}' % number)
+    assert response.status_code == 422
+    assert "arguments.input_hz is not a finite number" in response.json()["detail"]
+    assert ran == []
+
+
+def test_a_result_that_overflows_comes_back_saying_it_was_not_recorded(tmp_path, monkeypatch):
+    """Issue #132: the tool succeeded, recording it raised, and the answer was thrown away."""
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.post("/api/tools/transimpedance", json={
+            "arguments": {"input_current_a": 1e308, "feedback_ohm": 1e308}})
+        events = browser.get("/api/history").json()["events"]
+    assert response.status_code == 200
+    result = response.json()
+    assert result["ok"] is True
+    assert result["transimpedance_ohm"] == -1e308
+    assert result["output_v"] is None
+    assert "evidence_id" not in result
+    assert result["evidence_warning"] == (
+        "not recorded as evidence: result.output_v is not a finite number (-inf)")
+    assert events[0]["name"] == "transimpedance"
+
+
+def test_an_unexpected_error_still_answers_json_with_its_reason(tmp_path, monkeypatch):
+    """Issue #132: a bug answered `Internal Server Error` in plain text, which said nothing."""
+    def broken():
+        raise RuntimeError("the receiver state is unreadable")
+
+    monkeypatch.setattr(web.IPAD_CAPTURE, "status", broken)
+    client(tmp_path, monkeypatch)
+    browser = TestClient(web.app, headers={"host": "localhost:2300"}, raise_server_exceptions=False)
+    response = browser.get("/api/ipad/status")
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "unexpected server error: RuntimeError: the receiver state is unreadable"}
+
+
 def test_the_canvas_feed_leaves_solutions_off_the_desk(tmp_path, monkeypatch):
     """A solution is homework; the board deletes what it closes, so it never sees one."""
     with client(tmp_path, monkeypatch) as browser:

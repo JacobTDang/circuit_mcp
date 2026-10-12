@@ -32,6 +32,7 @@ COURSE_CODE = "CIRCUITS"
 CATEGORIES = {"homework", "lecture", "reference", "solution"}
 STATUSES = {"draft", "confirmed", "solved", "needs_review"}
 ATTEMPT_STATUSES = {"working", "correct", "incorrect", "partial", "gap"}
+MAX_SOURCE_PAGE = 100_000
 UUID_RE = re.compile(r"^[0-9a-f]{32}$")
 CARD_KINDS = ("formula", "walkthrough", "vocabulary", "breadboard", "expected", "schematic",
               "solution")
@@ -46,6 +47,33 @@ def _number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value) if math.isfinite(value) else None
+
+
+def non_finite(value: Any, where: str) -> str | None:
+    """Name the first infinity or NaN in ``value``, which JSON cannot hold, or None."""
+    if isinstance(value, float):
+        return None if math.isfinite(value) else f"{where} is not a finite number ({value})"
+    if isinstance(value, dict):
+        children = ((f"{where}.{key}", item) for key, item in value.items())
+    elif isinstance(value, (list, tuple)):
+        children = ((f"{where}[{index}]", item) for index, item in enumerate(value))
+    else:
+        return None
+    for path, item in children:
+        found = non_finite(item, path)
+        if found:
+            return found
+    return None
+
+
+def _storable_text(**fields: str) -> None:
+    """JSON can carry a lone surrogate, which is not text and which SQLite cannot encode."""
+    for name, value in fields.items():
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise StorageError(f"{name} contains an unpaired surrogate "
+                               f"({value[exc.start]!r}), which is not text") from exc
 
 
 def _card(row: Any) -> dict[str, Any]:
@@ -572,7 +600,11 @@ class CommandCenterDB:
             raise StorageError("title, topic, prompt, and a valid status are required")
         if max(map(len, (title, topic, prompt, circuit_interpretation))) > 200_000:
             raise StorageError("problem text is too large")
-        if document_id: self.get_document(document_id, include_text=False)
+        _storable_text(title=title, topic=topic, prompt=prompt, circuit_interpretation=circuit_interpretation)
+        if source_page is not None and (isinstance(source_page, bool) or not isinstance(source_page, int)
+                                        or not 1 <= source_page <= MAX_SOURCE_PAGE):
+            raise StorageError(f"source_page must be a whole number from 1 to {MAX_SOURCE_PAGE}")
+        if document_id is not None: self.get_document(document_id, include_text=False)
         identifier, now = uuid.uuid4().hex, time.time()
         with self.transaction() as connection:
             connection.execute(
@@ -814,6 +846,8 @@ class CommandCenterDB:
     def record_tool_call(self, tool_name: str, arguments: dict[str, Any], result: dict[str, Any],
                          duration_ms: float, attempt_id: str | None = None) -> dict[str, Any]:
         if attempt_id: self.get_attempt(attempt_id)
+        found = non_finite(arguments, "arguments") or non_finite(result, "result")
+        if found: raise StorageError(f"not recorded as evidence: {found}")
         arguments_json = json.dumps(arguments, separators=(",", ":"), allow_nan=False)
         result_json = json.dumps(result, separators=(",", ":"), allow_nan=False)
         if len(arguments_json) > 5_000_000 or len(result_json) > 10_000_000: raise StorageError("tool evidence is too large")
