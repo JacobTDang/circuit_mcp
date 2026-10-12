@@ -51,6 +51,13 @@ def test_a_formula_card_needs_at_least_one_item():
         build_card("formula", "empty", {"items": []})
 
 
+def test_a_current_named_I_is_drawn_as_I_not_the_imaginary_unit():
+    card = build_card("formula", "Ohm", {"items": [{"label": "current", "expression": "I"}]})
+    mathml = card["payload"]["items"][0]["mathml"]
+    assert "<mi>I</mi>" in mathml
+    assert "ImaginaryI" not in mathml and "&#8520;" not in mathml
+
+
 # --- walkthrough --------------------------------------------------------------
 
 def test_a_walkthrough_whose_steps_all_hold_is_accepted_and_marked_verified():
@@ -82,6 +89,31 @@ def test_a_physics_substitution_is_not_an_algebra_step():
                 {"expression": "V_s - V_C - R*C*dV_C", "note": "the capacitor current is C dV/dt"},
             ],
         })
+
+
+def test_a_walkthrough_that_squares_a_current_into_a_minus_sign_is_refused():
+    """With I read as sqrt(-1), I^2*R = -R was stored as verified."""
+    with pytest.raises(CardError, match=r"[Ss]tep 1 -> 2"):
+        build_card("walkthrough", "Power", {
+            "truth": "I^2*R",
+            "steps": [
+                {"expression": "I^2*R", "note": "P = I^2 R"},
+                {"expression": "-R"},
+            ],
+        })
+
+
+def test_a_walkthrough_reads_e_and_j_as_constants():
+    card = build_card("walkthrough", "RC", {
+        "truth": "V0*exp(-t/(R*C))",
+        "steps": [{"expression": "V0*e^(-t/(R*C))", "note": "decay"}],
+    })
+    assert card["payload"]["verified"] is True
+    card = build_card("walkthrough", "phasor", {
+        "truth": "-1",
+        "steps": [{"expression": "j^2", "note": "the imaginary unit squared"}],
+    })
+    assert card["payload"]["verified"] is True
 
 
 def test_a_walkthrough_with_one_bad_transition_is_refused_naming_the_step():

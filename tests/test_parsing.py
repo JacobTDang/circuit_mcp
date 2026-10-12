@@ -95,14 +95,6 @@ def test_a_name_that_collides_with_a_sympy_function_stays_a_symbol():
     assert not parsed.atoms(sp.Function)
 
 
-def test_I_and_E_keep_their_sympy_meanings():
-    """A documented collision: EE writes currents as I. SymPy's I wins here,
-    because ground truth comes from lcapy and disagreeing with it would report
-    correct work as wrong. Pinned so any change is a deliberate one."""
-    assert parse_expression("I*w*L") == sp.I * sp.Symbol("w") * sp.Symbol("L")
-    assert parse_expression("E") is sp.E
-
-
 def test_a_parsed_s_carries_no_assumptions():
     """Trap 2: a positive ``s`` makes pole solving return [] instead of erroring."""
     s = next(iter(parse_expression("1/(s + 1)").free_symbols))
@@ -468,6 +460,98 @@ def test_every_other_keyword_is_still_banned():
     for text in ("lambda*R", "class*R", "import*R", "None + R"):
         with pytest.raises(ParseError):
             parse_expression(text)
+
+
+# --- circuit notation: I and E are quantities, j and e are constants ----------
+
+def test_I_and_E_are_a_current_and_an_emf_not_constants():
+    """Read as SymPy's constants, I^2*R was "proved" equal to -R."""
+    I, E, R = sp.symbols("I E R")
+    assert parse_expression("I^2*R") == I**2 * R
+    assert parse_expression("E/R") == E / R
+    assert not equivalent(parse_expression("I^2*R"), parse_expression("-R")).equivalent
+
+
+def test_j_is_the_imaginary_unit_and_e_is_eulers_number():
+    t, R, C, V0 = sp.symbols("t R C V0")
+    assert parse_expression("j^2") == -1
+    assert parse_expression("e^(-t/(R*C))") == sp.exp(-t / (R * C))
+    assert parse_expression("V0/e") == V0 * sp.exp(-1)
+
+
+def test_each_constant_read_is_reported_beside_the_result():
+    renames = {}
+    parse_expression("V0*e^(-t/(R*C)) + j*w", renames=renames)
+    assert renames == {"e": "exp(1)", "j": "sqrt(-1)"}
+
+
+def test_a_current_named_I_is_not_reported_as_a_rename():
+    renames = {}
+    parse_expression("I*R + E", renames=renames)
+    assert renames == {}
+
+
+def test_scientific_notation_is_not_eulers_number():
+    renames = {}
+    assert parse_expression("2.5e-3*R", renames=renames) == sp.Rational(1, 400) * sp.Symbol("R")
+    assert renames == {}
+
+
+def test_an_imaginary_literal_is_j_even_where_I_names_a_current():
+    """Python reads 2j as one literal, which SymPy spells 2*I -- a current here."""
+    I, w = sp.symbols("I w")
+    renames = {}
+    assert parse_expression("2j*w + I", symbols={"I": I}, renames=renames) == 2 * sp.I * w + I
+    assert renames == {"j": "sqrt(-1)"}
+
+
+def test_a_number_before_capital_J_multiplies_like_any_other_name():
+    assert parse_expression("2J") == 2 * sp.Symbol("J")
+
+
+def test_a_symbol_cannot_be_bound_to_a_name_read_as_a_constant():
+    with pytest.raises(ParseError, match="Euler"):
+        parse_expression("e*R", symbols={"e": sp.Symbol("e")})
+
+
+def test_the_display_parse_reads_the_same_notation():
+    from circuit_mcp.parsing import parse_as_written
+
+    assert parse_as_written("I*R").free_symbols == {sp.Symbol("I"), sp.Symbol("R")}
+    assert parse_as_written("2j").has(sp.I)
+
+
+def test_a_sum_over_j_says_why_j_is_not_an_index():
+    with pytest.raises(ParseError, match="imaginary unit"):
+        parse_expression("sum_n(R_j, j, 1, n)")
+
+
+# --- text that reads back ------------------------------------------------------
+
+def test_text_spells_the_constants_the_way_the_parser_reads_them():
+    from circuit_mcp.parsing import as_text
+
+    Vs, C, R, w0 = sp.symbols("Vs C R omega_0", positive=True)
+    phasor = -sp.I * Vs / (C * R * w0 - sp.I)
+    assert "j" in as_text(phasor) and "I" not in as_text(phasor)
+    assert parse_expression(as_text(phasor), symbols=bind(phasor)) == phasor
+    assert as_text(sp.E * R) == "e*R"
+
+
+def test_text_of_a_current_named_I_reads_back_as_that_current():
+    from circuit_mcp.parsing import as_text
+
+    I, E, R = sp.symbols("I E R", positive=True)
+    expr = I**2 * R + E
+    assert parse_expression(as_text(expr), symbols=bind(expr)) == expr
+
+
+def test_text_refuses_a_symbol_that_would_read_back_as_a_constant():
+    """lcapy reads a netlist value 'e' as a symbol; its text would come back as 2.718."""
+    from circuit_mcp.parsing import as_text
+
+    with pytest.raises(ParseError, match="'e'"):
+        as_text(sp.Symbol("R") / sp.Symbol("e", positive=True))
 
 # --- parallel combination ----------------------------------------------------
 

@@ -408,6 +408,17 @@ name, is rewritten to `i_s` before the screen runs, and every result that parsed
 reports `renamed_symbols` so the substitution is never silent. All other keywords
 stay rejected.
 
+The notation is a circuits course's, not SymPy's. `I` and `E` are ordinary symbols
+-- a current, an EMF. `j` is the imaginary unit and `e` is Euler's number, so
+`e^(-t/(R*C))` is `exp(-t/(R*C))` and `j^2` is `-1`; write `j*w`, since `jw` is one
+name. Each read of `j` or `e` is reported in `renamed_symbols` (`"j": "sqrt(-1)"`,
+`"e": "exp(1)"`). Read with SymPy's meanings, `I^2*R` was "proved" equal to `-R`.
+Every returned `text` spells the two constants the same way, so it reads back as the
+same expression. A result that names a quantity `e` -- lcapy reads a netlist value
+`e` as a symbol -- is refused rather than returned as text that would read back as
+2.718. lcapy reads a netlist value `I` or `j` as the imaginary unit, so give a
+current source a value such as `Is`.
+
 Parallel combination is written `par(R1, R2, ...)`, not `R1 || R2`: SymPy overloads
 `|` as boolean `Or`, so admitting the operator would silently turn a resistance into
 a logical expression.

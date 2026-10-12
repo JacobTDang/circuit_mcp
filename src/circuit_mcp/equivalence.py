@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 import sympy as sp
 
-from .parsing import expand_sums
+from .parsing import expand_sums, printed
 from .symbols import assert_no_conflicts
 
 # Fixed, varied rationals so results are reproducible across runs. Values are
@@ -106,7 +106,7 @@ def equivalent(a: sp.Expr, b: sp.Expr) -> EquivalenceResult:
     # Oracle 2: numeric. Also the source of the counterexample.
     symbols = sorted(a.free_symbols | b.free_symbols, key=str)
     if not symbols:
-        return EquivalenceResult(False, "symbolic", None, f"constants differ by {delta}")
+        return EquivalenceResult(False, "symbolic", None, f"constants differ by {printed(delta)}")
 
     evaluated = 0
     for trial in range(len(_TRIALS)):
@@ -121,7 +121,7 @@ def equivalent(a: sp.Expr, b: sp.Expr) -> EquivalenceResult:
         if sp.simplify(diff) != 0:
             return EquivalenceResult(
                 False, "numeric", values,
-                f"differ by {diff} at the counterexample",
+                f"differ by {printed(diff)} at the counterexample",
             )
 
     if evaluated == 0:
@@ -133,5 +133,5 @@ def equivalent(a: sp.Expr, b: sp.Expr) -> EquivalenceResult:
     # Symbolic could not prove it, but every numeric trial agreed.
     return EquivalenceResult(
         True, "numeric", None,
-        f"agreed on {evaluated} random trials; simplify left {delta}",
+        f"agreed on {evaluated} random trials; simplify left {printed(delta)}",
     )
