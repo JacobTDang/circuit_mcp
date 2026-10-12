@@ -1640,7 +1640,11 @@ def attempt_complete(
     attempt_id: str, answer: str, status: str,
     first_divergence: str | None = None,
 ) -> dict[str, Any]:
-    """Complete an attempt as correct, incorrect, partial, or gap."""
+    """Complete a working attempt as correct, incorrect, partial, or gap.
+
+    A completed attempt is final and a second call is refused: a retry is a new
+    ``attempt_create``, so the first divergence of the earlier one stays on record.
+    """
     return _guarded(
         "attempt_complete", attempt_id=attempt_id, answer=answer,
         status=status, first_divergence=first_divergence,

@@ -155,7 +155,7 @@ capture and OCR, the course record, desk cards, and teaching videos.
 | `problem_update_interpretation` | Store a user-confirmed circuit interpretation |
 | `transcription_confirm` | Confirm OCR or preserve a corrected revision |
 | `attempt_create` | Start a student or agent attempt |
-| `attempt_complete` | Complete an attempt with a graded workflow status |
+| `attempt_complete` | Complete a working attempt with a graded workflow status; a completed attempt is final, so a retry is a new attempt |
 | `problem_tag` | Attach a normalized course tag |
 | `canvas_card_add` | Put a verified card on the desk (formula, walkthrough, vocabulary, schematic, breadboard, expected), or a problem's solution on its solutions sheet |
 | `canvas_card_list` | List the cards on the desk, newest first, optionally for one problem; a solution is on its sheet, not the desk, and is never listed |

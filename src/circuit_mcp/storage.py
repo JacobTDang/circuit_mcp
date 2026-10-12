@@ -845,9 +845,15 @@ class CommandCenterDB:
     def complete_attempt(self, identifier: str, answer: str, status: str, first_divergence: str | None = None) -> dict[str, Any]:
         if status not in ATTEMPT_STATUSES - {"working"}: raise StorageError("completed attempt needs a final status")
         with self.transaction() as connection:
+            row = connection.execute("SELECT status FROM attempts WHERE id=?", (identifier,)).fetchone()
+            if row is None: raise StorageError("attempt not found")
+            # A completion is final: its first divergence is the only record of
+            # the mistake, and overwriting it would also count a retry as a first try.
+            if row["status"] != "working":
+                raise StorageError(f"attempt {identifier} is already complete ({row['status']}): start a new "
+                                   "attempt with attempt_create for the retry, so this one stays on record.")
             connection.execute("UPDATE attempts SET answer=?,status=?,first_divergence=?,completed_at=? WHERE id=?",
                                (answer, status, first_divergence, time.time(), identifier))
-            if connection.execute("SELECT changes()").fetchone()[0] != 1: raise StorageError("attempt not found")
         return self.get_attempt(identifier)
 
     def record_tool_call(self, tool_name: str, arguments: dict[str, Any], result: dict[str, Any],
