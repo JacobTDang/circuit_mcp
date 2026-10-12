@@ -245,6 +245,7 @@ def test_when_the_written_form_cannot_be_laid_out_the_canonical_form_is_flagged(
 
 # --- breadboard and expected ------------------------------------------------------
 
+from circuit_mcp.compare import CompareError, compare_readings  # noqa: E402
 from tests.fixtures import lab1  # noqa: E402
 
 
@@ -267,6 +268,56 @@ def test_a_bad_build_is_refused_naming_the_field():
         build_card("breadboard", "x", {"parts": []})
     with pytest.raises(CardError, match="at least one probe"):
         build_card("expected", "x", {**lab1.EXP7_DAC, "probes": []})
+
+
+def test_tied_sources_are_refused_by_the_breadboard_and_expected_cards_alike():
+    """The expected card used to reach ngspice and come back with "DC solution failed"."""
+    build = {"supply": {"vplus": 5, "vminus": 0},
+             "parts": [{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": ["drive", "gnd"]}],
+             "sources": [{"ref": "V1", "kind": "dc", "node": "drive", "volts": 1},
+                         {"ref": "V2", "kind": "dc", "node": "drive", "volts": 2}],
+             "probes": [{"label": "drive", "node": "drive", "role": "output"}]}
+    for kind in ("breadboard", "expected"):
+        with pytest.raises(CardError, match="source V1 and source V2 both drive node 'drive'"):
+            build_card(kind, "x", build)
+
+
+def test_tied_op_amp_outputs_are_refused_by_both_cards_and_compare_readings():
+    """The breadboard card told the student to tie U1A and U1B together; the expected card read None."""
+    second = {"ref": "U1B", "chip": "U1", "section": "B", "inp": "vi", "inn": "fb", "out": "out"}
+    build = {**lab1.EXP1_NONINVERTING, "opamps": lab1.EXP1_NONINVERTING["opamps"] + [second]}
+    tied = "op amp U1A and op amp U1B both drive node 'out'"
+    for kind in ("breadboard", "expected"):
+        with pytest.raises(CardError, match=tied):
+            build_card(kind, "x", build)
+    with pytest.raises(CompareError, match=tied):
+        compare_readings(build, {"CH2 vo": 8.0})
+
+
+def test_a_repeated_probe_label_is_refused_by_the_breadboard_and_expected_cards_alike():
+    """The expected card used to return two readings both labelled CH1."""
+    build = {"supply": {"vplus": 5, "vminus": 0},
+             "parts": [{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": ["vin", "out"]},
+                       {"ref": "R2", "kind": "resistor", "value": "1k", "nodes": ["out", "gnd"]}],
+             "sources": [{"ref": "VS", "kind": "dc", "node": "vin", "volts": 2}],
+             "probes": [{"label": "CH1", "node": "vin", "role": "input"},
+                        {"label": "CH1", "node": "out", "role": "output"}]}
+    for kind in ("breadboard", "expected"):
+        with pytest.raises(CardError, match="probe label 'CH1' is used twice"):
+            build_card(kind, "x", build)
+
+
+def test_refs_that_differ_only_in_case_are_refused_by_both_cards_naming_the_parts():
+    """The breadboard card used to draw R1 and r1; the expected card died with "device already exists"."""
+    build = {"supply": {"vplus": 5, "vminus": 0},
+             "parts": [{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": ["a", "gnd"]},
+                       {"ref": "r1", "kind": "resistor", "value": "2k", "nodes": ["b", "gnd"]}],
+             "sources": [{"ref": "VA", "kind": "dc", "node": "a", "volts": 1},
+                         {"ref": "VB", "kind": "dc", "node": "b", "volts": 2}],
+             "probes": [{"label": "a", "node": "a"}, {"label": "b", "node": "b"}]}
+    for kind in ("breadboard", "expected"):
+        with pytest.raises(CardError, match="refs 'R1' and 'r1' differ only in case"):
+            build_card(kind, "x", build)
 
 
 # --- schematic ----------------------------------------------------------------

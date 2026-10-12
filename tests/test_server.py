@@ -1032,6 +1032,32 @@ def test_scoped_storage_implementations_persist_problem_attempt_and_progress(tmp
     assert server_module._dispatch("study_context", {"query": "RC", "limit": 10})["problems"][0]["id"] == problem_id
 
 
+def test_attempt_complete_refuses_an_attempt_that_is_already_complete(tmp_path, monkeypatch):
+    monkeypatch.setattr(server_module, "default_data_dir", lambda: tmp_path / "command_center")
+    problem_id = server_module._dispatch("problem_create", {
+        "title": "Divider", "topic": "dividers", "prompt": "find V2", "document_id": None,
+        "circuit_interpretation": "", "status": "draft", "source_page": None,
+    })["problem"]["id"]
+    attempt_id = server_module._dispatch("attempt_create", {
+        "problem_id": problem_id, "actor": "student", "answer": "", "status": "working",
+    })["attempt"]["id"]
+    server_module._dispatch("attempt_complete", {
+        "attempt_id": attempt_id, "answer": "V2 = V*R1/(R1+R2)", "status": "incorrect",
+        "first_divergence": "KCL at node 2: current direction reversed",
+    })
+
+    again = server_module._dispatch("attempt_complete", {
+        "attempt_id": attempt_id, "answer": "V2 = V*R2/(R1+R2)", "status": "correct",
+        "first_divergence": None,
+    })
+
+    assert again["ok"] is False and again["error"] == "storage_error"
+    assert "attempt_create" in again["message"]
+    kept = server_module._dispatch("attempt_history", {"problem_id": problem_id, "limit": 10})["items"]
+    assert [(a["status"], a["first_divergence"]) for a in kept] == [
+        ("incorrect", "KCL at node 2: current direction reversed")]
+
+
 def test_scoped_storage_errors_are_structured_and_no_sql_surface_exists(tmp_path, monkeypatch):
     monkeypatch.setattr(server_module, "default_data_dir", lambda: tmp_path / "data")
     missing = server_module._dispatch("problem_get", {"problem_id": "not-real"})
