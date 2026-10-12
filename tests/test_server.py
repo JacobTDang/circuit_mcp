@@ -19,6 +19,7 @@ import asyncio
 import base64
 import json
 import os
+import pickle
 import re
 import signal
 import sys
@@ -1005,6 +1006,196 @@ def test_state_is_still_clean_after_a_timeout_forced_a_restart(monkeypatch):
     monkeypatch.setattr(server_module, "TIMEOUT_SECONDS", 20.0)
 
     assert check_setup(*CORRECT_SETUP) == before
+
+
+# --------------------------------------------------------------------------
+# the bound counts from when the call was made, not from when the worker was free
+#
+# One worker behind one lock serves every call, so a call can queue behind
+# others. Time spent queued is time the caller spent waiting. Most of these
+# stub the exchange, so they hold the lock as long as they choose and need no
+# runaway expression to do it.
+# --------------------------------------------------------------------------
+
+def _stubbed_worker(monkeypatch, exchange):
+    worker = server_module._Worker()
+    discarded: list[bool] = []
+    monkeypatch.setattr(worker, "_ensure", lambda: object())
+    monkeypatch.setattr(worker, "_exchange", exchange)
+    monkeypatch.setattr(worker, "_discard", lambda: discarded.append(True))
+    monkeypatch.setattr(worker, "_read_stderr", lambda: b"")
+    return worker, discarded
+
+
+def _in_thread(call) -> tuple[threading.Thread, dict]:
+    result: dict = {}
+    thread = threading.Thread(target=lambda: result.update(call()))
+    thread.start()
+    return thread, result
+
+
+def test_a_queued_call_gives_up_at_its_own_deadline_and_leaves_the_worker_alone(monkeypatch):
+    holding, release = threading.Event(), threading.Event()
+    exchanged: list[str] = []
+
+    def exchange(process, request, deadline):
+        exchanged.append(pickle.loads(request)[0])
+        holding.set()
+        release.wait(10)
+        return {"ok": True, "answer": "derived"}
+
+    worker, discarded = _stubbed_worker(monkeypatch, exchange)
+    active, active_result = _in_thread(lambda: worker.call("derive", {}, 10.0))
+    try:
+        assert holding.wait(5)
+        sent = time.monotonic()
+        queued, queued_result = _in_thread(
+            lambda: worker.call("check_equivalence", {}, 0.3))
+        queued.join(timeout=3)
+        elapsed = time.monotonic() - sent
+        assert not queued.is_alive(), "the queued call outlived its own budget"
+    finally:
+        release.set()
+        active.join(timeout=5)
+        queued.join(timeout=5)
+
+    assert elapsed < 1.5, f"returned {elapsed:.1f}s after it was sent, on a 0.3s budget"
+    assert queued_result["ok"] is False
+    assert queued_result["error"] == "busy"
+    assert "derive" in queued_result["message"], "it should name what held the worker"
+    assert "waited" in queued_result["message"]
+    assert exchanged == ["derive"], "the queued call must never reach the worker"
+    assert discarded == [], "giving up in the queue must not kill the busy call's worker"
+    assert active_result == {"ok": True, "answer": "derived"}
+
+
+class _LockFreedAtTheDeadline:
+    """The lock comes free only once the caller's whole budget is spent."""
+
+    def __init__(self, wait: float) -> None:
+        self.wait = wait
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        time.sleep(self.wait)
+        return True
+
+    def release(self) -> None:
+        pass
+
+    def __enter__(self) -> bool:
+        return self.acquire()
+
+    def __exit__(self, *_: object) -> None:
+        self.release()
+
+
+def test_a_call_whose_turn_comes_with_no_budget_left_starts_no_worker(monkeypatch):
+    def refuse(*_: object):
+        raise AssertionError("a worker was started with no budget left to run in")
+
+    worker, discarded = _stubbed_worker(monkeypatch, refuse)
+    monkeypatch.setattr(worker, "_ensure", refuse)
+    monkeypatch.setattr(worker, "_lock", _LockFreedAtTheDeadline(0.25))
+
+    result = worker.call("check_equivalence", {}, 0.2)
+
+    assert result["error"] == "busy"
+    assert discarded == []
+
+
+def test_a_replacement_worker_gets_what_is_left_of_the_budget_not_a_new_one(monkeypatch):
+    deadlines: list[float] = []
+
+    def exchange(process, request, deadline):
+        deadlines.append(deadline)
+        if len(deadlines) == 1:
+            time.sleep(0.1)  # the first worker vanishes partway through
+            raise server_module._WorkerGone
+        return {"ok": True}
+
+    worker, _ = _stubbed_worker(monkeypatch, exchange)
+    assert worker.call("derive", {}, 5.0) == {"ok": True}
+    assert len(deadlines) == 2
+    assert deadlines[0] == deadlines[1], "the retry was handed a fresh budget"
+
+
+def test_a_timeout_after_queueing_says_how_long_it_waited_and_does_not_blame_the_input(
+        monkeypatch):
+    holding = threading.Event()
+
+    def exchange(process, request, deadline):
+        if pickle.loads(request)[0] == "derive":
+            holding.set()
+            time.sleep(0.6)
+            return {"ok": True}
+        time.sleep(max(0.0, deadline - time.monotonic()))
+        raise server_module._WorkerTimeout
+
+    worker, discarded = _stubbed_worker(monkeypatch, exchange)
+    active, _ = _in_thread(lambda: worker.call("derive", {}, 10.0))
+    assert holding.wait(5)
+    result = worker.call("check_equivalence", {}, 0.8)
+    active.join(timeout=5)
+
+    assert result["error"] == "timeout"
+    message = result["message"]
+    total = re.search(r"(\d+\.\d)s after it was sent", message)
+    queued = re.search(r"(\d+\.\d)s waiting for the worker", message)
+    assert total and queued, f"the message does not say how long it waited: {message}"
+    assert 0.7 <= float(total.group(1)) <= 1.1, message
+    assert 0.3 <= float(queued.group(1)) <= 0.7, message
+    assert "9^(9^9)" not in message, "most of the budget was the queue, not the input"
+    assert discarded == [True], "its own runaway child is still killed"
+
+
+def test_a_timeout_that_had_to_start_the_worker_says_so(monkeypatch):
+    """The call ahead was killed with its worker, so this one paid for a new one."""
+    def exchange(process, request, deadline):
+        time.sleep(max(0.0, deadline - time.monotonic()))
+        raise server_module._WorkerTimeout
+
+    worker, _ = _stubbed_worker(monkeypatch, exchange)
+
+    def start():
+        worker._process = type("Started", (), {"pid": 4242})()
+        return worker._process
+
+    monkeypatch.setattr(worker, "_ensure", start)
+    result = worker.call("check_equivalence", {}, 0.2)
+    assert "starting a fresh worker" in result["message"], result["message"]
+
+
+def test_a_call_queued_behind_two_runaways_returns_within_its_own_budget():
+    """Issue #149's reproduction, on a 1.5 s budget instead of 20 s.
+
+    Before, the trivial call waited out both runaways -- twice the budget plus
+    its own run -- and the second runaway reported a limit it never ran into.
+    """
+    budget = 1.5
+    worker = server_module._Worker()
+    try:
+        worker.prewarm()
+        runaway = lambda: worker.call(  # noqa: E731
+            "check_equivalence", {"expr_a": "9^(9^9)", "expr_b": "1"}, budget)
+        first, first_result = _in_thread(runaway)
+        second, second_result = _in_thread(runaway)
+        time.sleep(0.2)
+        sent = time.monotonic()
+        trivial = worker.call(
+            "check_equivalence", {"expr_a": "R1+R2", "expr_b": "R2+R1"}, budget)
+        elapsed = time.monotonic() - sent
+        first.join(timeout=10)
+        second.join(timeout=10)
+    finally:
+        worker.shutdown()
+
+    assert elapsed < budget + 0.5, f"returned {elapsed:.1f}s after it was sent"
+    assert trivial.get("equivalent") is True or trivial["error"] in ("busy", "timeout")
+    outcomes = sorted([first_result["error"], second_result["error"]])
+    assert outcomes in (["busy", "timeout"], ["timeout", "timeout"]), outcomes
+    for result in (first_result, second_result, trivial):
+        if not result.get("ok"):
+            assert "wait" in result["message"], result["message"]
 
 
 # --------------------------------------------------------------------------

@@ -112,7 +112,9 @@ server = MCPServer("circuit_mcp")
 
 # Wall-clock budget for one tool call, in seconds. Generous enough for a
 # second-order rational function through ``simplify``, short enough that a
-# pathological input is a bounded annoyance rather than a wedged server.
+# pathological input is a bounded annoyance rather than a wedged server. It
+# runs from the moment the call is made, so time queued behind other calls
+# for the one worker is spent from it -- that is time the caller waited too.
 TIMEOUT_SECONDS = 20.0
 
 # The open-loop gain symbol, as the course and ``analysis`` both spell it. A
@@ -835,6 +837,49 @@ def _tail(stream: bytes) -> str:
     return f"Worker stderr: {text}" if text else "The worker said nothing."
 
 
+def _queued_out(
+    name: str, limit: float, waited: float, holder: str | None
+) -> dict[str, Any]:
+    """A call that never reached the worker. Nothing ran, so nothing is blamed."""
+    behind = f"still busy with {holder}" if holder else "still busy"
+    return _failure(
+        "busy",
+        f"{name} was not run: it waited {waited:.1f}s for the worker, which was "
+        f"{behind} when the {limit}s wall-clock limit ran out. The input was "
+        f"never evaluated, so this says nothing about it -- send it again once "
+        f"the calls ahead of it have finished.",
+    )
+
+
+def _timed_out(
+    name: str, limit: float, queued: float, ran: float, fresh: bool
+) -> dict[str, Any]:
+    """A call killed at its deadline, saying where its budget actually went.
+
+    ``fresh`` says the worker had to be started for this call -- typically
+    because the call ahead was killed with it -- so part of ``ran`` was
+    interpreter start-up rather than this input.
+    """
+    if ran > queued:
+        advice = (
+            "An expression can parse instantly and still take unbounded time to "
+            "evaluate -- 9^(9^9) is the standing example. Simplify the input, or "
+            "reduce the size of the literals in it."
+        )
+    else:
+        advice = (
+            "Most of that was the queue, not this input, which may be fine on its "
+            "own -- send it again once the calls ahead of it have finished."
+        )
+    running = "starting a fresh worker and running" if fresh else "running"
+    return _failure(
+        "timeout",
+        f"{name} hit the {limit}s wall-clock limit {queued + ran:.1f}s after it "
+        f"was sent ({queued:.1f}s waiting for the worker behind other calls, "
+        f"{ran:.1f}s {running}), and the worker was killed. {advice}",
+    )
+
+
 def _exit_detail(status: int) -> str:
     """Why a forked child produced no answer, in the terms the OS reported it."""
     if os.WIFSIGNALED(status):
@@ -855,7 +900,9 @@ class _Worker:
     Serialised by a lock: mcp dispatches synchronous tools on a thread pool, so
     two calls really can arrive at once, and one worker behind one pair of pipes
     has no way to tell whose frame is whose. The work itself is milliseconds,
-    so queueing costs far less than the start-up it avoids.
+    so queueing costs far less than the start-up it avoids -- until a call ahead
+    is a runaway. The budget is therefore counted from when a call is made, and
+    a call still queued when it runs out is answered ``busy`` without being run.
     """
 
     def __init__(self) -> None:
@@ -865,6 +912,10 @@ class _Worker:
         # Set by abort() from a signal handler, without the lock: once the
         # window that asked for the work is closing, no call may start another.
         self._closing = False
+        # The call that last took the lock, so that one which gave up queueing
+        # can say what it was waiting behind. Read without the lock; a name
+        # one call stale costs a message nothing.
+        self._holder: str | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -991,6 +1042,10 @@ class _Worker:
                 os.killpg(process.pid, signal.SIGKILL)
 
     def call(self, name: str, kwargs: dict[str, Any], limit: float) -> dict[str, Any]:
+        sent = time.monotonic()
+        # One deadline for the whole call: the wait for the lock and both
+        # attempts below all spend from it, so no stage gets a fresh budget.
+        deadline = sent + limit
         request = pickle.dumps((name, kwargs), protocol=pickle.HIGHEST_PROTOCOL)
         if self._closing:
             return _failure(
@@ -998,37 +1053,44 @@ class _Worker:
                 f"The server is stopping, so the {name} worker was not started.",
             )
 
-        with self._lock:
+        if not self._lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            # The call ahead keeps its worker: it has a deadline of its own,
+            # and killing it would answer a question nobody here asked.
+            return _queued_out(name, limit, time.monotonic() - sent, self._holder)
+        try:
+            ahead, self._holder = self._holder, name
+            started = time.monotonic()
             # Two attempts, and only for a worker that was already gone. A tool
             # body runs in a forked child and cannot bring the worker down, so
             # "the worker vanished" is never a statement about this input --
             # which is what makes retrying it honest rather than a loop around
             # a crash.
             for attempt in (0, 1):
-                deadline = time.monotonic() + limit
                 if self._closing:
                     return _failure(
                         "shutting_down",
                         f"The server is stopping, so the {name} call was cut short.",
                     )
+                if attempt == 0 and started >= deadline:
+                    # Its turn came with nothing left; a worker started now
+                    # would only be killed before it answered.
+                    return _queued_out(name, limit, started - sent, ahead)
+                before = self.pid
                 try:
                     process = self._ensure()
                 except OSError as exc:
                     return _failure(
                         "internal_error", f"Could not start the {name} worker: {exc}"
                     )
+                fresh = self.pid != before
 
                 try:
                     return self._exchange(process, request, deadline)
                 except _WorkerTimeout:
                     self._discard()  # kills the runaway child with its group
-                    return _failure(
-                        "timeout",
-                        f"{name} exceeded the {limit}s wall-clock limit and the "
-                        f"worker was killed. An expression can parse instantly "
-                        f"and still take unbounded time to evaluate -- 9^(9^9) "
-                        f"is the standing example. Simplify the input, or reduce "
-                        f"the size of the literals in it.",
+                    ended = time.monotonic()
+                    return _timed_out(
+                        name, limit, started - sent, ended - started, fresh
                     )
                 except _WorkerGone:
                     stderr = self._read_stderr()
@@ -1048,6 +1110,8 @@ class _Worker:
                         f"The {name} worker returned something unreadable "
                         f"({type(exc).__name__}: {exc}). {_tail(stderr)}",
                     )
+        finally:
+            self._lock.release()
 
         # Unreachable: the loop either returns or continues exactly once.
         return _failure("internal_error", f"The {name} worker could not be reached.")

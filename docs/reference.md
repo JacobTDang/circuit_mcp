@@ -29,7 +29,9 @@ The detail behind the [README](../README.md). Each section stands alone.
 Windows is not currently supported. Tool calls run in a prewarmed worker that
 forks a disposable child for every request. This isolates lcapy's process-global
 symbol registry and makes the 20-second wall-clock bound real: the worker's
-entire process group can be killed if symbolic evaluation runs away. A Windows
+entire process group can be killed if symbolic evaluation runs away. The bound
+counts from when a call is made, so a call queued behind slower ones is
+answered `busy` when its time runs out instead of waiting for them. A Windows
 port needs a spawn-based worker with equivalent isolation and timeout semantics;
 silently falling back to an unkillable thread would violate those guarantees.
 
@@ -429,7 +431,8 @@ Rendered expressions contain two forms:
 - `srepr`: an exact SymPy record that preserves symbol assumptions.
 
 Every response has `ok`. An `error` field means the tool could not run, such as
-for a malformed netlist, unsafe expression, or timeout. A `kind` field means the
+for a malformed netlist, unsafe expression, `timeout`, or `busy` (the call
+waited its whole budget for the worker and was never run). A `kind` field means the
 check ran and describes the mathematical verdict.
 
 `check_setup` also returns `equation_roles`. Each satisfied equation is labelled
