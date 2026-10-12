@@ -378,6 +378,16 @@ def test_app_js_hovering_the_board_never_scrolls_the_page(tmp_path, monkeypatch)
         assert "boardReveal(" not in restore and "boardSelect(" not in restore, "tabbing away from a pinned step pulls the page back to it"
 
 
+def test_app_js_a_click_on_a_step_lands_before_anything_scrolls(tmp_path, monkeypatch):
+    """Focus arrives on pointerdown, and revealing it scrolled the page 210px, so the button came up on step 11 and the click pinned nothing."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        board = app_script.split("function boardFocus(", 1)[1]
+        focusin = board.split("addEventListener('focusin'", 1)[1].split("});", 1)[0]
+        assert ":focus-visible" in focusin, "a pointer's focus scrolls the page before its click lands"
+        assert focusin.index(":focus-visible") < focusin.index("boardSelect(")
+
+
 def test_the_step_numbers_stay_behind_the_drawing(tmp_path, monkeypatch):
     """The numbers hung outside the list, so 10. and 11. showed past the drawing's left edge as the steps scrolled under it."""
     with _browser(tmp_path, monkeypatch) as browser:
