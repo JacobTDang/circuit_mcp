@@ -489,6 +489,10 @@ def upload(file: UploadFile = File(...), category: str = Form("homework")) -> di
         target.unlink(missing_ok=True)
         raise HTTPException(422, f"{original} is not a readable PDF ({exc}); it may be "
                                  "damaged or only partly downloaded.") from exc
+    except pdf_text.TooSlowToRead as exc:
+        target.unlink(missing_ok=True)
+        raise HTTPException(422, f"{original} {exc}; it may be damaged. Download it again, "
+                                 "or save it as a new PDF, and upload that.") from exc
     except Exception:
         target.unlink(missing_ok=True)
         raise

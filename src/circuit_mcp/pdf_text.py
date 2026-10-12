@@ -17,6 +17,19 @@ from pathlib import Path
 from pypdf import PdfReader
 from pypdf import errors as pdf_errors
 
+# A loop in pypdf would otherwise hold its upload forever. The slowest PDF measured, 44 MB
+# and 10,000 pages of drawings that each had to be read, took 16 s on an M-series Mac; this
+# leaves room for a slower machine, a busier one and a heavier real textbook.
+READ_SECONDS = 120.0
+
+
+class TooSlowToRead(Exception):
+    """The child did not finish inside ``READ_SECONDS`` and has been killed."""
+
+    def __init__(self, seconds: float) -> None:
+        super().__init__(f"took longer than {seconds:g} s to read")
+        self.seconds = seconds
+
 
 def read(path: Path, limit: int) -> tuple[str, int]:
     """The text a search keeps, and the page count."""
@@ -33,10 +46,18 @@ def read(path: Path, limit: int) -> tuple[str, int]:
     return "\n".join(texts)[:limit], len(reader.pages)
 
 
+def _command(path: Path, limit: int) -> list[str]:
+    return [sys.executable, __file__, str(path), str(limit)]
+
+
 def extract(path: Path, limit: int) -> tuple[str, int]:
     """``read`` in a child interpreter. A PDF it cannot read raises the same pypdf error here."""
-    completed = subprocess.run([sys.executable, __file__, str(path), str(limit)],
-                               capture_output=True, check=False)
+    try:
+        completed = subprocess.run(_command(path, limit), capture_output=True, check=False,
+                                   timeout=READ_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        # run() has already killed the child and waited for it.
+        raise TooSlowToRead(READ_SECONDS) from exc
     if completed.returncode != 0:
         stderr = completed.stderr.decode(errors="replace").strip()
         raise RuntimeError(f"reading the PDF's text failed: {stderr[-2000:]}")

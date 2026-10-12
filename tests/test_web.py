@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import threading
 from io import BytesIO
 
@@ -7,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pypdf import PdfReader, errors
 
-from circuit_mcp import ipad_capture, paths, web
+from circuit_mcp import ipad_capture, paths, pdf_text, web
 from circuit_mcp.cards import build_card
 from tests.fixtures.pdfs import encrypted_pdf, text_pdf
 
@@ -242,6 +243,19 @@ def test_a_pdf_locked_only_against_editing_still_uploads(tmp_path, monkeypatch):
                                 files={"file": ("owner.pdf", encrypted_pdf(""), "application/pdf")})
     assert response.status_code == 200
     assert response.json()["item"]["pages"] == 1
+
+
+def test_a_pdf_that_takes_too_long_to_read_is_refused_and_leaves_no_file(tmp_path, monkeypatch):
+    """A PDF that sends pypdf into a loop held its upload, and its partial file, forever."""
+    monkeypatch.setattr(pdf_text, "_command",
+                        lambda path, limit: [sys.executable, "-c", "import time; time.sleep(60)"])
+    monkeypatch.setattr(pdf_text, "READ_SECONDS", 0.5)
+    with client(tmp_path, monkeypatch) as browser:
+        response = browser.post("/api/library", data={"category": "lecture"},
+                                files={"file": ("loop.pdf", text_pdf(["one page"]), "application/pdf")})
+    assert response.status_code == 422
+    assert response.json()["detail"].startswith("loop.pdf took longer than 0.5 s to read; it may be damaged")
+    assert not list(web.FILES.glob("*"))
 
 
 def test_reading_an_upload_does_not_hold_up_the_rest_of_the_desk(tmp_path, monkeypatch):

@@ -1,8 +1,10 @@
 """Reading an uploaded PDF's text in an interpreter of its own (issue #121)."""
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+import time
 
 import pytest
 from pypdf import PageObject, PdfReader, errors
@@ -63,3 +65,19 @@ def test_a_pdf_the_child_cannot_read_raises_its_own_pypdf_error_here(tmp_path, c
 def test_a_child_that_fails_for_another_reason_says_why(tmp_path):
     with pytest.raises(RuntimeError, match="FileNotFoundError"):
         pdf_text.extract(tmp_path / "missing.pdf", 2_000_000)
+
+
+def test_a_pdf_that_takes_too_long_is_given_up_on_and_its_reader_killed(tmp_path, monkeypatch):
+    """A PDF that sends pypdf into a loop held its upload's thread forever."""
+    pid_file = tmp_path / "reader.pid"
+    monkeypatch.setattr(pdf_text, "_command", lambda path, limit: [
+        sys.executable, "-c",
+        "import os, sys, time; open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(60)",
+        str(pid_file)])
+    monkeypatch.setattr(pdf_text, "READ_SECONDS", 0.5)
+    started = time.monotonic()
+    with pytest.raises(pdf_text.TooSlowToRead, match=r"took longer than 0\.5 s to read"):
+        pdf_text.extract(_pdf(tmp_path, text_pdf(CHAPTER)), 2_000_000)
+    assert time.monotonic() - started < 5
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
