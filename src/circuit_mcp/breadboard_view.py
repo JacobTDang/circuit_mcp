@@ -621,13 +621,16 @@ def draw(layout: Layout) -> Drawing:
 
     # Short wires have the least room for their number, so they choose first.
     # Samples on the wire itself sit on the column numerals the wire crosses; the
-    # offsets let the badge step aside instead of covering the number.
+    # offsets let the badge step aside instead of covering the number. Half a pitch
+    # from a column is the gap clear of its holes and its numeral, and a wire from a
+    # strip to its rail runs slanted, so offsets from the wire alone can miss it.
     badges = []
     for jumper, a, c, b in sorted(wires, key=lambda wire: math.dist(wire[1], wire[3])):
         along = [_bezier(a, c, b, 0.5 + sign * k / 20) for k in range(7) for sign in ((1,) if k == 0 else (-1, 1))]
         span = math.hypot(b[0] - a[0], b[1] - a[1]) or 1.0
         px, py = (a[1] - b[1]) / span, (b[0] - a[0]) / span
         spots = along + [(x + px * dist, y + py * dist) for x, y in along for dist in (10, -10, 18, -18)]
+        spots += [(LEFT + (math.floor((x - LEFT) / PITCH) + 0.5 + side) * PITCH, y) for x, y in along for side in (0, 1)]
         badges.append((jumper, labeller.place(along[0], [(x - 6, y - 6, x + 6, y + 6) for x, y in spots])))
     tags, probe_index = [], 0
     for item in layout.attachments:
