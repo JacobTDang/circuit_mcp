@@ -24,6 +24,7 @@ under `archive/` in the data directory and verifies that copy off disk before th
 ## API and MCP surface
 
 - `GET /api/showman/status`
+- `POST /api/showman/start`; no GET starts the worker, since any page can send a GET
 - `POST /api/showman/author`
 - `POST /api/showman/preview`
 - `POST /api/showman/render`

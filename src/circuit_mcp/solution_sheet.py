@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from html import escape
 from typing import Any
+from urllib.parse import quote
 
 MISSING = "no solution yet"
 
@@ -29,8 +30,11 @@ def _step(index: int, step: dict[str, Any]) -> str:
     return (f'<li><div class="math">{step["mathml"]}</div>{note}</li>')
 
 
-def _evidence(calls: list[dict[str, Any]]) -> str:
+def _evidence(calls: list[dict[str, Any]], foreign_attempt: bool) -> str:
     """What was checked, and how it came out, from the recorded tool calls."""
+    if foreign_attempt:
+        return ('<p class="evidence none">the attempt this cites is not one of this problem\'s '
+                'attempts, so it shows no checks</p>')
     if not calls:
         return '<p class="evidence none">no checks recorded against this attempt</p>'
     shown = ", ".join(
@@ -41,7 +45,7 @@ def _evidence(calls: list[dict[str, Any]]) -> str:
     return f'<p class="evidence">checked with {shown}</p>'
 
 
-def _solution(payload: dict[str, Any], calls: list[dict[str, Any]]) -> str:
+def _solution(payload: dict[str, Any], calls: list[dict[str, Any]], foreign_attempt: bool) -> str:
     given = "".join(_chip(chip) for chip in payload.get("given", []))
     steps = "".join(_step(index, step) for index, step in enumerate(payload.get("steps", []), start=1))
     answer = payload.get("answer", {})
@@ -54,7 +58,19 @@ def _solution(payload: dict[str, Any], calls: list[dict[str, Any]]) -> str:
         + (f'<ol class="steps">{steps}</ol>' if steps else "")
         + f'<div class="answer"><span class="label">answer</span>'
           f'<span class="math">{answer.get("mathml", "")}</span>{unit}</div>'
-        + _evidence(calls)
+        + _evidence(calls, foreign_attempt)
+    )
+
+
+def _page(assignment: str, actions: str, main: str) -> str:
+    return (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        f"<title>{escape(assignment)} solutions</title>"
+        '<link rel="stylesheet" href="/assets/solution.css">'
+        "</head><body>"
+        f'<header class="sheet"><h1>{escape(assignment)}</h1>{actions}</header>'
+        f'<main>{main}</main>'
+        "</body></html>"
     )
 
 
@@ -63,20 +79,21 @@ def render(assignment: str, problems: list[dict[str, Any]]) -> str:
     blocks = []
     for index, problem in enumerate(problems, start=1):
         solution = problem.get("solution")
-        body = (_solution(solution["payload"], problem.get("tool_calls", []))
+        body = (_solution(solution["payload"], problem["tool_calls"], problem["foreign_attempt"])
                 if solution else f'<p class="missing">{MISSING}</p>')
         blocks.append(
             f'<article class="problem"><header><span class="number">{index}</span>'
             f'<h2>{escape(problem["title"])}</h2></header>'
             f'<p class="prompt">{escape(problem.get("prompt", ""))}</p>{body}</article>'
         )
-    return (
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-        f"<title>{escape(assignment)} solutions</title>"
-        '<link rel="stylesheet" href="/assets/solution.css">'
-        "</head><body>"
-        f'<header class="sheet"><h1>{escape(assignment)}</h1>'
-        '<button type="button" onclick="window.print()">Export PDF</button></header>'
-        f'<main>{"".join(blocks)}</main>'
-        "</body></html>"
-    )
+    export = '<button type="button" onclick="window.print()">Export PDF</button>'
+    return _page(assignment, export, "".join(blocks))
+
+
+def render_unknown(assignment: str, tags: list[str]) -> str:
+    """A tag no problem carries: say so and name the real ones, with nothing to export."""
+    links = ", ".join(f'<a href="/solutions?tag={escape(quote(tag))}">{escape(tag)}</a>' for tag in tags)
+    known = (f'<p class="tags">Tags in use: {links}.</p>' if tags
+             else '<p class="tags">No problem carries a tag yet.</p>')
+    return _page(assignment, "",
+                 f'<p class="unknown">No problems are tagged <code>{escape(assignment)}</code>.</p>{known}')

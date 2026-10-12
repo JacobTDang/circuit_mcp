@@ -25,6 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// and whether a quit is waiting on it. Keeping none of it here is what keeps the rules in
     /// one testable place -- see `ServerLifecycle`.
     private let lifecycle = ServerLifecycle()
+    private let registration = ClaudeRegistrationController()
+    private var registrationProgress: NSAlert?
     private var logURL: URL?
     /// Redraws the import's progress while its copy runs.
     private var importProgressTimer: Timer?
@@ -45,6 +47,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        registration.cancelAndWait()
     }
 
     private func activateAnotherRunningCopy() -> Bool {
@@ -496,24 +502,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         key.placeholderString = "OpenRouter API key"
         let model = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
         model.placeholderString = "Model, for example qwen/qwen3-coder:free"
-        do {
-            key.stringValue = try secrets.read(SecretsStore.apiKeyAccount) ?? ""
-            model.stringValue = try secrets.read(SecretsStore.modelAccount) ?? ""
-        } catch {
-            alert.informativeText += "\n\nCurrent values could not be read: \(error)"
+        let editor = SettingsEditor(store: secrets)
+        let loaded = editor.load()
+        switch loaded.apiKey {
+        case .available(let value):
+            key.stringValue = value ?? ""
+        case .unavailable(let reason):
+            key.placeholderString = "Unavailable — could not be read from the Keychain"
+            key.isEnabled = false
+            alert.informativeText += "\n\nThe API key could not be read: \(reason)"
+        }
+        switch loaded.model {
+        case .available(let value):
+            model.stringValue = value ?? ""
+        case .unavailable(let reason):
+            model.placeholderString = "Unavailable — could not be read from the Keychain"
+            model.isEnabled = false
+            alert.informativeText += "\n\nThe model could not be read: \(reason)"
+        }
+        if !loaded.canSave {
+            alert.informativeText += "\n\nSave is turned off so the stored settings stay as they are. Fix Keychain access, then reopen Settings."
         }
         let fields = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 54))
         fields.addSubview(key)
         fields.addSubview(model)
         alert.accessoryView = fields
-        alert.addButton(withTitle: "Save")
+        let save = alert.addButton(withTitle: "Save")
+        save.isEnabled = loaded.canSave
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
-            try saveOrClear(key.stringValue, SecretsStore.apiKeyAccount)
-            try saveOrClear(model.stringValue, SecretsStore.modelAccount)
+            try editor.save(apiKey: key.stringValue, model: model.stringValue, original: loaded)
         } catch {
-            presentAlert("The settings were not saved.", "\(error)")
+            presentAlert("The settings were not saved.", error.localizedDescription)
             return
         }
         // The sheet has just promised that saving restarts the server, so it restarts
@@ -521,15 +542,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the folders this time or puts the reason back on screen with its buttons. Skipping the
         // restart when there are no folders yet saved the key and then said nothing at all.
         restartServer()
-    }
-
-    private func saveOrClear(_ value: String, _ account: String) throws {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            try secrets.delete(account)
-        } else {
-            try secrets.write(trimmed, for: account)
-        }
     }
 
     @objc private func copyMCPCommand() {
@@ -549,6 +561,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func writeMCPCommandToPasteboard(locations: AppLocations) throws {
         let command = try MCPCommand.terminalCommand(appBundle: Bundle.main.bundleURL,
                                                      locations: locations)
+        try writeCommandToPasteboard(command)
+    }
+
+    private func writeCommandToPasteboard(_ command: String) throws {
         NSPasteboard.general.clearContents()
         guard NSPasteboard.general.setString(command, forType: .string) else {
             throw MCPCommandCopyError.pasteboardRejectedCommand
@@ -561,9 +577,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// already offers is copied instead of pretending registration happened.
     @objc private func registerWithClaudeCode() {
         guard let locations = requireLocations() else { return }
-        guard let claude = MCPCommand.findClaude() else {
+        let preparation = ClaudeRegistrationPlan.prepare(
+            claudeExecutable: MCPCommand.findClaude(),
+            command: { claude in
+                try MCPCommand.terminalCommand(appBundle: Bundle.main.bundleURL,
+                                               locations: locations,
+                                               claudeExecutable: claude)
+            },
+            arguments: {
+                try MCPCommand.registrationArguments(appBundle: Bundle.main.bundleURL,
+                                                     locations: locations)
+            })
+        let claude: URL
+        let command: String
+        let arguments: [String]
+        switch preparation {
+        case .copyCommand(let fallback):
             do {
-                try writeMCPCommandToPasteboard(locations: locations)
+                try writeCommandToPasteboard(fallback)
                 presentAlert("Claude Code was not found.",
                              "The Terminal command was copied instead. Paste it into Terminal after installing Claude Code; it registers \(Self.displayName) for every folder (user scope).")
             } catch {
@@ -571,23 +602,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                              "\(error)")
             }
             return
-        }
-
-        let command: String
-        let arguments: [String]
-        do {
-            command = try MCPCommand.terminalCommand(appBundle: Bundle.main.bundleURL,
-                                                     locations: locations,
-                                                     claudeExecutable: claude)
-            arguments = try MCPCommand.registrationArguments(appBundle: Bundle.main.bundleURL,
-                                                              locations: locations)
-        } catch MCPCommandError.translocated {
-            presentAlert("Move \(Self.displayName) to Applications first.",
-                         "macOS is running the app from a temporary copy, so its path would change after a restart.")
+        case .failure(let message):
+            presentAlert(message.title, message.detail)
             return
-        } catch {
-            presentAlert("The Claude Code command could not be built.", "\(error)")
-            return
+        case .run(let executable, let rendered, let rawArguments):
+            claude = executable
+            command = rendered
+            arguments = rawArguments
         }
 
         let confirm = NSAlert()
@@ -597,33 +618,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         confirm.addButton(withTitle: "Cancel")
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
 
-        let process = Process()
-        let output = Pipe()
-        process.executableURL = claude
-        process.arguments = arguments
-        process.standardOutput = output
-        process.standardError = output
-        do {
-            try process.run()
-        } catch {
-            presentAlert("Claude Code registration failed.", "The command could not start:\n\n\(error)")
-            return
+        let started = registration.start(executable: claude, arguments: arguments) { [weak self] result in
+            DispatchQueue.main.async { self?.finishRegistration(result) }
         }
-        DispatchQueue.global().async {
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                if process.terminationStatus == 0 {
-                    self.presentAlert("\(Self.displayName) is registered with Claude Code.",
-                                      text.isEmpty ? "Claude Code completed the user-scope registration." : text)
-                } else {
-                    self.presentAlert("Claude Code registration failed (exit status \(process.terminationStatus)).",
-                                      text.isEmpty ? "The command produced no output." : text)
-                }
-            }
+        switch started {
+        case .started:
+            showRegistrationProgress()
+        case .alreadyRunning:
+            presentAlert("Claude Code registration is already in progress.",
+                         "Wait for it to finish, or cancel it before trying again.")
+        case .launchFailed(let reason):
+            presentAlert("Claude Code registration failed.", "The command could not start:\n\n\(reason)")
         }
+    }
+
+    private func showRegistrationProgress() {
+        let progress = NSAlert()
+        progress.messageText = "Registering with Claude Code…"
+        progress.informativeText = "Waiting for Claude Code (up to \(Int(ClaudeRegistrationController.defaultTimeout)) seconds)."
+        progress.addButton(withTitle: "Cancel")
+        registrationProgress = progress
+        progress.beginSheetModal(for: window) { [weak self, weak progress] _ in
+            guard let self, let progress, self.registrationProgress === progress else { return }
+            self.registrationProgress = nil
+            _ = self.registration.cancel()
+        }
+    }
+
+    private func finishRegistration(_ result: ClaudeRegistrationResult) {
+        if let progress = registrationProgress {
+            registrationProgress = nil
+            if progress.window.sheetParent != nil { window.endSheet(progress.window) }
+        }
+        let message = result.message
+        presentAlert(message.title, message.detail)
     }
 
     private func shouldOfferFirstLaunchSetup() -> Bool {
@@ -831,6 +859,8 @@ extension AppDelegate: NSMenuItemValidation {
         switch menuItem.action {
         case #selector(openSettings), #selector(importExistingData):
             return !lifecycle.isBusy
+        case #selector(registerWithClaudeCode):
+            return !registration.isRunning
         case #selector(reloadDesk):
             return web.canReload
         default:
