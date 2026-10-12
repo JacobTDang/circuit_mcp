@@ -25,6 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// and whether a quit is waiting on it. Keeping none of it here is what keeps the rules in
     /// one testable place -- see `ServerLifecycle`.
     private let lifecycle = ServerLifecycle()
+    private let registration = ClaudeRegistrationController()
+    private var registrationProgress: NSAlert?
     private var logURL: URL?
 
     // MARK: Launch
@@ -43,6 +45,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        registration.cancelAndWait()
     }
 
     private func activateAnotherRunningCopy() -> Bool {
@@ -591,33 +597,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         confirm.addButton(withTitle: "Cancel")
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
 
-        let process = Process()
-        let output = Pipe()
-        process.executableURL = claude
-        process.arguments = arguments
-        process.standardOutput = output
-        process.standardError = output
-        do {
-            try process.run()
-        } catch {
-            presentAlert("Claude Code registration failed.", "The command could not start:\n\n\(error)")
-            return
+        let started = registration.start(executable: claude, arguments: arguments) { [weak self] result in
+            DispatchQueue.main.async { self?.finishRegistration(result) }
         }
-        DispatchQueue.global().async {
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                if process.terminationStatus == 0 {
-                    self.presentAlert("\(Self.displayName) is registered with Claude Code.",
-                                      text.isEmpty ? "Claude Code completed the user-scope registration." : text)
-                } else {
-                    self.presentAlert("Claude Code registration failed (exit status \(process.terminationStatus)).",
-                                      text.isEmpty ? "The command produced no output." : text)
-                }
-            }
+        switch started {
+        case .started:
+            showRegistrationProgress()
+        case .alreadyRunning:
+            presentAlert("Claude Code registration is already in progress.",
+                         "Wait for it to finish, or cancel it before trying again.")
         }
+    }
+
+    private func showRegistrationProgress() {
+        let progress = NSAlert()
+        progress.messageText = "Registering with Claude Code…"
+        progress.informativeText = "Waiting for Claude Code (up to \(Int(ClaudeRegistrationController.defaultTimeout)) seconds)."
+        progress.addButton(withTitle: "Cancel")
+        registrationProgress = progress
+        progress.beginSheetModal(for: window) { [weak self, weak progress] _ in
+            guard let self, let progress, self.registrationProgress === progress else { return }
+            self.registrationProgress = nil
+            _ = self.registration.cancel()
+        }
+    }
+
+    private func finishRegistration(_ result: ClaudeRegistrationResult) {
+        if let progress = registrationProgress {
+            registrationProgress = nil
+            if progress.window.sheetParent != nil { window.endSheet(progress.window) }
+        }
+        let message = result.message
+        presentAlert(message.title, message.detail)
     }
 
     private func shouldOfferFirstLaunchSetup() -> Bool {
@@ -777,6 +788,8 @@ extension AppDelegate: NSMenuItemValidation {
         switch menuItem.action {
         case #selector(openSettings), #selector(importExistingData):
             return !lifecycle.isBusy
+        case #selector(registerWithClaudeCode):
+            return !registration.isRunning
         case #selector(reloadDesk):
             return web.canReload
         default:
