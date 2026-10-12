@@ -390,6 +390,27 @@ def test_the_step_numbers_stay_behind_the_drawing(tmp_path, monkeypatch):
         assert rows and not any("margin-left:-" in rule for rule in rows), "a row pulled left of the list sticks out past the drawing"
 
 
+def test_a_breadboard_card_is_widened_from_a_grip_of_its_own(tmp_path, monkeypatch):
+    """overflow:visible, which the sticky drawing needs, turns CSS resize off, so the corner grip on a breadboard card did nothing."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        render = app_script.split("function renderCanvas(", 1)[1].split("\n", 1)[0]
+        assert 'class="workspace-grip"' in render and "item.kind==='breadboard'" in render
+        grip = app_script.split("function dragGrip(", 1)[1].split("\n", 1)[0]
+        assert "setPointerCapture" in grip
+        assert "Math.max(320,Math.min(" in grip and "width-20" in grip, "the grip has to clamp the width the way renderCanvas does"
+        assert "saveCanvas()" in grip and "settleCanvas()" in grip, "a wider card has to push its neighbours down"
+        assert "addEventListener('pointerdown',dragGrip)" in app_script
+        click = app_script.split("function boardFocus(", 1)[1].split("addEventListener('click'", 1)[1].split("});", 1)[0]
+        assert ".workspace-grip" in click, "letting go of the grip clears the pinned step"
+        css = browser.get("/assets/canvas.css").text
+        card = css.split('.workspace-item[data-kind="breadboard"]{', 1)[1].split("}", 1)[0]
+        assert "resize:none" in card
+        assert 'content:none' in css.split('.workspace-item[data-kind="breadboard"]:after{', 1)[1].split("}", 1)[0], "the dead grip is still drawn"
+        handle = css.split(".workspace-grip{", 1)[1].split("}", 1)[0]
+        assert "touch-action:none" in handle and "cursor:ew-resize" in handle
+
+
 def test_no_card_can_paint_over_the_desk_header(tmp_path, monkeypatch):
     """Every drag raises a card's z-index, and above the header's 10 it painted over the header the drawing sticks under."""
     with _browser(tmp_path, monkeypatch) as browser:

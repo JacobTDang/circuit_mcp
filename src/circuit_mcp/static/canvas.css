@@ -34,8 +34,10 @@
 .card-empty{color:#768079;font:10px ui-monospace,monospace;letter-spacing:.08em;text-transform:uppercase}
 .card-error{margin:0;color:#b3261e;font-size:13px;line-height:1.5}
 /* breadboard and expected cards */
-/* visible, or the sticky drawing is trapped in the card and scrolls away from the step */
-.workspace-item[data-kind="breadboard"]{min-height:320px;overflow:visible}.card-board{position:sticky;top:72px;z-index:2;max-height:calc(100vh - 72px - 52px);overflow:auto;border:1px solid #2a2f2c;background:#ECEEE9;border-radius:6px}.card-board svg{display:block;width:100%;height:auto;min-width:0}
+/* visible, or the sticky drawing is trapped in the card and scrolls away from the step. That turns CSS resize off,
+   so the drawn grip is hidden and app.js adds one that works (dragGrip). */
+.workspace-item[data-kind="breadboard"]{min-height:320px;overflow:visible;resize:none}.workspace-item[data-kind="breadboard"]:after{content:none}
+.workspace-grip{position:absolute;right:0;bottom:0;z-index:3;width:18px;height:18px;cursor:ew-resize;touch-action:none}.workspace-grip:after{content:"";position:absolute;right:3px;bottom:3px;width:11px;height:11px;border-right:2px solid #737874;border-bottom:2px solid #737874}.card-board{position:sticky;top:72px;z-index:2;max-height:calc(100vh - 72px - 52px);overflow:auto;border:1px solid #2a2f2c;background:#ECEEE9;border-radius:6px}.card-board svg{display:block;width:100%;height:auto;min-width:0}
 /* The number is drawn inside the row: a list marker hangs left of the list, past the drawing that covers it. */
 .card-wires{margin:4px 0 0;padding:0;list-style:none;color:var(--muted);font-size:13px;line-height:1.5}.card-wires li{margin-bottom:4px}.card-wires li::before{content:attr(data-step) ".";text-align:right;font-variant-numeric:tabular-nums}
 .card-readings{width:100%;border-collapse:collapse;font-size:13px}.card-readings td{padding:6px 8px;border-bottom:1px solid #2a2f2c;color:var(--ink);vertical-align:middle}.card-readings td:first-child{color:#9aa59f;font:10px ui-monospace,monospace;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
