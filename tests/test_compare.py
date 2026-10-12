@@ -9,6 +9,7 @@ import copy
 
 import pytest
 
+from circuit_mcp.cards import CardError, build_card
 from circuit_mcp.compare import CompareError, compare_readings
 from circuit_mcp.expect import expectations
 from tests.fixtures import lab1
@@ -163,6 +164,41 @@ def test_repeated_probe_labels_are_refused():
         probe["label"] = "CH1"
     with pytest.raises(CompareError, match="'CH1'"):
         compare_readings(build, {"CH1": 0.5})
+
+
+@pytest.mark.parametrize("labels,accepted", [
+    (("CH1", "CH2"), True),
+    (("CH1", "CH1"), False),
+    (("CH1", "ch1"), False),
+])
+def test_the_cards_and_compare_accept_the_same_probe_labels(labels, accepted):
+    """The cards used to accept a repeated label that compare then refused."""
+    build = copy.deepcopy(lab1.EXP1_NONINVERTING)
+    for probe, label in zip(build["probes"], labels):
+        probe["label"] = label
+    consumers = (lambda: build_card("breadboard", "x", build), lambda: build_card("expected", "x", build),
+                 lambda: compare_readings(build, {labels[0]: 0.5}))
+    verdicts = []
+    for consume in consumers:
+        try:
+            consume()
+            verdicts.append(True)
+        except (CardError, CompareError):
+            verdicts.append(False)
+    assert verdicts == [accepted] * 3
+
+
+def test_a_measured_label_finds_its_probe_ignoring_case():
+    p = predicted(lab1.EXP1_NONINVERTING)
+    result = compare_readings(lab1.EXP1_NONINVERTING,
+                              {"ch1 VI": p["CH1 vi"]["vrms"], "ch2 VO": p["CH2 vo"]["vrms"]})
+    assert [r["label"] for r in result["readings"]] == ["CH1 vi", "CH2 vo"]
+    assert result["gains"][0]["within_tolerance"] is True
+
+
+def test_two_readings_for_one_probe_are_refused_naming_both():
+    with pytest.raises(CompareError, match="'vo' and 'VO'"):
+        compare_readings(lab1.EXP7_DAC, {"vo": -5.0, "VO": -4.0})
 
 
 def test_a_gain_with_no_measurable_input_is_reported_not_dropped():
