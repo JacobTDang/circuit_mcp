@@ -1,9 +1,11 @@
 import Darwin
 import Foundation
 
+/// What `ClaudeRegistrationController.start` did. Only `.started` is followed by a completion.
 public enum ClaudeRegistrationStart: Equatable {
     case started
     case alreadyRunning
+    case launchFailed(String)
 }
 
 public enum ClaudeRegistrationResult: Equatable {
@@ -11,7 +13,6 @@ public enum ClaudeRegistrationResult: Equatable {
     case failed(status: Int32, output: String)
     case timedOut(seconds: TimeInterval, output: String)
     case cancelled(output: String)
-    case launchFailed(String)
 
     public var message: RegistrationMessage {
         switch self {
@@ -31,9 +32,6 @@ public enum ClaudeRegistrationResult: Equatable {
             return RegistrationMessage(
                 title: "Claude Code registration was cancelled.",
                 detail: Self.withOutput("The Claude Code process was stopped.", output))
-        case .launchFailed(let reason):
-            return RegistrationMessage(title: "Claude Code registration failed.",
-                                       detail: "The command could not start:\n\n\(reason)")
         }
     }
 
@@ -48,8 +46,6 @@ public enum ClaudeRegistrationResult: Equatable {
 
 /// Owns one Claude Code registration process from launch through reap. The timeout is injected so
 /// tests and callers can choose their bound; production uses the documented 30-second default.
-extension ClaudeRegistrationController: @unchecked Sendable {}
-
 public final class ClaudeRegistrationController {
     public static let defaultTimeout: TimeInterval = 30
 
@@ -86,6 +82,9 @@ public final class ClaudeRegistrationController {
         return process.processIdentifier
     }
 
+    /// Launches the registration. `completion` is called exactly once, on a background queue, and
+    /// only when this returns `.started`; it can run before `start` returns if the child exits at
+    /// once. `.alreadyRunning` and `.launchFailed` never call it.
     @discardableResult
     public func start(executable: URL, arguments: [String],
                       completion: @escaping (ClaudeRegistrationResult) -> Void) -> ClaudeRegistrationStart {
@@ -123,8 +122,7 @@ public final class ClaudeRegistrationController {
                 self.completion = nil
             }
             lock.unlock()
-            completion(.launchFailed(error.localizedDescription))
-            return .started
+            return .launchFailed(error.localizedDescription)
         }
 
         let work = DispatchWorkItem { [weak self, weak child] in
@@ -219,3 +217,6 @@ public final class ClaudeRegistrationController {
         completion(result)
     }
 }
+
+// @unchecked is sound because every stored `var` above is read and written only while holding `lock`.
+extension ClaudeRegistrationController: @unchecked Sendable {}

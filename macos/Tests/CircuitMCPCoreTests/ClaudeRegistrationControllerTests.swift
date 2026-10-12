@@ -57,6 +57,30 @@ final class ClaudeRegistrationControllerTests: XCTestCase {
         wait(for: [finished], timeout: 3)
     }
 
+    func testLaunchFailureIsReturnedByStartAndNeverReachesTheCompletion() throws {
+        let missing = directory.appendingPathComponent("missing-claude")
+        let callback = expectation(description: "completion after a launch failure")
+        callback.isInverted = true
+        let registration = controller()
+
+        let started = registration.start(executable: missing, arguments: []) { _ in callback.fulfill() }
+
+        guard case .launchFailed(let reason) = started else {
+            return XCTFail("a missing executable was reported as \(started)")
+        }
+        XCTAssertFalse(reason.isEmpty)
+        XCTAssertFalse(registration.isRunning)
+        wait(for: [callback], timeout: 0.2)
+
+        let cli = try executable("retry", body: "printf 'registered'")
+        let finished = expectation(description: "retry finished")
+        XCTAssertEqual(registration.start(executable: cli, arguments: []) { result in
+            XCTAssertEqual(result, .succeeded(output: "registered"))
+            finished.fulfill()
+        }, .started, "a launch failure left the controller unable to start again")
+        wait(for: [finished], timeout: 3)
+    }
+
     func testHungRegistrationIsKilledAtTheDocumentedTimeout() throws {
         let cli = try executable("hung", body: "trap '' TERM; exec /bin/sleep 60")
         let finished = expectation(description: "registration timed out")

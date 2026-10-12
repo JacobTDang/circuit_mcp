@@ -606,6 +606,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .alreadyRunning:
             presentAlert("Claude Code registration is already in progress.",
                          "Wait for it to finish, or cancel it before trying again.")
+        case .launchFailed(let reason):
+            presentAlert("Claude Code registration failed.", "The command could not start:\n\n\(reason)")
         }
     }
 
