@@ -170,3 +170,20 @@ def test_a_gain_with_no_measurable_input_is_reported_not_dropped():
     assert gain["error_pct"] is None
     assert gain["within_tolerance"] is False
     assert "1 mV" in gain["reason"]
+
+
+@pytest.mark.parametrize("label", ["CH1 vi", "CH2 vo"])
+@pytest.mark.parametrize("reading", [-4.54, {"vrms": -4.54}, {"vpp": -12.85}, {"vpk": -6.42}])
+def test_a_negative_ac_reading_is_refused_as_a_magnitude(label, reading):
+    # An inverting stage's "-4.54 V" is its phase written as a sign; judged as a level it was 200% off.
+    with pytest.raises(CompareError, match="AC readings are magnitudes and cannot be negative"):
+        compare_readings(lab1.EXP3_INVERTING, {"CH1 vi": 0.2, "CH2 vo": 4.54, label: reading})
+
+
+@pytest.mark.parametrize("basis", ["vrms", "vpp", "vpk"])
+def test_an_inverting_stage_read_as_magnitudes_has_a_positive_gain(basis):
+    p = predicted(lab1.EXP3_INVERTING)
+    result = compare_readings(lab1.EXP3_INVERTING, {label: {basis: p[label][basis]} for label in p})
+    gain = result["gains"][0]
+    assert gain["measured"] > 0
+    assert gain["within_tolerance"] is True

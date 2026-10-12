@@ -38,14 +38,19 @@ def _fmt(value: float, basis: str) -> str:
 def _reading(label: str, raw: Any, kind: str) -> tuple[str, float]:
     """(basis, value) for one measurement. A bare number is volts for DC, V RMS for AC."""
     if not isinstance(raw, dict):
-        return ("volts" if kind == "dc" else "vrms"), _number(raw, f"measured[{label!r}]")
-    if len(raw) != 1:
-        raise CompareError(f"measured[{label!r}] must name exactly one of volts, vrms, vpp, vpk")
-    ((basis, value),) = raw.items()
-    allowed = ("volts",) if kind == "dc" else AC_BASES
-    if basis not in allowed:
-        raise CompareError(f"{label!r} is a {kind.upper()} probe; give its reading as {' or '.join(allowed)}")
-    return basis, _number(value, f"measured[{label!r}][{basis!r}]")
+        basis, value = ("volts" if kind == "dc" else "vrms"), _number(raw, f"measured[{label!r}]")
+    else:
+        if len(raw) != 1:
+            raise CompareError(f"measured[{label!r}] must name exactly one of volts, vrms, vpp, vpk")
+        ((basis, value),) = raw.items()
+        allowed = ("volts",) if kind == "dc" else AC_BASES
+        if basis not in allowed:
+            raise CompareError(f"{label!r} is a {kind.upper()} probe; give its reading as {' or '.join(allowed)}")
+        value = _number(value, f"measured[{label!r}][{basis!r}]")
+    if basis in AC_BASES and value < 0:
+        raise CompareError(f"{label!r} reads {_fmt(value, basis)}, but AC readings are magnitudes and cannot be "
+                           "negative: an inverted output is the phase the expected card reports, not a minus sign")
+    return basis, value
 
 
 def _close(a: float, b: float, tolerance_pct: float) -> bool:
