@@ -1,9 +1,23 @@
 import Foundation
 import Security
 
-public enum SecretsStoreError: Error, Equatable {
+/// Settings and the launch error both show this to the student, so it reads as the Keychain's
+/// own sentence rather than an enum case and a bare status number.
+public enum SecretsStoreError: LocalizedError, CustomStringConvertible, Equatable {
     case unexpectedStatus(OSStatus, operation: String)
     case notUTF8(account: String)
+
+    public var errorDescription: String? { description }
+
+    public var description: String {
+        switch self {
+        case .unexpectedStatus(let status, let operation):
+            let reason = SecCopyErrorMessageString(status, nil) as String? ?? "macOS gave no description"
+            return "The Keychain could not \(operation) (OSStatus \(status)): \(reason)"
+        case .notUTF8(let account):
+            return "The Keychain item \(account) is not UTF-8 text."
+        }
+    }
 }
 
 /// The OpenRouter key and model, kept as generic passwords in the login Keychain.

@@ -31,6 +31,19 @@ final class SecretsStoreTests: XCTestCase {
         try store.delete(SecretsStore.modelAccount)
     }
 
+    /// Settings shows this text when a read fails, so it must be the Keychain's own sentence,
+    /// not the enum case and a bare status number.
+    func testAKeychainErrorReadsAsTheKeychainsOwnSentence() {
+        let error = SecretsStoreError.unexpectedStatus(errSecAuthFailed, operation: "read OPENROUTER_API_KEY")
+        let macOS = SecCopyErrorMessageString(errSecAuthFailed, nil) as String?
+
+        XCTAssertNotNil(macOS)
+        XCTAssertEqual("\(error)", "The Keychain could not read OPENROUTER_API_KEY (OSStatus -25293): \(macOS!)")
+        XCTAssertEqual(error.localizedDescription, "\(error)")
+        XCTAssertEqual("\(SecretsStoreError.notUTF8(account: "OPENROUTER_MODEL"))",
+                       "The Keychain item OPENROUTER_MODEL is not UTF-8 text.")
+    }
+
     func testServerSecretsIncludeOnlyWhatIsSet() throws {
         XCTAssertEqual(try store.serverSecrets(), [:])
         try store.write("sk-or-key", for: SecretsStore.apiKeyAccount)
