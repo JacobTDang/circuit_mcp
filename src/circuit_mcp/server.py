@@ -1852,7 +1852,8 @@ def canvas_card_add(
       "parts": [{"ref", "kind", "value", "nodes"}], "opamps": [{"ref", "chip", "section",
       "inp", "inn", "out"}], "sources": [...], "probes": [{"label", "node", "role"}],
       "pot_positions": {ref: 0..1}}``. Kinds: resistor, capacitor, inductor, led
-      (``[anode, cathode]``), pot (``[end, wiper, end]``). Chips: LM324, LMC660.
+      (``[anode, cathode]``), pot (``[end, wiper, end]``). Chips: LM324, LMC660;
+      one or two chips per build, each section named by its ``chip`` ref.
       Ground is ``gnd``; ``vminus: 0`` is single supply. The card is the wiring
       picture plus a build-order wire list; a layout that does not realise every
       net is refused. The drawing goes to the canvas, so the result carries the

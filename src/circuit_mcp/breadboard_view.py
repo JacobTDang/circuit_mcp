@@ -93,19 +93,9 @@ def net_colours(layout: Layout) -> dict[str, NetColour]:
     return colours
 
 
-def _pin_nets(layout: Layout) -> dict[int, str]:
-    chip = P.chip(layout.chip["part"])
-    nets = {chip.vplus: "vplus", chip.vminus: "vminus" if layout.build.dual_supply else GROUND}
-    for use in layout.build.opamps:
-        section = chip.section(use.section)
-        for role, _ in PIN_ROLES:
-            nets[getattr(section, role)] = getattr(use, role)
-    return nets
-
-
-def _pin_functions(layout: Layout) -> dict[int, str]:
+def _pin_functions(part: str) -> dict[int, str]:
     """The datasheet name of every pin, used or not, so the chip teaches its own pinout."""
-    chip = P.chip(layout.chip["part"])
+    chip = P.chip(part)
     functions = {chip.vplus: "V+", chip.vminus: "V-"}
     for section in chip.sections:
         for role, label in PIN_ROLES:
@@ -126,10 +116,10 @@ def nets(layout: Layout) -> list[dict[str, Any]]:
     if build.dual_supply:
         add("vminus", f"top red rail ({build.vminus:g} V)")
     add(GROUND, "both blue rails")
-    if layout.chip:
-        functions = _pin_functions(layout)
-        for pin, net in sorted(_pin_nets(layout).items()):
-            add(net, f"{layout.chip['ref']} pin {pin} ({functions[pin]})")
+    for chip in layout.chips:
+        functions = _pin_functions(chip["part"])
+        for pin, net in sorted(chip["nets"].items()):
+            add(net, f"{chip['ref']} pin {pin} ({functions[pin]})")
     for part in layout.placed:
         roles = {"pot": ("end", "wiper", "end"), "led": ("anode", "cathode")}.get(part["kind"])
         for index, net in enumerate(part["nodes"]):
@@ -159,10 +149,10 @@ def steps(layout: Layout) -> list[Step]:
         + (f"{build.vminus:g} V to the top red rail (top+); " if build.dual_supply else "")
         + "supply COM/ground to both blue rails, and jumper the two blue rails together at the right end of the board.",
     )]
-    if layout.chip:
-        chip = build.chips[layout.chip["ref"]]
-        listed.append(("chip", layout.chip,
-                       f"{layout.chip['ref']} {chip.part}: straddle the trench with pin 1 at f{layout.chip['col0']} "
+    for placed in layout.chips:
+        chip = build.chips[placed["ref"]]
+        listed.append(("chip", placed,
+                       f"{placed['ref']} {chip.part}: straddle the trench with pin 1 at f{placed['col0']} "
                        f"(notch to the left); pin {chip.vplus} (V+) and pin {chip.vminus} (V-) are wired below."))
     for part in layout.placed:
         label = f"{part['ref']} {part['value']}{P.UNITS.get(part['kind'], '')}".strip()
@@ -243,8 +233,7 @@ def _columns_in_use(layout: Layout) -> tuple[int, int]:
     cols = [column(hole) for part in layout.placed for hole in part["ends"]]
     cols += [column(hole) for jumper in layout.jumpers if not is_rail_bridge(jumper) for hole in jumper["ends"]]
     cols += [column(item["hole"]) for item in layout.attachments]
-    if layout.chip:
-        cols += [hole[1] for hole in layout.chip["pins"].values()]
+    cols += [hole[1] for chip in layout.chips for hole in chip["pins"].values()]
     first, last = max(1, min(cols) - 1), min(COLUMNS, max(cols) + 1)
     while last - first + 1 < MIN_COLUMNS:
         if first > 1:
@@ -257,9 +246,9 @@ def _columns_in_use(layout: Layout) -> tuple[int, int]:
 def _strip_nets(layout: Layout) -> dict[tuple, str]:
     """Which net every strip in use belongs to, so the strip can wear that net's colour."""
     owners = dict(layout.strip_net)
-    if layout.chip:
-        for pin, net in _pin_nets(layout).items():
-            owners[strip_of(layout.chip["pins"][pin])] = net
+    for chip in layout.chips:
+        for pin, net in chip["nets"].items():
+            owners[strip_of(chip["pins"][pin])] = net
     for part in layout.placed:
         for net, hole in zip(part["nodes"], part["ends"]):
             owners[strip_of(hole)] = net
@@ -418,19 +407,19 @@ def _pot(part: dict, drawing: Drawing, position: float) -> _Shape:
     return _Shape(svg, (cx - half_w, cy - half_h, cx + half_w, cy + half_h), (cx, cy), (half_w, half_h), tag)
 
 
-def _chip(layout: Layout, drawing: Drawing, step: int) -> tuple[str, Box]:
-    col0 = layout.chip["col0"]
+def _chip(chip: dict, drawing: Drawing, step: int) -> tuple[str, Box]:
+    col0 = chip["col0"]
     x0, x1 = drawing.x(col0) - 9, drawing.x(col0 + 6) + 9
     ye, yf = drawing.y("e"), drawing.y("f")
     top, bottom, cy = ye - 9, yf + 9, (ye + yf) / 2
-    pin_nets, functions = _pin_nets(layout), _pin_functions(layout)
+    pin_nets, functions = chip["nets"], _pin_functions(chip["part"])
     out = [f'<g class="chip" data-step="{step}" data-nets="{escape(" ".join(dict.fromkeys(pin_nets.values())))}">',
            f'<rect class="chip-body" x="{_n(x0)}" y="{_n(top)}" width="{_n(x1 - x0)}" height="{_n(bottom - top)}" rx="3" fill="#2B2F33"/>',
            f'<path d="M {_n(x0)} {_n(cy - 5)} A 5 5 0 0 1 {_n(x0)} {_n(cy + 5)}" fill="{BOARD}"/>',
            f'<circle cx="{_n(x0 + 4)}" cy="{_n(yf + 1)}" r="1.6" fill="#9AA0A6"/>',
            f'<text x="{_n((x0 + x1) / 2)}" y="{_n(cy + 3.2)}" font-size="9" font-weight="700" text-anchor="middle" '
-           f'fill="#F1F3F4">{escape(layout.chip["ref"])} {escape(layout.chip["part"])}</text>']
-    for pin, hole in sorted(layout.chip["pins"].items()):
+           f'fill="#F1F3F4">{escape(chip["ref"])} {escape(chip["part"])}</text>']
+    for pin, hole in sorted(chip["pins"].items()):
         x, y = drawing.xy(hole)
         net = pin_nets.get(pin)
         number_fill, function_fill = ("#F1F3F4", "#C9CED3") if net else ("#7D848C", "#5C636B")
@@ -569,8 +558,8 @@ def draw(layout: Layout) -> Drawing:
         else:
             shape = _two_terminal(part, drawing)
         shapes.append((part, shape))
-    chip_svg, chip_box = _chip(layout, drawing, step_of[id(layout.chip)]) if layout.chip else ("", None)
-    solids = [shape.box for _, shape in shapes] + ([chip_box] if chip_box else [])
+    chips = [_chip(chip, drawing, step_of[id(chip)]) for chip in layout.chips]
+    solids = [shape.box for _, shape in shapes] + [box for _, box in chips]
     board = (LEFT - 12, TOP, drawing.width - RIGHT + 12, drawing.height - BOTTOM)
     used = [hole for part in layout.placed for hole in part["ends"]]
     used += [hole for jumper in layout.jumpers if not is_rail_bridge(jumper) for hole in jumper["ends"]]
@@ -670,7 +659,7 @@ def draw(layout: Layout) -> Drawing:
         out.append(_leader(box, shape.anchor, shape.half, step_of[id(part)], escape(" ".join(dict.fromkeys(part["nodes"])))))
     for item, _, box in tags:
         out.append(_leader(box, drawing.xy(item["hole"]), (6.5, 6.5), step_of[id(item)], escape(item["net"])))
-    out.append(chip_svg)
+    out += [chip_svg for chip_svg, _ in chips]
     for part, shape in shapes:
         out.append(f'<g class="part" data-step="{step_of[id(part)]}" data-nets="{escape(" ".join(dict.fromkeys(part["nodes"])))}">{shape.svg}</g>')
     for jumper, a, c, b in wires:

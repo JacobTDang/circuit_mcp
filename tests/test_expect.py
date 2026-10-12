@@ -190,3 +190,29 @@ def test_a_dc_build_with_no_input_probe_reports_no_gains():
     """The front end renders an empty gains list; this pins that shape."""
     result = expectations(lab1.EXP7_DAC)
     assert result["gains"] == []
+
+
+TWO_FOLLOWERS = {
+    "supply": {"vplus": 12, "vminus": -12},
+    "chips": [{"ref": "U1", "part": "LM324"}, {"ref": "U2", "part": "LM324"}],
+    "parts": [{"ref": "R1", "kind": "resistor", "value": "10k", "nodes": ["o1", "n1"]},
+              {"ref": "R2", "kind": "resistor", "value": "10k", "nodes": ["o2", "n2"]}],
+    "opamps": [{"ref": "U1A", "chip": "U1", "section": "A", "inp": "vin", "inn": "n1", "out": "o1"},
+               {"ref": "U2A", "chip": "U2", "section": "A", "inp": "o1", "inn": "n2", "out": "o2"}],
+    "sources": [{"ref": "VS", "kind": "sine", "node": "vin", "vrms": 0.1, "freq": 1000}],
+    "probes": [{"label": "in", "node": "vin", "role": "input"}, {"label": "out", "node": "o2", "role": "output"}],
+}
+
+
+def test_two_chips_of_one_part_are_predicted_with_that_parts_swing():
+    result = expectations(TWO_FOLLOWERS)
+    assert result["gains"][0]["gain"] == pytest.approx(1.0, abs=0.01)
+    assert result["swing"] == {"low": -11.5, "high": 10.5}
+
+
+def test_two_chips_that_swing_differently_are_refused_rather_than_judged_by_one_of_them():
+    """One swing per build would flag an LMC660 output as clipping where an LM324's would."""
+    mixed = copy.deepcopy(TWO_FOLLOWERS)
+    mixed["chips"][1]["part"] = "LMC660"
+    with pytest.raises(ExpectError, match="LM324 and LMC660"):
+        expectations(mixed)

@@ -112,6 +112,13 @@ def _phase(correlation: float) -> str:
 def _swing(build: Build) -> tuple[float, float]:
     if not build.chips:
         return build.vminus, build.vplus
+    # One swing judges every output here, so chips that stop short of the rails
+    # by different amounts would have one of them judged by the other's limits.
+    swings = {(chip.headroom_low, chip.headroom_high): chip.part for chip in build.chips.values()}
+    if len(swings) > 1:
+        raise ExpectError(f"this build mixes {' and '.join(sorted(swings.values()))}, whose outputs stop short of "
+                          f"the rails by different amounts; the expected card predicts one output swing per build, "
+                          f"so it cannot judge clipping on both")
     chip = next(iter(build.chips.values()))
     return build.vminus + chip.headroom_low, build.vplus - chip.headroom_high
 

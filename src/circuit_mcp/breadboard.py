@@ -17,8 +17,13 @@ COLUMNS = 30
 STRIPS = 2 * COLUMNS    # a five-hole column strip either side of the trench
 TOP_ROWS = "abcde"      # e is nearest the trench
 BOTTOM_ROWS = "fghij"   # f is nearest the trench
-CHIP_COL0 = 12          # a DIP-14 occupies columns 12..18
-CHIP_COLS = range(CHIP_COL0, CHIP_COL0 + 7)
+CHIP_WIDTH = 7          # a DIP-14 straddles the trench across seven columns
+CHIP_COL0 = 12          # one chip occupies columns 12..18
+# Where each chip's pin 1 goes, by how many chips the build has. Two leave five
+# columns left of the first, five between them for the parts joining the stages,
+# and six right of the second; a third would leave too few for the parts.
+CHIP_COL0S = {0: (), 1: (CHIP_COL0,), 2: (6, 18)}
+MAX_CHIPS = max(CHIP_COL0S)
 GROUND = "gnd"
 # The four rails, top to bottom as the board is drawn. Everything that depends
 # on rail order derives from this: the collision model below, and the renderer's
@@ -179,8 +184,9 @@ def parse_build(content: Any) -> Build:
             chips[ref] = P.chip(str(entry.get("part", "")))
         except P.PartError as exc:
             raise BuildError(str(exc)) from exc
-    if len(chips) > 1:
-        raise BuildError("one chip per build; a quad op amp has four sections")
+    if len(chips) > MAX_CHIPS:
+        raise BuildError(f"at most {MAX_CHIPS} chips per build: a {COLUMNS}-column board has room for "
+                         f"{MAX_CHIPS} DIP-14s and the parts around them")
 
     parts: list[Part] = []
     for entry in _entries(content, "parts", "part"):
@@ -295,7 +301,7 @@ def parse_build(content: Any) -> Build:
 class Layout:
     build: Build
     homes: dict[str, tuple] = field(default_factory=dict)      # net -> ("top"|"bottom", col) | ("rail", name)
-    chip: dict | None = None
+    chips: list[dict] = field(default_factory=list)            # ref, part, col0, pins {pin: hole}, nets {pin: net}
     placed: list[dict] = field(default_factory=list)
     jumpers: list[dict] = field(default_factory=list)
     attachments: list[dict] = field(default_factory=list)
@@ -304,21 +310,25 @@ class Layout:
     strip_net: dict = field(default_factory=dict)              # strip -> net (for verification)
 
 
-def _chip_cols(layout: "Layout") -> range:
-    """The columns the chip occupies, or none when the build has no chip."""
-    return CHIP_COLS if layout.build.chips else range(0)
+def _chip_cols(layout: "Layout") -> set[int]:
+    """The columns the chips occupy, none when the build has no chip."""
+    return {col0 + i for col0 in CHIP_COL0S[len(layout.build.chips)] for i in range(CHIP_WIDTH)}
 
 
 def _preferred(layout: "Layout", toward: str) -> list[int]:
-    """The columns a new home or part tries first, outward from the chip.
+    """The columns a new home or part tries first, outward from the chips.
 
-    Sources start left of the chip and everything else right of it, every other
-    column, so a part can lie between two homes and the column between them stays
-    spare for routing. Without a chip the middle of the board is free.
+    Sources start left of the first chip and everything else right of each chip,
+    every other column, so a part can lie between two homes and the column between
+    them stays spare for routing. Without a chip the middle of the board is free.
     """
+    col0s = CHIP_COL0S[len(layout.build.chips)]
     if toward == "left":
-        return list(range(CHIP_COL0 - 2, 0, -2))
-    return list(range(CHIP_COL0 + 8 if layout.build.chips else CHIP_COL0, COLUMNS, 2))
+        return list(range((col0s[0] if col0s else CHIP_COL0) - 2, 0, -2))
+    if not col0s:
+        return list(range(CHIP_COL0, COLUMNS, 2))
+    return [col for col0, after in zip(col0s, (*col0s[1:], COLUMNS + 1))
+            for col in range(col0 + CHIP_WIDTH + 1, after - 1, 2)]
 
 
 def _strips_needed(build: Build) -> int:
@@ -328,7 +338,7 @@ def _strips_needed(build: Build) -> int:
     the chips that is not a rail needs a strip of its own: no strip carries two nets.
     """
     on_chips = {net for use in build.opamps for net in (use.inp, use.inn, use.out)}
-    return 2 * len(CHIP_COLS) * len(build.chips) + len(build.nets() - on_chips - {GROUND})
+    return 2 * CHIP_WIDTH * len(build.chips) + len(build.nets() - on_chips - {GROUND})
 
 
 def _no_room(layout: "Layout", what: str) -> BuildError:
@@ -651,17 +661,7 @@ def _place_multi_pin(layout: Layout, part: Part) -> None:
 
 def _chip_claims(layout: Layout) -> dict[tuple, str]:
     """The net on each strip a chip pin sits in."""
-    if not layout.chip:
-        return {}
-    chip, pins = layout.build.chips[layout.chip["ref"]], layout.chip["pins"]
-    claims = {}
-    for use in layout.build.opamps:
-        section = chip.section(use.section)
-        for net, pin in ((use.inp, section.inp), (use.inn, section.inn), (use.out, section.out)):
-            claims[strip_of(pins[pin])] = net
-    claims[strip_of(pins[chip.vplus])] = "vplus"
-    claims[strip_of(pins[chip.vminus])] = "vminus" if layout.build.dual_supply else GROUND
-    return claims
+    return {strip_of(chip["pins"][pin]): net for chip in layout.chips for pin, net in chip["nets"].items()}
 
 
 def _wire_cost(a: tuple, b: tuple) -> int:
@@ -784,21 +784,23 @@ def place(build: Build) -> Layout:
     layout.jumpers.append({"net": GROUND, "ends": [("rail", "top-", 1), ("rail", "bot-", 1)]})
     layout.used.update({("rail", "top-", 1), ("rail", "bot-", 1)})
 
-    # The chip straddles the trench: pins 1-7 along row f, 8-14 along row e right to left.
-    for ref, chip in build.chips.items():
+    # Each chip straddles the trench: pins 1-7 along row f, 8-14 along row e right to left.
+    for col0, (ref, chip) in zip(CHIP_COL0S[len(build.chips)], build.chips.items()):
         pins = {}
         for pin in range(1, chip.pins + 1):
-            col = CHIP_COL0 + (pin - 1 if pin <= 7 else chip.pins - pin)
+            col = col0 + (pin - 1 if pin <= 7 else chip.pins - pin)
             hole = ("bottom", col, "f") if pin <= 7 else ("top", col, "e")
             pins[pin] = hole
             layout.used.add(hole)
-        layout.chip = {"ref": ref, "part": chip.part, "col0": CHIP_COL0, "pins": pins}
+        nets = {chip.vplus: "vplus", chip.vminus: "vminus" if build.dual_supply else GROUND}
         for use in build.opamps:
-            section = chip.section(use.section)
-            for net, pin in ((use.inp, section.inp), (use.inn, section.inn), (use.out, section.out)):
-                strip = strip_of(pins[pin])
-                if net not in layout.homes:
-                    _assign_home(layout, net, strip)
+            if use.chip == ref:
+                section = chip.section(use.section)
+                nets.update({section.inp: use.inp, section.inn: use.inn, section.out: use.out})
+        layout.chips.append({"ref": ref, "part": chip.part, "col0": col0, "pins": pins, "nets": nets})
+        for pin, net in nets.items():
+            if net not in layout.homes:
+                _assign_home(layout, net, strip_of(pins[pin]))
 
     for part in build.parts:
         if part.kind in ("pot", "led"):

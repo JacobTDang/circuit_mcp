@@ -81,9 +81,12 @@ def test_the_same_chip_section_cannot_be_used_twice():
         parse_build(spec(opamps=MINIMAL["opamps"] + [second]))
 
 
-def test_one_chip_per_build():
-    with pytest.raises(BuildError, match="one chip per build"):
-        parse_build(spec(chips=[{"ref": "U1", "part": "LM324"}, {"ref": "U2", "part": "LMC660"}]))
+def test_two_chips_parse_and_a_third_is_refused_by_the_board_it_would_not_fit():
+    two = parse_build(spec(chips=[{"ref": "U1", "part": "LM324"}, {"ref": "U2", "part": "LMC660"}]))
+    assert list(two.chips) == ["U1", "U2"]
+    three = [{"ref": f"U{i}", "part": "LM324"} for i in (1, 2, 3)]
+    with pytest.raises(BuildError, match="at most 2 chips per build"):
+        parse_build(spec(chips=three))
 
 
 def test_a_source_must_drive_a_node_that_exists_and_is_not_ground():
@@ -153,7 +156,7 @@ def test_every_lab1_circuit_places_and_verifies(name):
 
 def test_the_chip_straddles_the_trench_with_pin_one_bottom_left():
     layout = place(parse_build(lab1.EXP1_NONINVERTING))
-    pins = layout.chip["pins"]
+    pins = layout.chips[0]["pins"]
     assert pins[1] == ("bottom", CHIP_COL0, "f")
     assert pins[7] == ("bottom", CHIP_COL0 + 6, "f")
     assert pins[8] == ("top", CHIP_COL0 + 6, "e")
@@ -175,7 +178,7 @@ def test_rails_carry_the_supply_and_ground():
     single = place(parse_build(lab1.EXP4B_BUFFERED))
     assert "vminus" not in single.homes
     chip = single.build.chips["U1"]
-    minus_strip = strip_of(single.chip["pins"][chip.vminus])
+    minus_strip = strip_of(single.chips[0]["pins"][chip.vminus])
     assert any(strip_of(j["ends"][0]) == minus_strip or strip_of(j["ends"][1]) == minus_strip for j in single.jumpers if j["net"] == GROUND)
 
 
@@ -416,11 +419,11 @@ def test_labels_never_overlap_each_other_a_used_hole_or_the_chip_and_stay_on_the
     layout = place(parse_build(lab1.ALL[name]))
     drawing = draw(layout)
     assert drawing.labels, "every lab circuit labels at least one part"
-    chip = None
-    if layout.chip:
-        points = [drawing.xy(hole) for hole in layout.chip["pins"].values()]
-        chip = (min(x for x, _ in points) - 9, min(y for _, y in points) - 9,
-                max(x for x, _ in points) + 9, max(y for _, y in points) + 9)
+    chips = []
+    for chip in layout.chips:
+        points = [drawing.xy(hole) for hole in chip["pins"].values()]
+        chips.append((min(x for x, _ in points) - 9, min(y for _, y in points) - 9,
+                      max(x for x, _ in points) + 9, max(y for _, y in points) + 9))
     for i, box in enumerate(drawing.labels):
         assert 0 <= box[0] and box[2] <= drawing.width and 0 <= box[1] and box[3] <= drawing.height, f"{box} is off the board"
         for other in drawing.labels[i + 1:]:
@@ -428,8 +431,8 @@ def test_labels_never_overlap_each_other_a_used_hole_or_the_chip_and_stay_on_the
         for hole in _used_holes(layout):
             x, y = drawing.xy(hole)
             assert not _overlap(box, (x - 2.3, y - 2.3, x + 2.3, y + 2.3)), f"label {box} covers {hole_name(hole)}"
-        if chip:
-            assert not _overlap(box, chip), f"label {box} covers the chip"
+        for chip in chips:
+            assert not _overlap(box, chip), f"label {box} covers a chip"
 
 
 @pytest.mark.parametrize("name", sorted(lab1.ALL))
@@ -785,8 +788,7 @@ def _assert_wired_as_built(layout):
     holes = [hole for part in layout.placed for hole in part["ends"]]
     holes += [hole for jumper in layout.jumpers for hole in jumper["ends"]]
     holes += [item["hole"] for item in layout.attachments]
-    if layout.chip:
-        holes += list(layout.chip["pins"].values())
+    holes += [hole for chip in layout.chips for hole in chip["pins"].values()]
     for hole in holes:
         if hole[0] == "rail":
             assert hole[1] in RAIL_ORDER and 1 <= hole[2] <= 30, hole
@@ -817,14 +819,15 @@ def _assert_wired_as_built(layout):
         cols = [hole[2] if hole[0] == "rail" else hole[1] for hole in part["ends"]]
         assert max(cols) - min(cols) <= MAX_SPAN, f"{part['ref']} is stretched across {part['ends']}"
     assert sorted(p["ref"] for p in layout.placed) == sorted(nodes), "a part of the build was never placed"
-    if layout.chip:
-        chip = build.chips[layout.chip["ref"]]
-        pins, col0 = layout.chip["pins"], layout.chip["col0"]
+    assert [chip["ref"] for chip in layout.chips] == list(build.chips), "a chip of the build was never placed"
+    for placed in layout.chips:
+        chip = build.chips[placed["ref"]]
+        pins, col0 = placed["pins"], placed["col0"]
         for pin in range(1, 8):   # a DIP-14 straddles the trench: 1-7 left to right below, 8-14 right to left above
             assert pins[pin] == ("bottom", col0 + pin - 1, "f") and pins[15 - pin] == ("top", col0 + pin - 1, "e")
         terminals += [(strip_of(pins[chip.vplus]), "vplus"),
                       (strip_of(pins[chip.vminus]), "vminus" if build.dual_supply else GROUND)]
-        for use in build.opamps:
+        for use in (use for use in build.opamps if use.chip == placed["ref"]):
             section = chip.section(use.section)
             terminals += [(strip_of(pins[section.inp]), use.inp), (strip_of(pins[section.inn]), use.inn),
                           (strip_of(pins[section.out]), use.out)]
@@ -973,3 +976,84 @@ def test_a_net_busier_than_one_strip_is_wired_through_its_strips_with_room():
              "sources": [{"ref": "VS", "kind": "dc", "node": "n1", "volts": 1}],
              "probes": [{"label": "CH0", "node": "n2"}, {"label": "CH1", "node": "n0"}]}
     _assert_wired_as_built(place(parse_build(build)))
+
+
+# --- two chips on one board ------------------------------------------------------
+
+ISSUE_126_CASCADE = {
+    "supply": {"vplus": 12, "vminus": -12},
+    "chips": [{"ref": "U1", "part": "LM324"}, {"ref": "U2", "part": "LMC660"}],
+    "parts": [{"ref": "R1", "kind": "resistor", "value": "10k", "nodes": ["o1", "n1"]},
+              {"ref": "R2", "kind": "resistor", "value": "10k", "nodes": ["o2", "n2"]}],
+    "opamps": [{"ref": "U1A", "chip": "U1", "section": "A", "inp": "vin", "inn": "n1", "out": "o1"},
+               {"ref": "U2A", "chip": "U2", "section": "A", "inp": "o1", "inn": "n2", "out": "o2"}],
+    "sources": [{"ref": "VS", "kind": "sine", "node": "vin", "vrms": 0.1, "freq": 1000}],
+    "probes": [{"label": "in", "node": "vin", "role": "input"}, {"label": "out", "node": "o2", "role": "output"}],
+}
+
+
+def _five_stage_cascade():
+    """Five inverting stages: one more than a quad op amp holds."""
+    stages = [("U1", "A"), ("U1", "B"), ("U1", "C"), ("U1", "D"), ("U2", "A")]
+    parts, opamps = [], []
+    for i, (chip, section) in enumerate(stages):
+        parts.append({"ref": f"RI{i}", "kind": "resistor", "value": "10k", "nodes": [f"s{i}", f"m{i}"]})
+        parts.append({"ref": f"RF{i}", "kind": "resistor", "value": "10k", "nodes": [f"m{i}", f"s{i + 1}"]})
+        opamps.append({"ref": f"{chip}{section}", "chip": chip, "section": section,
+                       "inp": "gnd", "inn": f"m{i}", "out": f"s{i + 1}"})
+    return {"supply": {"vplus": 15, "vminus": -15},
+            "chips": [{"ref": "U1", "part": "LM324"}, {"ref": "U2", "part": "LM324"}],
+            "parts": parts, "opamps": opamps,
+            "sources": [{"ref": "VS", "kind": "sine", "node": "s0", "vrms": 0.1, "freq": 1000}],
+            "probes": [{"label": "in", "node": "s0", "role": "input"}, {"label": "out", "node": "s5", "role": "output"}]}
+
+
+def test_the_two_chip_cascade_from_issue_126_straddles_the_trench_at_two_separate_spans():
+    layout = place(parse_build(ISSUE_126_CASCADE))
+    spans = [range(chip["col0"], chip["col0"] + 7) for chip in layout.chips]
+    assert [chip["ref"] for chip in layout.chips] == ["U1", "U2"]
+    assert all(1 <= span[0] and span[-1] <= 30 for span in spans)
+    assert not set(spans[0]) & set(spans[1]), spans
+    _assert_wired_as_built(layout)
+
+
+def test_each_section_sits_on_its_own_chip():
+    """U1A and U2A share a section letter; their pins must not."""
+    layout = place(parse_build(ISSUE_126_CASCADE))
+    u1, u2 = layout.chips
+    assert layout.homes["vin"] == strip_of(u1["pins"][3])          # U1A IN+
+    assert strip_of(u2["pins"][3]) != strip_of(u1["pins"][3])
+    assert u2["nets"][3] == "o1" and u1["nets"][3] == "vin"        # U2A IN+ is stage one's output
+    assert u1["nets"][1] == "o1" and u2["nets"][1] == "o2"
+
+
+def test_both_chips_are_powered_from_the_rails():
+    layout = place(parse_build(ISSUE_126_CASCADE))
+    for chip in layout.chips:
+        part = layout.build.chips[chip["ref"]]
+        assert chip["nets"][part.vplus] == "vplus" and chip["nets"][part.vminus] == "vminus"
+    _assert_wired_as_built(layout)   # and each power pin really reaches its rail
+
+
+def test_a_five_stage_cascade_spills_onto_a_second_chip():
+    _assert_wired_as_built(place(parse_build(_five_stage_cascade())))
+
+
+def test_two_chips_each_get_a_step_their_pins_in_the_legend_and_a_body_on_the_board():
+    payload = layout_payload(ISSUE_126_CASCADE)
+    chip_steps = [w for w in payload["wires"] if re.match(r"U\d (LM324|LMC660): straddle the trench", w)]
+    assert len(chip_steps) == 2 and chip_steps[0].startswith("U1 LM324") and chip_steps[1].startswith("U2 LMC660")
+    legend = {n["net"]: n["members"] for n in payload["nets"]}
+    assert "U1 pin 1 (OUT A)" in legend["o1"] and "U2 pin 3 (IN+ A)" in legend["o1"]
+    assert {"U1 pin 4 (V+)", "U2 pin 4 (V+)"} <= set(legend["vplus"])
+    assert payload["svg"].count('class="chip-body"') == 2
+    drawn = {int(n) for n in re.findall(r'data-step="(\d+)"', payload["svg"])}
+    assert drawn == set(range(1, len(payload["wires"]) + 1))
+
+
+def test_the_build_format_says_how_many_chips_a_board_takes():
+    from circuit_mcp import server
+    from circuit_mcp.breadboard import MAX_CHIPS
+
+    assert MAX_CHIPS == 2
+    assert "one or two chips" in " ".join(server.canvas_card_add.__doc__.split())
