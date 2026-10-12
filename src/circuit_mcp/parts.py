@@ -33,6 +33,8 @@ class Chip:
     headroom_high: float  # volts the output stops short of V+
     headroom_low: float   # volts the output stops short of V-
     input_headroom_high: float  # volts below V+ where the input common-mode range ends; both reach V-
+    supply_range: tuple[float, float]  # recommended V+ - V-, lowest to highest
+    supply_absolute_max: float         # V+ - V- past which the chip can be destroyed
 
     def section(self, name: str) -> OpAmpSection:
         for section in self.sections:
@@ -53,11 +55,15 @@ QUAD_DIP14 = (
 CHIPS: dict[str, Chip] = {
     # LM324: output reaches V+ - 1.5 V; low side is within tens of mV of V- when
     # sinking little current, 0.5 V is a conservative figure for a loaded output.
-    # Inputs work from V- up to V+ - 1.5 V (TI SLOS066, 25 C).
-    "LM324": Chip("LM324", 14, 4, 11, QUAD_DIP14, headroom_high=1.5, headroom_low=0.5, input_headroom_high=1.5),
+    # Inputs work from V- up to V+ - 1.5 V (TI SLOS066, 25 C). Supply, V+ - V-:
+    # 3 V to 32 V recommended, 32 V absolute maximum (+/-16 V).
+    "LM324": Chip("LM324", 14, 4, 11, QUAD_DIP14, headroom_high=1.5, headroom_low=0.5, input_headroom_high=1.5,
+                  supply_range=(3.0, 32.0), supply_absolute_max=32.0),
     # LMC660: rail-to-rail output, but not input: inputs work from V- - 0.1 V up
-    # to V+ - 2.3 V (TI SNOSC51D, 25 C).
-    "LMC660": Chip("LMC660", 14, 4, 11, QUAD_DIP14, headroom_high=0.1, headroom_low=0.1, input_headroom_high=2.3),
+    # to V+ - 2.3 V (TI SNOSC51D, 25 C). Supply, V+ - V-: 4.75 V to 15.5 V
+    # recommended, 16 V absolute maximum -- a CMOS part, half the LM324's.
+    "LMC660": Chip("LMC660", 14, 4, 11, QUAD_DIP14, headroom_high=0.1, headroom_low=0.1, input_headroom_high=2.3,
+                   supply_range=(4.75, 15.5), supply_absolute_max=16.0),
 }
 
 

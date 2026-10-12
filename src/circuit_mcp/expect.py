@@ -12,7 +12,7 @@ from typing import Any
 
 from . import parts as P
 from . import spice
-from .breadboard import GROUND, Build, parse_build
+from .breadboard import GROUND, Build, parse_build, supply_notes
 
 SETTLE_PERIODS = 2
 CAPTURE_PERIODS = 2
@@ -208,7 +208,7 @@ def expectations(content: Any) -> dict[str, Any]:
             elif not ac and abs(levels[in_at]) > 1e-9:
                 gains.append({"output": out["label"], "input": inp["label"],
                               "gain": round(levels[out_at] / levels[in_at], 3), "basis": "dc"})
-    notes = []
+    notes = supply_notes(build)
     for r in readings:
         if r.get("clipped"):
             notes.append(f"{r['label']} is clipping: the op amp output cannot go beyond about {lo_limit:g} V to {hi_limit:g} V on this supply.")

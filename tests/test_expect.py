@@ -235,5 +235,6 @@ def test_two_chips_that_swing_differently_are_refused_rather_than_judged_by_one_
     """One swing per build would flag an LMC660 output as clipping where an LM324's would."""
     mixed = copy.deepcopy(TWO_FOLLOWERS)
     mixed["chips"][1]["part"] = "LMC660"
+    mixed["supply"] = {"vplus": 7.5, "vminus": -7.5}   # +/-12 V is past the LMC660's 16 V absolute maximum
     with pytest.raises(ExpectError, match="LM324 and LMC660"):
         expectations(mixed)

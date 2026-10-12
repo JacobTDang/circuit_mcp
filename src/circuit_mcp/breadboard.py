@@ -235,6 +235,16 @@ def parse_build(content: Any) -> Build:
     if len(chips) > MAX_CHIPS:
         raise BuildError(f"at most {MAX_CHIPS} chips per build: a {COLUMNS}-column board has room for "
                          f"{MAX_CHIPS} DIP-14s and the parts around them")
+    # Past the absolute maximum the chip can be destroyed, so neither card is made;
+    # between that and the recommended range, supply_notes says so on both.
+    total = vplus - vminus
+    for ref, chip in chips.items():
+        if total > chip.supply_absolute_max:
+            low, high = chip.supply_range
+            raise BuildError(
+                f"{ref} {chip.part}: this supply puts {total:g} V between V+ and V-, past the chip's "
+                f"{chip.supply_absolute_max:g} V absolute maximum, which can destroy it; its recommended range "
+                f"is {low:g} V to {high:g} V, so lower the supply")
 
     parts: list[Part] = []
     for entry in _entries(content, "parts", "part"):
@@ -358,6 +368,30 @@ def parse_build(content: Any) -> Build:
             positions.setdefault(part.ref, 0.5)
 
     return Build(vplus, vminus, chips, tuple(parts), tuple(opamps), tuple(sources), tuple(probes), positions)
+
+
+def supply_notes(build: Build) -> list[str]:
+    """A note for each chip whose supply is outside its recommended range, which parse_build allows.
+
+    Up to the absolute maximum a build is legal, so it is drawn, but not silently:
+    Lab 1 runs the LMC660 at +/-8 V, exactly its 16 V maximum, and a bench supply
+    set a little high takes it past. Both cards carry the note, so the student
+    reads it before the board is powered.
+    """
+    total = build.vplus - build.vminus
+    notes = []
+    for ref, chip in build.chips.items():
+        low, high = chip.supply_range
+        if total > high:
+            limit = chip.supply_absolute_max
+            margin = "at" if total >= limit else f"{limit - total:g} V under"
+            notes.append(f"{ref} {chip.part} runs on {total:g} V between V+ and V-, above the {high:g} V top of its "
+                         f"recommended range and {margin} its {limit:g} V absolute maximum: set the supply with a "
+                         f"meter before the chip goes in, since a supply that drifts past {limit:g} V can destroy it.")
+        elif total < low:
+            notes.append(f"{ref} {chip.part} runs on {total:g} V between V+ and V-, below the {low:g} V bottom of its "
+                         f"recommended range, where its datasheet no longer promises its gain or its output swing.")
+    return notes
 
 
 # --- placement ---------------------------------------------------------------

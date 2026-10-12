@@ -215,7 +215,9 @@ verified before it is drawn, so every net comes out as one connected group and
 no two nets touch. `expected` runs the same build through ngspice with a
 rail-limited op amp and reports what each probe should read: DC volts, or peak
 and rms with a waveform, whether the output is clipping, and the gain and phase
-between input and output probes. The eight Lab 1 circuits are the test
+between input and output probes. A supply past a chip's absolute maximum is
+refused by both, and one outside its recommended range is drawn with a note on
+both naming the chip and the limit. The eight Lab 1 circuits are the test
 fixtures for both.
 
 ## Solutions sheet

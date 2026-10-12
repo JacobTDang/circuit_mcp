@@ -353,6 +353,17 @@ def test_app_js_draws_the_net_legend_and_links_each_step_to_the_board(tmp_path, 
         assert ".card-board.is-focusing-step" in css and ".card-board.is-focusing-net" in css
 
 
+def test_app_js_shows_the_supply_note_on_the_breadboard_card_as_on_the_expected_card(tmp_path, monkeypatch):
+    """A supply at the chip's limit has to be read before the board is powered, which is the breadboard card."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        notes = app_script.split("function cardNotes(p)", 1)[1].split("\n", 1)[0]
+        assert "escapeHtml(n)" in notes and 'class="card-note"' in notes
+        breadboard = app_script.split("card.kind==='breadboard'", 1)[1].split("card.kind==='expected'", 1)[0]
+        expected = app_script.split("card.kind==='expected'", 1)[1].split("card-verified", 1)[0]
+        assert "cardNotes(p)" in breadboard and "cardNotes(p)" in expected
+
+
 def test_app_js_retries_a_poll_whose_render_failed(tmp_path, monkeypatch):
     """The signature was stamped before the render, so a render that threw was never retried."""
     with _browser(tmp_path, monkeypatch) as browser:

@@ -231,6 +231,17 @@ def test_an_expected_card_carries_readings_and_gains():
     assert card["payload"]["gains"][0]["gain"] > 15
 
 
+@pytest.mark.parametrize("name", ["exp3", "exp5", "exp6", "exp8"])
+def test_the_lab1_lmc660_builds_at_8_volts_make_both_cards_and_each_warns_of_the_supply(name):
+    """+/-8 V is 16 V across the LMC660: its absolute maximum, so drawn, but never silently."""
+    for kind in ("breadboard", "expected"):
+        notes = build_card(kind, name, lab1.ALL[name])["payload"]["notes"]
+        assert notes[0] == (
+            "U1 LMC660 runs on 16 V between V+ and V-, above the 15.5 V top of its recommended range and at its "
+            "16 V absolute maximum: set the supply with a meter before the chip goes in, since a supply that "
+            "drifts past 16 V can destroy it."), (kind, notes)
+
+
 def test_a_bad_build_is_refused_naming_the_field():
     with pytest.raises(CardError, match="supply"):
         build_card("breadboard", "x", {"parts": []})
