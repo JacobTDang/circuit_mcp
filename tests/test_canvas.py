@@ -221,6 +221,26 @@ def test_app_js_shows_the_pot_positions_on_the_expected_card(tmp_path, monkeypat
         assert "p.pots" in footer, "the expected card never names the pot settings the numbers assume"
 
 
+def test_app_js_keeps_a_build_step_with_the_drawing(tmp_path, monkeypatch):
+    """The legend sat open under a drawing that already filled an 800px window, so a step and its parts could not be seen together."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        branch = app_script.split("card.kind==='breadboard'", 1)[1].split("card.kind==='expected'", 1)[0]
+        assert "<details" in branch, "the net legend stays open and pushes the steps below the window"
+        details = branch.split("<details", 1)[1].split(">", 1)[0]
+        assert "card-legend" in details and "open" not in details
+        assert branch.index("<details") < branch.index("${p.svg"), "the legend has to sit on the drawing, not between it and the steps"
+        focus = app_script.split("function boardFocus(", 1)[1].split("function boardReveal(", 1)[0]
+        assert "boardReveal(" in focus
+        reveal = app_script.split("function boardReveal(", 1)[1].split("\nfunction ", 1)[0]
+        assert "scrollBy(" in reveal and "scrollTop" in reveal and ".is-lit" in reveal and "card-wires" in reveal
+        css = browser.get("/assets/canvas.css").text
+        board = css.split(".card-board{", 1)[1].split("}", 1)[0]
+        assert "position:sticky" in board and "max-height:calc(100vh - 72px - 52px)" in board
+        card = css.split('.workspace-item[data-kind="breadboard"]{', 1)[1].split("}", 1)[0]
+        assert "overflow:visible" in card
+
+
 def test_the_breadboard_drawing_has_no_minimum_width(tmp_path, monkeypatch):
     """min-width:560px stopped the second press of minus from shrinking the drawing."""
     with _browser(tmp_path, monkeypatch) as browser:
