@@ -528,3 +528,17 @@ def test_app_js_fit_sets_the_width_and_leaves_the_card_where_it_is(tmp_path, mon
         assert "item.y" not in fit and "style.top" not in fit, "Fit moves the card up the desk"
         assert "item.x=Math.max(0,Math.min(item.x,canvas.clientWidth-item.w))" in fit, "a fitted card stays inside the canvas"
         assert "settleCanvas()" in size, "a wider card must move what it now covers out of the way"
+
+
+def test_app_js_wraps_a_card_that_no_longer_fits_instead_of_sliding_it_over_its_neighbour(tmp_path, monkeypatch):
+    """Issue #129: narrowing the window clamped x, so the right-hand card of a row slid over the left-hand one."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        render = _app_function(app_script, "function renderCanvas()")
+        assert "Math.min(item.x,canvas.clientWidth-item.w)" not in render, "clamping x slides a card over its neighbour"
+        assert "if(item.x+item.w>width)item.x=" in render, "a card past the right edge starts a new row at the left"
+        assert "settleCanvas()" in render, "the wrapped card must then move below whatever it lands on"
+        assert "if(width){" in render, "a desk hidden behind another tab has no width to fit cards to"
+        show = _app_function(app_script, "function show(view)")
+        assert "if(view==='dashboard')renderCanvas()" in show, \
+            "a window resized while another tab was showing must be laid out when the desk comes back"
