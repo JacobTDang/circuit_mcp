@@ -6,6 +6,7 @@ import json
 import mimetypes
 import os
 import re
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -13,16 +14,18 @@ from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pypdf import PdfReader
+from starlette.datastructures import Headers
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import paths, screen_recording, solution_sheet
 from .ocr_client import OCR_WORKER
 from .ocr_install import OCR_INSTALLER, OCRInstallError
-from .storage import CommandCenterDB, StorageError
+from .storage import CommandCenterDB, NotADeskCardError, StorageError
 from .capture import CaptureError, capture_workspace as _capture_workspace
 from .workspace import configure_display as _configure_display
 from .ipad_capture import IPAD_CAPTURE, IPadCaptureError
@@ -81,12 +84,62 @@ async def _lifespan(_: FastAPI):
         SHOWMAN.stop()
 
 
+# The only methods another site may send: a route answering them must change nothing.
+SAFE_METHODS = frozenset({"GET", "HEAD"})
+
+
+def _foreign_write(scope: Scope) -> str | None:
+    """Why a state change must be refused, or None when the desk's own page or a local program sent it.
+
+    A request carrying neither header did not come from a web page: browsers put
+    Origin on every cross-origin request that can change state, and current ones
+    put Sec-Fetch-Site on every request. Without them it is curl, a test, the MCP
+    server or the app's health check, running as the student with the data folder
+    already in reach, so refusing them would protect nothing.
+    """
+    if scope["method"] in SAFE_METHODS:
+        return None
+    port = scope["server"][1]
+    desk = f"http://localhost:{port}"
+    headers = Headers(scope=scope)
+    origin = headers.get("origin")
+    if origin is not None:
+        if origin in (desk, f"http://127.0.0.1:{port}"):
+            return None
+        return (f"Refused: this request came from {origin}, and only the desk's own page "
+                f"at {desk} may change anything here.")
+    site = headers.get("sec-fetch-site")
+    if site is None or site in ("same-origin", "none"):
+        return None
+    return (f"Refused: the browser marked this request {site}, and only the desk's own page "
+            f"at {desk} may change anything here.")
+
+
+class SameOriginWrites:
+    """Refuse every state change that a page on another origin sent.
+
+    The Host check stops DNS rebinding but not this: a form post or a no-cors
+    fetch from any page reaches http://localhost:<port> with that Host and no
+    preflight. Guarding by method rather than by route covers a route nobody
+    remembered to list.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        refusal = _foreign_write(scope) if scope["type"] == "http" else None
+        if refusal is None:
+            await self.app(scope, receive, send)
+            return
+        await JSONResponse({"detail": refusal}, status_code=403)(scope, receive, send)
+
+
 app = FastAPI(title="Circuit Command Center", docs_url=None, redoc_url=None,
               lifespan=_lifespan)
-app.add_middleware(
-    TrustedHostMiddleware,
-    allowed_hosts=["localhost", "127.0.0.1", "localhost:2300", "127.0.0.1:2300"],
-)
+app.add_middleware(SameOriginWrites)
+# Added last, so it runs first. Starlette compares the host without its port.
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"])
 app.mount("/assets", StaticFiles(directory=STATIC), name="assets")
 
 
@@ -230,9 +283,17 @@ def status() -> dict[str, Any]:
 
 
 @app.get("/api/showman/status")
-def showman_status(start: bool = False) -> dict[str, Any]:
-    """Report the local renderer state; optionally start the pinned worker."""
-    return SHOWMAN.start() if start else SHOWMAN.status()
+def showman_status() -> dict[str, Any]:
+    """Report the local renderer state. Starting it is a POST: any page can send a GET."""
+    return SHOWMAN.status()
+
+
+@app.post("/api/showman/start")
+def showman_start() -> dict[str, Any]:
+    state = SHOWMAN.start()
+    if not state.get("ok"):
+        raise HTTPException(503, state.get("error") or state.get("unavailable") or "Showman did not start")
+    return state
 
 
 OFFLINE_AUTHORING = (
@@ -652,10 +713,15 @@ def solutions(tag: str = "") -> Response:
     """One assignment as one page, ready to read, check and hand in."""
     if not tag.strip():
         raise HTTPException(400, "name the assignment tag, for example /solutions?tag=m2-hw1")
+    database = _db()
     try:
-        problems = _db().solution_sheet(tag)
+        problems = database.solution_sheet(tag)
     except StorageError as exc:
         raise HTTPException(400, str(exc)) from exc
+    if not problems:
+        # A mistyped tag has to read as "no such sheet", not as a blank page ready to print.
+        return Response(content=solution_sheet.render_unknown(tag, database.tags()),
+                        status_code=404, media_type="text/html")
     return Response(content=solution_sheet.render(tag, problems), media_type="text/html")
 
 
@@ -676,6 +742,8 @@ def canvas_card_close(card_id: str) -> dict[str, Any]:
     try:
         card = database.get_card(card_id)
         database.delete_card(card_id)
+    except NotADeskCardError as exc:
+        raise HTTPException(409, str(exc)) from exc
     except StorageError as exc:
         raise HTTPException(404, str(exc)) from exc
     _record("canvas_card_close", f"{card['kind']}: {card['title'][:60]}", True,
@@ -751,10 +819,20 @@ def database_integrity() -> dict[str, Any]:
     return {"ok": database["ok"] and files["ok"], "database": database, "files": files}
 
 
+_BACKUP_RUNNING = threading.Lock()
+
+
 @app.post("/api/database/backup")
 def backup_database() -> dict[str, Any]:
-    destination = DATA / "backups" / time.strftime("circuit-mcp-%Y%m%d-%H%M%S.sqlite3")
-    result = _db().backup(destination)
+    # Each backup is a whole copy of the database; a burst of them only fills the disk.
+    if not _BACKUP_RUNNING.acquire(blocking=False):
+        raise HTTPException(409, "A backup is already running. Ask again once it has finished.")
+    try:
+        # Named by the second alone, two backups in one second would share a name.
+        stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        result = _db().backup(DATA / "backups" / f"circuit-mcp-{stamp}.sqlite3")
+    finally:
+        _BACKUP_RUNNING.release()
     _record("backup", Path(result["path"]).name, True, "database", None,
             {"sha256": result["sha256"], "size_bytes": result["size_bytes"]})
     return result
