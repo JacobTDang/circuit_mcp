@@ -56,7 +56,8 @@ JUMPER_ROWS = {"top": "bcdae", "bottom": "ihgjf"}
 PART_ROWS = {"top": "bcda", "bottom": "ihgj"}
 MAX_SPAN = 4   # columns a bent quarter-watt resistor lead reaches
 GROUND_ALIASES = {"0", "gnd", "ground"}
-NET_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+# Names are checked with fullmatch: in re.match, $ also matches before a final newline.
+NET_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 PART_KINDS = {"resistor": 2, "capacitor": 2, "inductor": 2, "led": 2, "pot": 3}
 SOURCE_KINDS = {"dc", "sine", "square"}
 MAX_PARTS = 24
@@ -151,10 +152,11 @@ def _entries(content: dict, key: str, what: str) -> list:
 def _node(name: Any, where: str) -> str:
     if not isinstance(name, str) or not name.strip():
         raise BuildError(f"{where}: node name must be text")
-    name = name.strip()
+    # Refused rather than trimmed, as a ref is: the name the student wrote is the
+    # name the board and the simulator use.
     if name.lower() in GROUND_ALIASES:
         return GROUND
-    if not NET_NAME.match(name):
+    if not NET_NAME.fullmatch(name):
         raise BuildError(
             f"{where}: node name {name!r} must start with a letter and continue "
             f"with letters, digits, or underscore")
@@ -170,12 +172,40 @@ def _number(value: Any, where: str) -> float:
 
 
 def _ref(value: Any, where: str, seen: set[str]) -> str:
-    if not isinstance(value, str) or not re.match(r"^[A-Za-z][A-Za-z0-9]*$", value):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", value):
         raise BuildError(f"{where}: ref must be letters and digits, like R1 or U1A")
-    if value in seen:
+    # ngspice folds case: R1 and r1 would be two parts on the board and one
+    # device to the simulator.
+    twin = next((ref for ref in seen if ref.casefold() == value.casefold()), None)
+    if twin == value:
         raise BuildError(f"duplicate ref {value!r}")
+    if twin is not None:
+        raise BuildError(f"refs {twin!r} and {value!r} differ only in case, which the simulator "
+                         f"reads as one name; rename one")
     seen.add(value)
     return value
+
+
+def _one_output_per_node(opamps: list[OpAmpUse], sources: list[Source]) -> None:
+    """Refuse a node that two outputs drive: a source and an op amp output each force its voltage.
+
+    The layout gives every output its own hole on the strip, and the connectivity
+    check passes because both name the same net, so without this the card tells
+    the student to tie the outputs together.
+    """
+    drivers: dict[str, list[str]] = {}
+    for use in opamps:
+        drivers.setdefault(use.out, []).append(f"op amp {use.ref}")
+    for source in sources:
+        drivers.setdefault(source.node, []).append(f"source {source.ref}")
+    for node, names in drivers.items():
+        if len(names) > 1:
+            listed = f"{', '.join(names[:-1])} and {names[-1]}"
+            raise BuildError(
+                f"{listed} {'both' if len(names) == 2 else 'all'} drive node {node!r}: outputs "
+                f"tied together short into each other even at the same setting, and the current can "
+                f"damage a supply, a generator or an op amp; give each output its own node, with a "
+                f"resistor between them if they are meant to combine")
 
 
 def parse_build(content: Any) -> Build:
@@ -260,7 +290,15 @@ def parse_build(content: Any) -> Build:
     if not parts and not opamps:
         raise BuildError("build has nothing to place")
 
-    known = {n for p in parts for n in p.nodes} | {n for o in opamps for n in (o.inp, o.inn, o.out)}
+    wired = [n for p in parts for n in p.nodes] + [n for o in opamps for n in (o.inp, o.inn, o.out)]
+    known = set(wired)
+    spellings: dict[str, str] = {}
+    for net in wired:
+        first = spellings.setdefault(net.casefold(), net)
+        if first != net:
+            # The board would wire these apart while ngspice, folding case, joins them.
+            raise BuildError(f"nodes {first!r} and {net!r} differ only in case, which the simulator "
+                             f"reads as one node; spell it one way")
 
     sources: list[Source] = []
     for entry in _entries(content, "sources", "source"):
@@ -279,12 +317,21 @@ def parse_build(content: Any) -> Build:
         if kind != "dc" and freq <= 0:
             raise BuildError(f"{ref}: freq must be positive")
         sources.append(Source(ref, kind, node, amplitude, freq))
+    _one_output_per_node(opamps, sources)
 
     probes: list[Probe] = []
     for entry in _entries(content, "probes", "probe"):
         label = str(entry.get("label", "")).strip()
         if not label or len(label) > MAX_PROBE_LABEL:
             raise BuildError(f"probe label must be 1 to {MAX_PROBE_LABEL} characters")
+        # A measured reading finds its probe by label, ignoring case, so two
+        # labels that read alike would leave it two places to go.
+        twin = next((probe.label for probe in probes if probe.label.casefold() == label.casefold()), None)
+        if twin == label:
+            raise BuildError(f"probe label {label!r} is used twice; give each probe its own label")
+        if twin is not None:
+            raise BuildError(f"probe labels {twin!r} and {label!r} differ only in case, and a reading "
+                             f"is matched to its probe ignoring case; give each probe its own label")
         node = _node(entry.get("node"), f"probe {label}")
         if node not in known:
             raise BuildError(f"probe {label!r}: node {node!r} is not in the build")

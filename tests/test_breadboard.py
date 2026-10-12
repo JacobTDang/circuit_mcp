@@ -59,6 +59,40 @@ def test_duplicate_refs_are_refused():
         parse_build(spec(parts=MINIMAL["parts"] + [{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": ["a", "b"]}]))
 
 
+CASE_TWINS = {
+    "supply": {"vplus": 5, "vminus": 0},
+    "parts": [{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": ["a", "gnd"]},
+              {"ref": "r1", "kind": "resistor", "value": "2k", "nodes": ["b", "gnd"]}],
+    "sources": [{"ref": "VA", "kind": "dc", "node": "a", "volts": 1}, {"ref": "VB", "kind": "dc", "node": "b", "volts": 2}],
+    "probes": [{"label": "a", "node": "a"}, {"label": "b", "node": "b"}],
+}
+
+
+def test_refs_that_differ_only_in_case_are_refused_naming_both():
+    """ngspice folds case, so it read RR1 and Rr1 as one device and refused the second."""
+    with pytest.raises(BuildError, match="refs 'R1' and 'r1' differ only in case"):
+        parse_build(CASE_TWINS)
+
+
+@pytest.mark.parametrize("field,entry,twin", [
+    ("parts", {"ref": "u1", "kind": "resistor", "value": "1k", "nodes": ["out", "vi"]}, "U1"),
+    ("opamps", {"ref": "r2", "chip": "U1", "section": "B", "inp": "vi", "inn": "fb", "out": "o2"}, "R2"),
+    ("sources", {"ref": "u1a", "kind": "dc", "node": "fb", "volts": 1}, "U1A"),
+    ("sources", {"ref": "vs", "kind": "dc", "node": "fb", "volts": 1}, "VS"),
+])
+def test_refs_are_told_apart_ignoring_case_across_every_kind(field, entry, twin):
+    with pytest.raises(BuildError, match=f"refs '{twin}' and '{entry['ref']}' differ only in case"):
+        parse_build(spec(**{field: MINIMAL[field] + [entry]}))
+
+
+def test_nodes_that_differ_only_in_case_are_refused_naming_both():
+    """The board wired Out and out apart while ngspice read them as one node."""
+    parts = [{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": ["fb", "0"]},
+             {"ref": "R2", "kind": "resistor", "value": "15k", "nodes": ["Out", "fb"]}]
+    with pytest.raises(BuildError, match="nodes 'Out' and 'out' differ only in case"):
+        parse_build(spec(parts=parts))
+
+
 def test_a_pot_needs_three_nodes_and_an_led_two():
     with pytest.raises(BuildError, match="pot needs exactly 3"):
         parse_build(spec(parts=[{"ref": "R3", "kind": "pot", "value": "10k", "nodes": ["a", "b"]}]))
@@ -96,6 +130,57 @@ def test_a_source_must_drive_a_node_that_exists_and_is_not_ground():
         parse_build(spec(sources=[{"ref": "VS", "kind": "dc", "node": "0", "volts": 1}]))
 
 
+TIED_SOURCES = {
+    "supply": {"vplus": 5, "vminus": 0},
+    "parts": [{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": ["drive", "gnd"]}],
+    "probes": [{"label": "drive", "node": "drive", "role": "output"}],
+}
+DC1 = {"kind": "dc", "volts": 1}
+SINE = {"kind": "sine", "vrms": 1, "freq": 1000}
+
+
+def tied(first, second):
+    return {**TIED_SOURCES, "sources": [{"ref": "V1", "node": "drive", **first},
+                                        {"ref": "V2", "node": "drive", **second}]}
+
+
+@pytest.mark.parametrize("first,second", [
+    (DC1, {"kind": "dc", "volts": 2}),
+    (DC1, DC1),                         # the same setting still fights: no two supplies are exactly equal
+    (DC1, SINE),
+    (SINE, {"kind": "square", "vpp": 2, "freq": 500}),
+    (SINE, SINE),
+])
+def test_two_sources_on_one_node_are_refused_naming_both_the_node_and_the_short(first, second):
+    with pytest.raises(BuildError) as refused:
+        parse_build(tied(first, second))
+    message = str(refused.value)
+    assert "source V1 and source V2 both drive node 'drive'" in message
+    assert "short" in message and "damage" in message
+
+
+def test_a_source_on_an_op_amp_output_is_refused_as_tied_outputs():
+    generator = {"ref": "VX", "kind": "dc", "node": "out", "volts": 1}
+    with pytest.raises(BuildError, match="op amp U1A and source VX both drive node 'out'"):
+        parse_build(spec(sources=MINIMAL["sources"] + [generator]))
+
+
+def test_three_outputs_on_one_node_are_all_named():
+    build = tied(DC1, SINE)
+    build["sources"].append({"ref": "V3", "kind": "dc", "node": "drive", "volts": 3})
+    with pytest.raises(BuildError, match="source V1, source V2 and source V3 all drive node 'drive'"):
+        parse_build(build)
+
+
+def test_two_op_amp_outputs_on_one_node_are_refused():
+    second = {"ref": "U1B", "chip": "U1", "section": "B", "inp": "vi", "inn": "fb", "out": "out"}
+    with pytest.raises(BuildError) as refused:
+        parse_build(spec(opamps=MINIMAL["opamps"] + [second]))
+    message = str(refused.value)
+    assert "op amp U1A and op amp U1B both drive node 'out'" in message
+    assert "short" in message
+
+
 def test_a_probe_must_name_a_node_in_the_build():
     with pytest.raises(BuildError, match="not in the build"):
         parse_build(spec(probes=[{"label": "x", "node": "nowhere"}]))
@@ -103,9 +188,37 @@ def test_a_probe_must_name_a_node_in_the_build():
         parse_build(spec(probes=[{"label": "x", "node": "out", "role": "sideways"}]))
 
 
+def test_two_probes_cannot_share_a_label():
+    probes = [{"label": "CH1", "node": "vi", "role": "input"}, {"label": "CH1", "node": "out", "role": "output"}]
+    with pytest.raises(BuildError, match="probe label 'CH1' is used twice"):
+        parse_build(spec(probes=probes))
+
+
+def test_probe_labels_that_differ_only_in_case_are_refused_naming_both():
+    """A measured reading finds its probe ignoring case, so these two would be one probe."""
+    probes = [{"label": "CH1", "node": "vi"}, {"label": "ch1", "node": "out"}]
+    with pytest.raises(BuildError, match="probe labels 'CH1' and 'ch1' differ only in case"):
+        parse_build(spec(probes=probes))
+
+
 def test_rail_names_are_reserved():
     with pytest.raises(BuildError, match="reserved for the supply rails"):
         parse_build(spec(parts=[{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": ["vplus", "out"]}]))
+
+
+@pytest.mark.parametrize("ref", ["R1\n", "R1 ", " R1"])
+def test_a_ref_with_whitespace_around_it_is_refused(ref):
+    """R1 with a trailing newline passed the old pattern and split its line in the simulator's deck."""
+    parts = [{"ref": ref, "kind": "resistor", "value": "1k", "nodes": ["fb", "0"]}, MINIMAL["parts"][1]]
+    with pytest.raises(BuildError, match="ref must be letters and digits"):
+        parse_build(spec(parts=parts))
+
+
+@pytest.mark.parametrize("node", ["fb\n", "fb ", " fb", "gnd\n"])
+def test_a_node_with_whitespace_around_it_is_refused(node):
+    parts = [{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": [node, "0"]}, MINIMAL["parts"][1]]
+    with pytest.raises(BuildError, match="must start with a letter and continue"):
+        parse_build(spec(parts=parts))
 
 
 def test_pot_positions_default_to_the_middle_and_are_bounded():
@@ -690,7 +803,7 @@ CROWDED = [
      "probes": [{"label": "CH1", "node": "n4", "role": "output"}]},
     {"supply": {"vplus": 5, "vminus": -15}, "chips": [{"ref": "U1", "part": "LMC660"}],
      "opamps": [{"ref": "U1B", "chip": "U1", "section": "b", "inp": "n2", "inn": "n0", "out": "n3"},
-                {"ref": "U1A", "chip": "U1", "section": "a", "inp": "gnd", "inn": "n4", "out": "n3"}],
+                {"ref": "U1A", "chip": "U1", "section": "a", "inp": "gnd", "inn": "n4", "out": "n5"}],
      "parts": [{"ref": "X0", "kind": "resistor", "nodes": ["n3", "gnd"], "value": "1k"},
                {"ref": "X1", "kind": "resistor", "nodes": ["gnd", "n3"], "value": "1k"},
                {"ref": "X2", "kind": "resistor", "nodes": ["gnd", "n2"], "value": "1k"},

@@ -80,9 +80,10 @@ def test_workspace_canvas_grows_to_contain_its_cards_instead_of_clipping(tmp_pat
         app_script = browser.get("/assets/app.js").text
         assert "canvas.style.height=''" in app_script
         # The height is measured from the rendered cards, in one place, so it can
-        # be measured again after hydration replaces a placeholder body.
+        # be measured again after hydration replaces a placeholder body. A card
+        # sliding down still reports its old offsetTop, so the top is the layout's.
         fit = app_script.split("function fitCanvasHeight()", 1)[1].split("\n", 1)[0]
-        assert "el.offsetTop+el.offsetHeight" in fit
+        assert "cardBoxes()" in fit and "b.y+b.h" in fit
         assert "canvas.style.height=`${bottom+40}px`" in fit
 
 
@@ -459,6 +460,53 @@ def test_the_sheet_needs_an_assignment_tag(tmp_path, monkeypatch):
         assert browser.get("/solutions").status_code == 400
 
 
+def test_the_sheet_refuses_a_tag_no_problem_could_carry(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as browser:
+        for impossible in ("hw3'\"<", "✓", "a\x00b", "-hw3", "x" * 51):
+            refused = browser.get("/solutions", params={"tag": impossible})
+            assert refused.status_code == 400, impossible
+            detail = refused.json()["detail"]
+            assert "letters, digits" in detail and detail.endswith("."), detail
+
+
+def test_a_tag_nobody_carries_says_so_lists_the_real_ones_and_offers_no_export(tmp_path, monkeypatch):
+    """A typo must read as 'no such tag', not as a blank page ready to hand in."""
+    with client(tmp_path, monkeypatch) as browser:
+        database = web._db()
+        for tag in ("hw3", "m2-hw1"):
+            problem = database.create_problem(f"{tag} P1", "dividers", "find V_out", source_page=1)
+            database.tag_problem(problem["id"], tag)
+
+        page = browser.get("/solutions?tag=nothing-here")
+
+    assert page.status_code == 404
+    assert "No problems are tagged" in page.text and "nothing-here" in page.text
+    assert 'href="/solutions?tag=hw3"' in page.text and 'href="/solutions?tag=m2-hw1"' in page.text
+    assert "Export PDF" not in page.text and "window.print" not in page.text
+    assert "<article" not in page.text
+
+
+def test_the_empty_sheet_says_when_no_problem_carries_any_tag(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as browser:
+        page = browser.get("/solutions?tag=hw3")
+
+    assert page.status_code == 404
+    assert "No problems are tagged" in page.text and "No problem carries a tag yet" in page.text
+    assert "Export PDF" not in page.text
+
+
+def test_the_sheet_tag_ignores_case(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as browser:
+        database = web._db()
+        problem = database.create_problem("Problem 1", "dividers", "find V_out", source_page=1)
+        database.tag_problem(problem["id"], "hw3")
+
+        page = browser.get("/solutions?tag=HW3")
+
+    assert page.status_code == 200
+    assert "<h2>Problem 1</h2>" in page.text and "Export PDF" in page.text
+
+
 def test_the_sheet_escapes_every_text_field(tmp_path, monkeypatch):
     with client(tmp_path, monkeypatch) as browser:
         database = web._db()
@@ -481,6 +529,26 @@ def test_the_sheet_stylesheet_prints_on_us_letter(tmp_path, monkeypatch):
     assert "header.sheet button { display: none; }" in css, "the export button must not print"
     assert "background: #fff" in css, "a dark ground prints as a black rectangle"
     assert "break-inside: avoid" in css, "a problem split across pages is hard to grade"
+
+
+def _rule(css: str, selector: str) -> str:
+    start = css.index(selector + " {")
+    return css[start:css.index("}", start)]
+
+
+def test_problem_numbers_print_in_dark_ink_with_backgrounds_off(tmp_path, monkeypatch):
+    """Print leaves out backgrounds by default, so white on a dark pill prints as faint grey."""
+    with client(tmp_path, monkeypatch) as browser:
+        css = browser.get("/assets/solution.css").text
+
+    screen, printed = css.split("@media print", 1)
+    on_screen = _rule(screen, ".problem .number")
+    assert "color: #fff" in on_screen and "background: var(--ink)" in on_screen, "the screen badge stays"
+    assert ".problem .number {" in printed, "the print stylesheet leaves the number white on no fill"
+    on_paper = _rule(printed, ".problem .number")
+    assert "color: var(--ink)" in on_paper
+    assert "background: none" in on_paper
+    assert "border: 1.5px solid var(--ink)" in on_paper, "the badge outline has to survive without a fill"
 
 
 def test_the_sheet_shows_the_checks_that_stand_behind_an_answer(tmp_path, monkeypatch):
@@ -528,6 +596,54 @@ def test_a_solution_whose_attempt_has_no_checks_says_so(tmp_path, monkeypatch):
         page = browser.get("/solutions?tag=m2-silent").text
 
     assert "no checks recorded against this attempt" in page
+
+
+def _article(page: str, title: str) -> str:
+    start = page.index(f"<h2>{title}</h2>")
+    return page[start:page.index("</article>", start)]
+
+
+def test_the_sheet_never_shows_another_problems_checks_as_evidence(tmp_path, monkeypatch):
+    """A stored card citing a foreign attempt must not hand in checks its problem never had."""
+    with client(tmp_path, monkeypatch) as browser:
+        database = web._db()
+        mine = database.create_problem("HW1 P1 divider", "dividers", "find V2", source_page=1)
+        other = database.create_problem("HW1 P2 other", "dividers", "find V3", source_page=2)
+        for problem in (mine, other):
+            database.tag_problem(problem["id"], "m2-hw1")
+        own, foreign = (database.create_attempt(p["id"], "student") for p in (mine, other))
+        database.record_tool_call("check_setup", {}, {"ok": False}, 5.0, own["id"])
+        database.record_tool_call("check_setup", {}, {"ok": True}, 5.0, foreign["id"])
+        database.record_tool_call("check_derivation", {}, {"ok": True}, 5.0, foreign["id"])
+        for problem, attempt in ((mine, foreign), (other, foreign)):
+            card = build_card("solution", problem["title"], {
+                "given": [], "steps": [{"expression": "5"}],
+                "answer": {"expression": "5", "unit": "V"}, "attempt_id": attempt["id"]})
+            database.create_card(card["kind"], card["title"], card["payload"], problem["id"])
+
+        page = browser.get("/solutions?tag=m2-hw1").text
+
+    borrowed = _article(page, "HW1 P1 divider")
+    assert ">pass<" not in borrowed and "check_derivation" not in borrowed
+    assert "not one of this problem's attempts" in borrowed
+    assert _article(page, "HW1 P2 other").count(">pass<") == 2
+
+
+def test_the_sheet_says_so_when_a_solution_cites_an_attempt_that_does_not_exist(tmp_path, monkeypatch):
+    """'No checks recorded' would hide that the evidence link itself is broken."""
+    with client(tmp_path, monkeypatch) as browser:
+        database = web._db()
+        problem = database.create_problem("Problem 3", "dividers", "find V_out", source_page=3)
+        database.tag_problem(problem["id"], "hw3")
+        card = build_card("solution", "P3", {
+            "given": [], "steps": [{"expression": "2"}], "answer": {"expression": "2", "unit": "V"},
+            "attempt_id": "0123456789abcdef0123456789abcdef"})
+        database.create_card(card["kind"], card["title"], card["payload"], problem["id"])
+
+        page = browser.get("/solutions?tag=hw3").text
+
+    assert "not one of this problem's attempts" in page
+    assert "no checks recorded against this attempt" not in page
 
 
 def test_healthz_answers_without_touching_the_desk(tmp_path, monkeypatch):

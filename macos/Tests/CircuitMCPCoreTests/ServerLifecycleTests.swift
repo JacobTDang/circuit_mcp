@@ -41,6 +41,8 @@ final class ServerLifecycleTests: XCTestCase {
         private(set) var quitReplies = 0
         /// Work a quit cancelled, which the app writes to the log rather than doing.
         private(set) var abandoned: [String] = []
+        /// Imports that finished after the quit had stopped waiting for them and been answered.
+        private(set) var importsFinishedAfterTheQuit = 0
 
         private let makeController: () -> ServerController
         private var inFlight: [(controller: ServerController, pendingWork: String?, then: () -> Void)] = []
@@ -100,17 +102,24 @@ final class ServerLifecycleTests: XCTestCase {
         }
 
         /// `AppDelegate.importExistingData()`, whose copy runs off the main thread after the stop.
-        func importData() {
+        func importData(progress: Progress = .discreteProgress(totalUnitCount: -1)) {
             stopServer(pendingWork: "the import") { [unowned self] in
-                if let refusal = self.lifecycle.beginImportCopy() { self.refusals.append(refusal) }
+                if let refusal = self.lifecycle.beginImportCopy(progress) { self.refusals.append(refusal) }
             }
         }
 
         func finishImportCopy() {
             switch lifecycle.finishImportCopy() {
             case .resume: startServer()
-            case .quitPending: quitReplies += 1
+            case .quitPending:
+                if lifecycle.claimQuitReply() { quitReplies += 1 } else { importsFinishedAfterTheQuit += 1 }
             }
+        }
+
+        /// The deadline `AppDelegate` sets with `answerQuitAtImportDeadline` when a quit finds an
+        /// import running, passing.
+        func importQuitDeadlinePasses() {
+            if lifecycle.claimQuitReply() { quitReplies += 1 }
         }
 
         /// `AppDelegate.applicationShouldTerminate(_:)`.
@@ -218,19 +227,114 @@ final class ServerLifecycleTests: XCTestCase {
     }
 
     /// Command-Q while the import's copy is running. The copy is off the main thread now, so the
-    /// quit can reach the delegate in the middle of it; it must wait rather than exit mid-copy.
-    func testQuittingDuringTheImportCopyWaitsForItAndStartsNoServer() {
+    /// quit can reach the delegate in the middle of it; it cancels the copy and waits for it to
+    /// stop rather than exiting mid-copy.
+    func testQuittingDuringTheImportCopyCancelsItAndStartsNoServer() {
         let app = self.app()
+        let copy = Progress.discreteProgress(totalUnitCount: -1)
         app.startServer()
-        app.importData()
+        app.importData(progress: copy)
         app.completeOldestStop()
+        XCTAssertFalse(copy.isCancelled)
         guard case .waitForWorkInFlight(.importingData) = app.quit() else {
             return XCTFail("the quit did not wait for the copy that was running")
         }
+        XCTAssertTrue(copy.isCancelled, "Command-Q waited on a copy it could have stopped")
         app.finishImportCopy()
         XCTAssertEqual(app.started.count, 1, "the import restarted the server while the app was quitting")
         XCTAssertNil(app.lifecycle.liveServer)
         XCTAssertEqual(app.quitReplies, 1)
+    }
+
+    /// A cancelled copy stops at the end of the file it is on -- but a file on a volume that has
+    /// stopped answering never ends, and nothing in the process can interrupt that read. The quit
+    /// used to wait for it forever; now the deadline answers it.
+    func testAQuitWaitingOnACopyThatNeverReturnsIsAnsweredAtTheDeadline() {
+        let app = self.app()
+        app.startServer()
+        app.importData()
+        app.completeOldestStop()
+        app.quit()
+        XCTAssertEqual(app.quitReplies, 0, "the quit has to give the copy its chance to stop")
+        app.importQuitDeadlinePasses()
+        XCTAssertEqual(app.quitReplies, 1, "the quit was never answered")
+
+        // The stalled read returns after all, while the app is on its way out.
+        app.finishImportCopy()
+        XCTAssertEqual(app.quitReplies, 1, "the quit was answered twice")
+        XCTAssertEqual(app.importsFinishedAfterTheQuit, 1)
+        XCTAssertEqual(app.started.count, 1, "a server was started by an import that finished during the quit")
+    }
+
+    func testACopyThatStopsInTimeAnswersTheQuitAndTheDeadlineAnswersNothing() {
+        let app = self.app()
+        app.startServer()
+        app.importData()
+        app.completeOldestStop()
+        app.quit()
+        app.finishImportCopy()
+        XCTAssertEqual(app.quitReplies, 1)
+        app.importQuitDeadlinePasses()
+        XCTAssertEqual(app.quitReplies, 1, "the quit was answered twice")
+    }
+
+    /// The app tells the student this number while it waits, and the docs repeat it.
+    func testAQuitWaitsAtMostTenSecondsForACancelledImport() {
+        XCTAssertEqual(ServerLifecycle().importQuitDeadline, 10)
+    }
+
+    /// The same quit through the real pieces: a real `DataImporter` on a background queue whose
+    /// copy blocks the way a read from a stalled volume does, and the deadline the app sets on the
+    /// main queue. The quit is answered within the deadline while the copy is still stuck, and
+    /// when the copy does return, the import removes its partial copy and touches nothing else.
+    func testAQuitDuringABlockedCopyIsAnsweredWithinTheDeadline() throws {
+        let root = logDirectory!
+        let source = root.appendingPathComponent("repo", isDirectory: true)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try Data("repo-db".utf8).write(to: source.appendingPathComponent("circuit_mcp.sqlite3"))
+        let destination = root.appendingPathComponent("command_center", isDirectory: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        try Data("app-db".utf8).write(to: destination.appendingPathComponent("circuit_mcp.sqlite3"))
+
+        let copyStarted = DispatchSemaphore(value: 0)
+        let volumeAnswers = DispatchSemaphore(value: 0)
+        let importer = DataImporter(copy: { _, staging, _ in
+            try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+            try Data("half a worksheet".utf8).write(to: staging.appendingPathComponent("half.bin"))
+            copyStarted.signal()
+            volumeAnswers.wait()
+        })
+        let lifecycle = ServerLifecycle(importQuitDeadline: 0.3)
+        let progress = Progress.discreteProgress(totalUnitCount: -1)
+        XCTAssertNil(lifecycle.beginImportCopy(progress))
+        let importReturned = expectation(description: "the import returns once the volume answers")
+        nonisolated(unsafe) var outcome: Error?
+        DispatchQueue.global().async {
+            do {
+                _ = try importer.importCommandCenter(from: source, to: destination, progress: progress)
+            } catch {
+                outcome = error
+            }
+            importReturned.fulfill()
+        }
+        XCTAssertEqual(copyStarted.wait(timeout: .now() + 5), .success)
+
+        guard case .waitForWorkInFlight(.importingData) = lifecycle.beginQuit() else {
+            volumeAnswers.signal()
+            return XCTFail("the quit did not wait for the copy that was running")
+        }
+        let quitAnswered = expectation(description: "the termination reply is sent")
+        let askedToQuit = Date()
+        lifecycle.answerQuitAtImportDeadline { quitAnswered.fulfill() }
+        wait(for: [quitAnswered], timeout: 5)
+        XCTAssertLessThan(Date().timeIntervalSince(askedToQuit), 2, "the quit waited past its deadline")
+
+        volumeAnswers.signal()
+        wait(for: [importReturned], timeout: 5)
+        XCTAssertTrue(outcome is CancellationError, "\(String(describing: outcome))")
+        XCTAssertFalse(lifecycle.claimQuitReply(), "the late import must not answer the quit a second time")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: DataImporter.stagingFolder(for: destination).path))
+        XCTAssertEqual(try String(contentsOf: destination.appendingPathComponent("circuit_mcp.sqlite3")), "app-db")
     }
 
     func testNoServerMayBeStartedOnceTheQuitHasBegun() {
