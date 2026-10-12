@@ -534,6 +534,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func writeMCPCommandToPasteboard(locations: AppLocations) throws {
         let command = try MCPCommand.terminalCommand(appBundle: Bundle.main.bundleURL,
                                                      locations: locations)
+        try writeCommandToPasteboard(command)
+    }
+
+    private func writeCommandToPasteboard(_ command: String) throws {
         NSPasteboard.general.clearContents()
         guard NSPasteboard.general.setString(command, forType: .string) else {
             throw MCPCommandCopyError.pasteboardRejectedCommand
@@ -546,9 +550,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// already offers is copied instead of pretending registration happened.
     @objc private func registerWithClaudeCode() {
         guard let locations = requireLocations() else { return }
-        guard let claude = MCPCommand.findClaude() else {
+        let preparation = ClaudeRegistrationPlan.prepare(
+            claudeExecutable: MCPCommand.findClaude(),
+            command: { claude in
+                try MCPCommand.terminalCommand(appBundle: Bundle.main.bundleURL,
+                                               locations: locations,
+                                               claudeExecutable: claude)
+            },
+            arguments: {
+                try MCPCommand.registrationArguments(appBundle: Bundle.main.bundleURL,
+                                                     locations: locations)
+            })
+        let claude: URL
+        let command: String
+        let arguments: [String]
+        switch preparation {
+        case .copyCommand(let fallback):
             do {
-                try writeMCPCommandToPasteboard(locations: locations)
+                try writeCommandToPasteboard(fallback)
                 presentAlert("Claude Code was not found.",
                              "The Terminal command was copied instead. Paste it into Terminal after installing Claude Code; it registers \(Self.displayName) for every folder (user scope).")
             } catch {
@@ -556,23 +575,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                              "\(error)")
             }
             return
-        }
-
-        let command: String
-        let arguments: [String]
-        do {
-            command = try MCPCommand.terminalCommand(appBundle: Bundle.main.bundleURL,
-                                                     locations: locations,
-                                                     claudeExecutable: claude)
-            arguments = try MCPCommand.registrationArguments(appBundle: Bundle.main.bundleURL,
-                                                              locations: locations)
-        } catch MCPCommandError.translocated {
-            presentAlert("Move \(Self.displayName) to Applications first.",
-                         "macOS is running the app from a temporary copy, so its path would change after a restart.")
+        case .failure(let message):
+            presentAlert(message.title, message.detail)
             return
-        } catch {
-            presentAlert("The Claude Code command could not be built.", "\(error)")
-            return
+        case .run(let executable, let rendered, let rawArguments):
+            claude = executable
+            command = rendered
+            arguments = rawArguments
         }
 
         let confirm = NSAlert()
