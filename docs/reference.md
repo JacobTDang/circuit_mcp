@@ -331,10 +331,19 @@ That produces `dist/Circuit MCP.noindex/Circuit MCP.app` and `dist/CircuitMCP-<v
 
 - **Data:** `~/Library/Application Support/CircuitMCP/`. To bring over a
   checkout's `.local/command_center`, use **Import Existing Data…**. Stop
-  `run_ui.py` first. The app's current data is moved to a backup folder, not
-  deleted.
-- **Logs:** `~/Library/Logs/CircuitMCP/`, with the last five launches kept. If the
-  server can't start, the app shows the end of the log.
+  `run_ui.py` first. The folder is copied beside the app's data, which stays
+  where it is until the copy is complete and is then kept as
+  `command_center.backup-<time>`. One backup is kept: the next successful
+  import deletes it, and the confirmation names it first. A
+  `command_center.before-import-<time>` folder is data an import could not put
+  back and is never deleted automatically. The import shows its progress and
+  can be cancelled; quitting during it cancels it too, and the app quits within
+  10 seconds even if the copy has stalled. Either way your data is left as it
+  was.
+- **Logs:** `~/Library/Logs/CircuitMCP/`, with the last five launches kept. One
+  launch's log is at most 10 MB: past that it keeps its newest 5 MB, under a line
+  saying earlier output was dropped. If the server can't start, the app shows the
+  end of the log.
 - **OpenRouter key and model:** stored in the macOS Keychain. Set them with
   **Settings…**, and use a free model.
 - **Claude Code:** move the app to Applications, choose **Copy MCP Command**,
