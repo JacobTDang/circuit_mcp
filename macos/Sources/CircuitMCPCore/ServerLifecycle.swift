@@ -23,7 +23,9 @@ public final class ServerLifecycle {
     /// Work that has to finish before a server may start or the app may quit.
     public enum Work {
         case stoppingServer(ServerController)
-        case importingData
+        /// The copy counts into this progress, and stops at the end of the file it is on once the
+        /// progress is cancelled.
+        case importingData(Progress)
 
         /// Said to the user when it is what stands in the way.
         public var inProgress: String {
@@ -61,8 +63,21 @@ public final class ServerLifecycle {
     public private(set) var liveServer: ServerController?
     public private(set) var workInFlight: Work?
     public private(set) var isQuitting = false
+    /// Set by the first of a quit's answers, so that no other one answers it again.
+    private var quitAnswered = false
 
-    public init() {}
+    /// How long a quit waits for a cancelled import to stop before the app quits anyway.
+    ///
+    /// A cancelled copy stops at the end of the file it is on, which is quick -- unless that file is
+    /// on a volume that has stopped answering, and a read the filesystem never returns cannot be
+    /// interrupted from inside the process. The quit used to wait for it forever. Quitting without
+    /// it is safe because the data folder is not touched until a copy is complete, and the partial
+    /// copy left behind is removed by the next import.
+    public let importQuitDeadline: TimeInterval
+
+    public init(importQuitDeadline: TimeInterval = 10) {
+        self.importQuitDeadline = importQuitDeadline
+    }
 
     /// True while the menu commands that would stop or replace the server have to be closed.
     /// Refusing them after the fact still leaves the user having chosen a folder for nothing.
@@ -109,9 +124,9 @@ public final class ServerLifecycle {
     /// can arrive in the middle of it. It counts as work in flight for the same reason a stop
     /// does: nothing may start a server on the folder it is writing, and a quit has to wait.
     @discardableResult
-    public func beginImportCopy() -> String? {
+    public func beginImportCopy(_ progress: Progress) -> String? {
         if let workInFlight { return workInFlight.inProgress }
-        workInFlight = .importingData
+        workInFlight = .importingData(progress)
         return nil
     }
 
@@ -120,12 +135,37 @@ public final class ServerLifecycle {
         return isQuitting ? .quitPending : .resume
     }
 
-    /// Once this is called nothing starts a server again. Work already in flight keeps running
-    /// and answers the quit when it finishes, so the app never exits over a live server.
+    /// Once this is called nothing starts a server again. Work already in flight answers the quit
+    /// when it finishes, so the app never exits over a live server. An import is cancelled first:
+    /// the student asked to quit, not to wait for a copy, and a cancelled import leaves their data
+    /// as it was. The caller then sets the deadline with `answerQuitAtImportDeadline`.
     public func beginQuit() -> QuitDecision {
         isQuitting = true
-        if let workInFlight { return .waitForWorkInFlight(workInFlight) }
+        if let workInFlight {
+            if case .importingData(let copy) = workInFlight { copy.cancel() }
+            return .waitForWorkInFlight(workInFlight)
+        }
         guard let live = liveServer else { return .terminateNow }
         return .stopTheServer(live)
+    }
+
+    /// True for the first of a quit's answers only: `applicationShouldTerminate` is answered once,
+    /// and with a deadline running the import that finishes and the deadline that passes can both
+    /// try. Whichever is second does nothing.
+    public func claimQuitReply() -> Bool {
+        guard isQuitting, !quitAnswered else { return false }
+        quitAnswered = true
+        return true
+    }
+
+    /// Answers the quit with `answer` once `importQuitDeadline` has passed, unless the import has
+    /// answered it first.
+    public func answerQuitAtImportDeadline(_ answer: @escaping @MainActor () -> Void) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + importQuitDeadline) {
+            MainActor.assumeIsolated {
+                guard self.claimQuitReply() else { return }
+                answer()
+            }
+        }
     }
 }

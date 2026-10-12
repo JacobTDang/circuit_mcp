@@ -62,8 +62,10 @@ keeps Metal initialization out of every process that later calls `fork()`.
 Open [http://localhost:2300](http://localhost:2300). It binds only to
 `127.0.0.1`, stores uploaded homework and lecture material under the ignored
 `.local/command_center/` directory, accepts PDF/PNG/JPEG/text/Markdown/CSV up
-to 50 MB, and never sends course files to a cloud service. The UI provides
-an initially blank spatial desk. Click empty space to manually spawn an iPad
+to 50 MB, and never sends course files to a cloud service. A request that changes
+anything is refused with 403 when a browser says it came from another origin;
+the desk's own page and local programs such as curl, which send no `Origin`,
+are served. The UI provides an initially blank spatial desk. Click empty space to manually spawn an iPad
 screen, course files, problem board, circuit bench, or activity panel. Panels
 can be dragged, closed, and retain their layout in browser-local storage. The
 underlying pages still provide search, previews, local formula OCR, attempt
@@ -221,9 +223,16 @@ fixtures for both.
 One assignment is one page: `GET /solutions?tag=m2-hw1` renders every problem
 carrying that tag in page order, each with its prompt, the given values as
 chips, the drawn schematic, the numbered steps, an answer box with its unit,
-and a line saying which recorded checks stand behind it. A problem with no
-solution card still appears, saying so -- a sheet that quietly omits unfinished
-work hides the one thing worth seeing.
+and a line saying which recorded checks stand behind it. Those checks come only
+from the cited attempt, and only when it is an attempt at that same problem:
+`canvas_card_add` refuses a solution citing another problem's attempt or one
+that does not exist (`wrong_attempt`). A problem with no solution card still
+appears, saying so -- a sheet that quietly omits unfinished work hides the one
+thing worth seeing. Clearing the desk never reaches a solution: the board and
+`canvas_card_list` do not show one, and `canvas_card_remove` and the board's
+close route refuse one. A tag no problem carries gets a page saying so, with the
+tags that are in use and no export button; a tag no problem could ever carry is
+refused with a 400.
 
 The page is rendered on the server, so what is handed in is what the tests
 assert. Export is the browser's own print: the stylesheet sets US Letter,
@@ -324,10 +333,19 @@ That produces `dist/Circuit MCP.noindex/Circuit MCP.app` and `dist/CircuitMCP-<v
 
 - **Data:** `~/Library/Application Support/CircuitMCP/`. To bring over a
   checkout's `.local/command_center`, use **Import Existing Data…**. Stop
-  `run_ui.py` first. The app's current data is moved to a backup folder, not
-  deleted.
-- **Logs:** `~/Library/Logs/CircuitMCP/`, with the last five launches kept. If the
-  server can't start, the app shows the end of the log.
+  `run_ui.py` first. The folder is copied beside the app's data, which stays
+  where it is until the copy is complete and is then kept as
+  `command_center.backup-<time>`. One backup is kept: the next successful
+  import deletes it, and the confirmation names it first. A
+  `command_center.before-import-<time>` folder is data an import could not put
+  back and is never deleted automatically. The import shows its progress and
+  can be cancelled; quitting during it cancels it too, and the app quits within
+  10 seconds even if the copy has stalled. Either way your data is left as it
+  was.
+- **Logs:** `~/Library/Logs/CircuitMCP/`, with the last five launches kept. One
+  launch's log is at most 10 MB: past that it keeps its newest 5 MB, under a line
+  saying earlier output was dropped. If the server can't start, the app shows the
+  end of the log.
 - **OpenRouter key and model:** stored in the macOS Keychain. Set them with
   **Settings…**, and use a free model.
 - **Claude Code:** move the app to Applications, choose **Copy MCP Command**,
