@@ -380,7 +380,9 @@ def test_app_js_measures_the_canvas_after_hydration(tmp_path, monkeypatch):
         app_script = browser.get("/assets/app.js").text
         poll = app_script.split("async function pollCanvasCards()", 1)[1].split("pollCanvasCards();", 1)[0]
         hydration = poll.split("hydrated.forEach", 1)[1]
-        assert "fitCanvasHeight()" in hydration, "the canvas must be re-measured once the real bodies are in"
+        assert "renderCanvas()" in hydration, "the canvas must be re-measured once the real bodies are in"
+        render = app_script.split("function renderCanvas()", 1)[1].split("\n", 1)[0]
+        assert "fitCanvasHeight()" in render
 
 
 def test_app_js_states_the_output_swing_as_approximate(tmp_path, monkeypatch):
@@ -453,3 +455,65 @@ def test_app_js_opens_the_solutions_sheet_for_a_tag(tmp_path, monkeypatch):
         app_script = browser.get("/assets/app.js").text
         assert "/solutions?tag=" in app_script
         assert "encodeURIComponent(tag)" in app_script, "a tag must not be pasted into the URL raw"
+
+
+# --- where cards land on the desk ---------------------------------------------
+
+def _app_function(app_script: str, signature: str) -> str:
+    """One app.js function, which the file keeps on a single line."""
+    return app_script.split(signature, 1)[1].split("\n", 1)[0]
+
+
+def test_app_js_places_each_new_card_by_the_drawn_height_of_the_ones_before(tmp_path, monkeypatch):
+    """Issue #116: cards in one poll were spaced by a guessed 320px, so a 1,700px board was covered from row d."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        free = _app_function(app_script, "function freeSpot(")
+        assert "320" not in free, "freeSpot guesses the height of a card it has not drawn"
+        assert "cardBoxes()" in free, "freeSpot must measure the cards as they are drawn"
+        place = _app_function(app_script, "function placeCard(")
+        assert place.index("freeSpot(") < place.index("canvasItems.push(") < place.index("renderCanvas()"), \
+            "each new card must be drawn before the next one's spot is chosen"
+        poll = _app_function(app_script, "async function pollCanvasCards()")
+        assert "placeCard(card)" in poll
+        assert poll.index("hydrated.forEach") < poll.index("placeCard(card)"), \
+            "a saved card still showing 'loading card…' is measured at its placeholder height"
+
+
+def test_app_js_moves_a_covered_card_down_instead_of_leaving_it_buried(tmp_path, monkeypatch):
+    """A card clips its body, so a covered part cannot be scrolled into view; saved layouts from before #116 overlap."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        settle = _app_function(app_script, "function settleCanvas()")
+        assert "cardBoxes()" in settle
+        assert "box.y=" in settle and ".x=" not in settle, "a covered card moves straight down, never across"
+        assert "saveCanvas()" in settle, "the pulled-apart layout must be what a reload finds"
+        render = _app_function(app_script, "function renderCanvas()")
+        assert "settleCanvas()" in render, "every render, including the first after a reload, must leave no overlap"
+        drop = _app_function(app_script, "function bindDrags()").split("head.onpointerup=", 1)[1]
+        assert "settleCanvas()" in drop, "a card dropped on another must not stay on it until the next reload"
+
+
+def test_app_js_measures_a_card_where_it_will_end_up(tmp_path, monkeypatch):
+    """A card mid-slide reports its old offsetTop, and mid-resize its old height."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        boxes = _app_function(app_script, "function cardBoxes()")
+        assert "x:item.x,y:item.y" in boxes and "el.offsetWidth" in boxes and "el.offsetHeight" in boxes
+        rule = browser.get("/assets/canvas.css").text.split(".workspace-item{", 1)[1].split("}", 1)[0]
+        transition = rule.split("transition:", 1)[1].split(";", 1)[0]
+        assert "width" not in transition, "an animated width is read at its old value, so its height is wrong"
+
+
+def test_app_js_places_nothing_on_a_desk_it_cannot_measure(tmp_path, monkeypatch):
+    """On another tab the desk is display:none, so every card measures 0x0 and all would land on one spot."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        poll = _app_function(app_script, "async function pollCanvasCards()")
+        assert poll.index("if(!$('#workspaceCanvas').clientWidth)return") < poll.index("placeCard(card)")
+        assert poll.index("if(!$('#workspaceCanvas').clientWidth)return") < poll.index("cardsSignature=signature"), \
+            "a poll that placed nothing must not be stamped as done"
+        observer = _app_function(app_script, "function renderCanvas()").split("new ResizeObserver(", 1)[1]
+        assert "contentRect" not in observer, \
+            "the content box is 2px narrower than the border-box width a card is given, so each reload shrank it"
+        assert "el.offsetWidth" in observer and "if(!w||" in observer, "a hidden card reports width 0"
