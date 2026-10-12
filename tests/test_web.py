@@ -97,6 +97,21 @@ def test_app_js_surfaces_upstream_errors_and_guards_optional_fields(tmp_path, mo
         assert "Number.isFinite(result.fps)" in app_script
 
 
+def test_app_js_shows_a_plain_text_error_as_its_status_and_text(tmp_path, monkeypatch):
+    """Issue #150: every body was parsed as JSON, so a plain-text 500 toasted a parser complaint."""
+    with client(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+    api = app_script.split("async function api(url,options={}){", 1)[1].split("\n", 1)[0]
+    # The body is parsed as JSON only when the server says it is JSON ...
+    assert "content-type" in api
+    assert api.index("content-type") < api.index("response.json()")
+    # ... anything else is reported by its status and the start of its own text ...
+    assert "response.text()" in api
+    assert "HTTP ${response.status}" in api
+    # ... and a JSON error keeps its detail sentence.
+    assert "throw new Error(apiErrorMessage(data))" in api
+
+
 def test_app_js_preserves_typed_briefs_without_a_document_wide_observer(tmp_path, monkeypatch):
     with client(tmp_path, monkeypatch) as browser:
         app_script = browser.get("/assets/app.js").text
