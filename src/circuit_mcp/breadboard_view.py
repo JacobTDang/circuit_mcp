@@ -16,7 +16,8 @@ from html import escape
 from typing import Any
 
 from . import parts as P
-from .breadboard import COLUMNS, GROUND, RAIL_ORDER, TIE_RESISTOR, Layout, parse_build, place, strip_of
+from .breadboard import (COLUMNS, GROUND, RAIL_ORDER, TIE_RESISTOR, Layout, parse_build, place, strip_of,
+                         supply_notes)
 
 Hole = tuple
 Box = tuple    # (x0, y0, x1, y1)
@@ -746,4 +747,4 @@ def layout_payload(content: Any) -> dict[str, Any]:
             "holes": {part["ref"]: [hole_name(hole) for hole in part["ends"]] for part in layout.placed},
             "probes": [{"label": item["label"], "hole": hole_name(item["hole"]), "net": item["net"]}
                        for item in layout.attachments if item["kind"] == "probe"],
-            "nets": nets(layout)}
+            "nets": nets(layout), "notes": supply_notes(layout.build)}

@@ -68,6 +68,12 @@ def test_opamp_subcircuit_clamps_with_named_headroom():
     assert text.strip().endswith(".ends railamp")
 
 
+def test_each_chip_records_its_datasheet_supply_limits():
+    """V+ - V-: LM324 3 V to 32 V, 32 V absolute (TI SLOS066); LMC660 4.75 V to 15.5 V, 16 V absolute (TI SNOSC51D)."""
+    assert (chip("LM324").supply_range, chip("LM324").supply_absolute_max) == ((3.0, 32.0), 32.0)
+    assert (chip("LMC660").supply_range, chip("LMC660").supply_absolute_max) == ((4.75, 15.5), 16.0)
+
+
 def test_each_chip_pins_both_headroom_figures():
     """Only the high side was pinned, so the low side could drift unnoticed."""
     assert chip("LM324").headroom_low == 0.5     # approximate: the datasheet's figure is load-dependent

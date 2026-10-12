@@ -116,7 +116,8 @@ def test_the_same_chip_section_cannot_be_used_twice():
 
 
 def test_two_chips_parse_and_a_third_is_refused_by_the_board_it_would_not_fit():
-    two = parse_build(spec(chips=[{"ref": "U1", "part": "LM324"}, {"ref": "U2", "part": "LMC660"}]))
+    two = parse_build(spec(chips=[{"ref": "U1", "part": "LM324"}, {"ref": "U2", "part": "LMC660"}],
+                           supply={"vplus": 7.5, "vminus": -7.5}))   # MINIMAL's +/-15 V is past the LMC660's 16 V
     assert list(two.chips) == ["U1", "U2"]
     three = [{"ref": f"U{i}", "part": "LM324"} for i in (1, 2, 3)]
     with pytest.raises(BuildError, match="at most 2 chips per build"):
@@ -429,7 +430,7 @@ def test_svg_draws_the_chip_rails_and_probes():
 
 def test_layout_payload_has_what_the_card_renders():
     payload = layout_payload(lab1.EXP4B_BUFFERED)
-    assert set(payload) == {"svg", "wires", "holes", "probes", "nets"}
+    assert set(payload) == {"svg", "wires", "holes", "probes", "nets", "notes"}
     assert all(re.match(r"^([a-j]\d+|(top|bot)[+-] rail \(col \d+\))$", h) for holes in payload["holes"].values() for h in holes)
     assert [p["label"] for p in payload["probes"]] == ["VA", "VB"]
 
@@ -801,7 +802,8 @@ CROWDED = [
                {"ref": "X7", "kind": "resistor", "nodes": ["n4", "n5"], "value": "1k"}],
      "sources": [{"ref": "VS", "kind": "dc", "node": "n1", "volts": 1}],
      "probes": [{"label": "CH1", "node": "n4", "role": "output"}]},
-    {"supply": {"vplus": 5, "vminus": -15}, "chips": [{"ref": "U1", "part": "LMC660"}],
+    # Found at +5/-15 V, 20 V across an LMC660 rated for 16 V; the layout depends only on there being a V- rail.
+    {"supply": {"vplus": 5, "vminus": -10}, "chips": [{"ref": "U1", "part": "LMC660"}],
      "opamps": [{"ref": "U1B", "chip": "U1", "section": "b", "inp": "n2", "inn": "n0", "out": "n3"},
                 {"ref": "U1A", "chip": "U1", "section": "a", "inp": "gnd", "inn": "n4", "out": "n5"}],
      "parts": [{"ref": "X0", "kind": "resistor", "nodes": ["n3", "gnd"], "value": "1k"},
@@ -1191,8 +1193,10 @@ def test_a_net_busier_than_one_strip_is_wired_through_its_strips_with_room():
 
 # --- two chips on one board ------------------------------------------------------
 
+# The issue's build at +/-7.5 V: its own +/-12 V puts 24 V across the LMC660, past the chip's 16 V absolute
+# maximum, and is refused. 15 V is inside both chips' recommended ranges.
 ISSUE_126_CASCADE = {
-    "supply": {"vplus": 12, "vminus": -12},
+    "supply": {"vplus": 7.5, "vminus": -7.5},
     "chips": [{"ref": "U1", "part": "LM324"}, {"ref": "U2", "part": "LMC660"}],
     "parts": [{"ref": "R1", "kind": "resistor", "value": "10k", "nodes": ["o1", "n1"]},
               {"ref": "R2", "kind": "resistor", "value": "10k", "nodes": ["o2", "n2"]}],
@@ -1273,8 +1277,12 @@ def test_the_build_format_says_how_many_chips_a_board_takes():
 # --- unused sections are tied off -------------------------------------------------
 
 def _sections_build(part, used, dual):
-    """A follower driving a load on each used section of one chip; the rest are the placer's to tie off."""
-    return {"supply": {"vplus": 15, "vminus": -15 if dual else 0}, "chips": [{"ref": "U1", "part": part}],
+    """A follower driving a load on each used section of one chip; the rest are the placer's to tie off.
+
+    15 V across the chip either way, inside both parts' recommended supply ranges.
+    """
+    supply = {"vplus": 7.5, "vminus": -7.5} if dual else {"vplus": 15, "vminus": 0}
+    return {"supply": supply, "chips": [{"ref": "U1", "part": part}],
             "parts": [{"ref": f"RL{s}", "kind": "resistor", "value": "10k", "nodes": [f"out{s}", "gnd"]} for s in used],
             "opamps": [{"ref": f"U1{s}", "chip": "U1", "section": s, "inp": f"in{s}", "inn": f"out{s}", "out": f"out{s}"}
                        for s in used]}
@@ -1351,3 +1359,47 @@ def test_a_supply_that_puts_ground_outside_the_input_range_is_refused(part, vplu
     """The tie-off holds IN+ at ground, which must sit inside the chip's input common-mode range."""
     with pytest.raises(BuildError, match=rf"U1 {part}: ground is outside its input common-mode range"):
         place(parse_build(_sections_build(part, "A", dual=True) | {"supply": {"vplus": vplus, "vminus": -5}}))
+
+
+# --- each chip's supply limits ------------------------------------------------------
+
+@pytest.mark.parametrize("build,refused", [
+    (ISSUE_126_CASCADE | {"supply": {"vplus": 12, "vminus": -12}},
+     "U2 LMC660: this supply puts 24 V between V+ and V-, past the chip's 16 V absolute maximum"),
+    (_sections_build("LM324", "A", dual=True) | {"supply": {"vplus": 17, "vminus": -17}},
+     "U1 LM324: this supply puts 34 V between V+ and V-, past the chip's 32 V absolute maximum"),
+], ids=["issue-126-at-12V", "lm324-at-17V"])
+def test_a_supply_past_a_chips_absolute_maximum_is_refused_naming_the_chip_and_both_numbers(build, refused):
+    with pytest.raises(BuildError, match=re.escape(refused)):
+        parse_build(build)
+
+
+def test_a_supply_above_the_recommended_range_is_drawn_with_a_note_naming_the_chip_and_its_limits():
+    """Between the top of the recommended range and the absolute maximum the chip is legal but has no margin."""
+    payload = layout_payload(_sections_build("LMC660", "A", dual=True) | {"supply": {"vplus": 7.9, "vminus": -7.9}})
+    assert payload["notes"] == [
+        "U1 LMC660 runs on 15.8 V between V+ and V-, above the 15.5 V top of its recommended range and 0.2 V "
+        "under its 16 V absolute maximum: set the supply with a meter before the chip goes in, since a supply "
+        "that drifts past 16 V can destroy it."]
+
+
+def test_a_supply_below_the_recommended_range_is_drawn_with_a_note():
+    payload = layout_payload(_sections_build("LMC660", "A", dual=False) | {"supply": {"vplus": 4, "vminus": 0}})
+    assert payload["notes"] == [
+        "U1 LMC660 runs on 4 V between V+ and V-, below the 4.75 V bottom of its recommended range, where its "
+        "datasheet no longer promises its gain or its output swing."]
+
+
+@pytest.mark.parametrize("build", [
+    lab1.EXP1_NONINVERTING, lab1.EXP4A_DIVIDER_LED, lab1.EXP4B_BUFFERED, ISSUE_126_CASCADE,
+    _sections_build("LM324", "A", dual=True) | {"supply": {"vplus": 16, "vminus": -16}},
+], ids=["lm324-30V", "no-chip", "lmc660-15V", "both-15V", "lm324-32V"])
+def test_a_supply_inside_every_chips_recommended_range_draws_no_note(build):
+    assert layout_payload(build)["notes"] == []
+
+
+def test_the_build_format_states_each_chips_supply_limits():
+    from circuit_mcp import server
+
+    doc = " ".join(server.canvas_card_add.__doc__.split())
+    assert "LM324 32 V" in doc and "LMC660 16 V" in doc
