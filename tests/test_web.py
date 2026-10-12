@@ -584,6 +584,23 @@ def test_an_unexpected_error_still_answers_json_with_its_reason(tmp_path, monkey
         "detail": "unexpected server error: RuntimeError: the receiver state is unreadable"}
 
 
+def test_a_foreign_write_is_refused_before_a_route_could_reach_the_json_500(tmp_path, monkeypatch):
+    """The cross-origin guard answers its own 403; only a crash past it becomes the JSON 500."""
+    def broken():
+        raise RuntimeError("the receiver could not be stopped")
+
+    monkeypatch.setattr(web.IPAD_CAPTURE, "stop_airplay", broken)
+    client(tmp_path, monkeypatch)
+    browser = TestClient(web.app, base_url="http://localhost:2300", raise_server_exceptions=False)
+    foreign = browser.post("/api/ipad/receiver/stop", headers={"Origin": "https://evil.example"})
+    own = browser.post("/api/ipad/receiver/stop", headers={"Origin": "http://localhost:2300"})
+    assert foreign.status_code == 403
+    assert "only the desk's own page" in foreign.json()["detail"]
+    assert own.status_code == 500
+    assert own.json() == {
+        "detail": "unexpected server error: RuntimeError: the receiver could not be stopped"}
+
+
 def test_the_canvas_feed_leaves_solutions_off_the_desk(tmp_path, monkeypatch):
     """A solution is homework; the board deletes what it closes, so it never sees one."""
     with client(tmp_path, monkeypatch) as browser:
