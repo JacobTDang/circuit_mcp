@@ -59,6 +59,40 @@ def test_duplicate_refs_are_refused():
         parse_build(spec(parts=MINIMAL["parts"] + [{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": ["a", "b"]}]))
 
 
+CASE_TWINS = {
+    "supply": {"vplus": 5, "vminus": 0},
+    "parts": [{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": ["a", "gnd"]},
+              {"ref": "r1", "kind": "resistor", "value": "2k", "nodes": ["b", "gnd"]}],
+    "sources": [{"ref": "VA", "kind": "dc", "node": "a", "volts": 1}, {"ref": "VB", "kind": "dc", "node": "b", "volts": 2}],
+    "probes": [{"label": "a", "node": "a"}, {"label": "b", "node": "b"}],
+}
+
+
+def test_refs_that_differ_only_in_case_are_refused_naming_both():
+    """ngspice folds case, so it read RR1 and Rr1 as one device and refused the second."""
+    with pytest.raises(BuildError, match="refs 'R1' and 'r1' differ only in case"):
+        parse_build(CASE_TWINS)
+
+
+@pytest.mark.parametrize("field,entry,twin", [
+    ("parts", {"ref": "u1", "kind": "resistor", "value": "1k", "nodes": ["out", "vi"]}, "U1"),
+    ("opamps", {"ref": "r2", "chip": "U1", "section": "B", "inp": "vi", "inn": "fb", "out": "o2"}, "R2"),
+    ("sources", {"ref": "u1a", "kind": "dc", "node": "fb", "volts": 1}, "U1A"),
+    ("sources", {"ref": "vs", "kind": "dc", "node": "fb", "volts": 1}, "VS"),
+])
+def test_refs_are_told_apart_ignoring_case_across_every_kind(field, entry, twin):
+    with pytest.raises(BuildError, match=f"refs '{twin}' and '{entry['ref']}' differ only in case"):
+        parse_build(spec(**{field: MINIMAL[field] + [entry]}))
+
+
+def test_nodes_that_differ_only_in_case_are_refused_naming_both():
+    """The board wired Out and out apart while ngspice read them as one node."""
+    parts = [{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": ["fb", "0"]},
+             {"ref": "R2", "kind": "resistor", "value": "15k", "nodes": ["Out", "fb"]}]
+    with pytest.raises(BuildError, match="nodes 'Out' and 'out' differ only in case"):
+        parse_build(spec(parts=parts))
+
+
 def test_a_pot_needs_three_nodes_and_an_led_two():
     with pytest.raises(BuildError, match="pot needs exactly 3"):
         parse_build(spec(parts=[{"ref": "R3", "kind": "pot", "value": "10k", "nodes": ["a", "b"]}]))

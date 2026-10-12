@@ -262,6 +262,19 @@ def test_a_repeated_probe_label_is_refused_by_the_breadboard_and_expected_cards_
             build_card(kind, "x", build)
 
 
+def test_refs_that_differ_only_in_case_are_refused_by_both_cards_naming_the_parts():
+    """The breadboard card used to draw R1 and r1; the expected card died with "device already exists"."""
+    build = {"supply": {"vplus": 5, "vminus": 0},
+             "parts": [{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": ["a", "gnd"]},
+                       {"ref": "r1", "kind": "resistor", "value": "2k", "nodes": ["b", "gnd"]}],
+             "sources": [{"ref": "VA", "kind": "dc", "node": "a", "volts": 1},
+                         {"ref": "VB", "kind": "dc", "node": "b", "volts": 2}],
+             "probes": [{"label": "a", "node": "a"}, {"label": "b", "node": "b"}]}
+    for kind in ("breadboard", "expected"):
+        with pytest.raises(CardError, match="refs 'R1' and 'r1' differ only in case"):
+            build_card(kind, "x", build)
+
+
 # --- schematic ----------------------------------------------------------------
 
 INVERTING_NETLIST = "Vs 1 0 {V}\nRi 1 2 10e3\nRf 2 3 100e3\nE1 3 0 opamp 0 2 {A}"

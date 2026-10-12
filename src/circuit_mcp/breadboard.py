@@ -151,8 +151,14 @@ def _number(value: Any, where: str) -> float:
 def _ref(value: Any, where: str, seen: set[str]) -> str:
     if not isinstance(value, str) or not re.match(r"^[A-Za-z][A-Za-z0-9]*$", value):
         raise BuildError(f"{where}: ref must be letters and digits, like R1 or U1A")
-    if value in seen:
+    # ngspice folds case: R1 and r1 would be two parts on the board and one
+    # device to the simulator.
+    twin = next((ref for ref in seen if ref.casefold() == value.casefold()), None)
+    if twin == value:
         raise BuildError(f"duplicate ref {value!r}")
+    if twin is not None:
+        raise BuildError(f"refs {twin!r} and {value!r} differ only in case, which the simulator "
+                         f"reads as one name; rename one")
     seen.add(value)
     return value
 
@@ -262,7 +268,15 @@ def parse_build(content: Any) -> Build:
     if not parts and not opamps:
         raise BuildError("build has nothing to place")
 
-    known = {n for p in parts for n in p.nodes} | {n for o in opamps for n in (o.inp, o.inn, o.out)}
+    wired = [n for p in parts for n in p.nodes] + [n for o in opamps for n in (o.inp, o.inn, o.out)]
+    known = set(wired)
+    spellings: dict[str, str] = {}
+    for net in wired:
+        first = spellings.setdefault(net.casefold(), net)
+        if first != net:
+            # The board would wire these apart while ngspice, folding case, joins them.
+            raise BuildError(f"nodes {first!r} and {net!r} differ only in case, which the simulator "
+                             f"reads as one node; spell it one way")
 
     sources: list[Source] = []
     for entry in _entries(content, "sources", "source"):
