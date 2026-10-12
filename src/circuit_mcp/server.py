@@ -1946,12 +1946,17 @@ def compare_readings(
     ``build`` is the same description an ``expected`` card takes. ``measured``
     maps probe labels to readings: a number is volts for a DC probe and V RMS
     for an AC probe (the scope's AC RMS measurement); ``{"vpp": x}`` or
-    ``{"vpk": x}`` gives an AC reading in that basis instead. Each probe comes
-    back with its expected value, error and pass/fail, and a predicted gain is
-    checked whenever both of its probes were measured. An out-of-tolerance
-    reading carries a hint naming the likeliest cause: a lost minus sign, a
-    probe on a source instead of its node, or an output sitting on a rail. An
-    expected 0 V is judged with an absolute 0.05 V band instead of a percentage.
+    ``{"vpk": x}`` gives an AC reading in that basis instead. An AC reading is a
+    magnitude and is refused if negative: an inverted output is the phase the
+    ``expected`` card reports, not a minus sign. Each probe comes back with its
+    expected value, error and pass/fail, and a predicted gain is checked
+    whenever both of its probes were measured. An out-of-tolerance reading
+    carries a hint naming the likeliest cause: a lost minus sign (``sign``), a
+    probe on a source or on a supply rail instead of its node (``source``,
+    ``supply``), or an output on the op amp's limit (``rail``), which is
+    clipping when the build predicts it there and otherwise a saturated output
+    whose feedback wiring should be checked first. An expected 0 V is judged
+    with an absolute 0.05 V band instead of a percentage.
     """
     return _guarded("compare_readings", build=build, measured=measured, tolerance_pct=tolerance_pct)
 

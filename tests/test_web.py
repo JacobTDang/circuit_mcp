@@ -112,9 +112,10 @@ def test_workspace_canvas_grows_to_contain_its_cards_instead_of_clipping(tmp_pat
         app_script = browser.get("/assets/app.js").text
         assert "canvas.style.height=''" in app_script
         # The height is measured from the rendered cards, in one place, so it can
-        # be measured again after hydration replaces a placeholder body.
+        # be measured again after hydration replaces a placeholder body. A card
+        # sliding down still reports its old offsetTop, so the top is the layout's.
         fit = app_script.split("function fitCanvasHeight()", 1)[1].split("\n", 1)[0]
-        assert "el.offsetTop+el.offsetHeight" in fit
+        assert "cardBoxes()" in fit and "b.y+b.h" in fit
         assert "canvas.style.height=`${bottom+40}px`" in fit
 
 

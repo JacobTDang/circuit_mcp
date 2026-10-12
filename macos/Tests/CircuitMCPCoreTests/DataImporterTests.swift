@@ -37,7 +37,7 @@ final class DataImporterTests: XCTestCase {
         let destination = try commandCenter("command_center", marker: "fresh-app-db")
         let result = try DataImporter().importCommandCenter(from: source, to: destination, now: now)
         let backup = try XCTUnwrap(result.backup)
-        XCTAssertEqual(backup.lastPathComponent, "command_center.before-import-20270115T080000Z")
+        XCTAssertEqual(backup.lastPathComponent, "command_center.backup-20270115T080000Z")
         XCTAssertEqual(try String(contentsOf: backup.appendingPathComponent("circuit_mcp.sqlite3")), "fresh-app-db")
         XCTAssertEqual(try String(contentsOf: destination.appendingPathComponent("circuit_mcp.sqlite3")), "repo-db")
     }
@@ -93,7 +93,7 @@ final class DataImporterTests: XCTestCase {
         let source = try commandCenter("repo", marker: "repo-db")
         let destination = try commandCenter("command_center", marker: "fresh-app-db")
         _ = try DataImporter().importCommandCenter(from: source, to: destination, now: now)
-        let backup = root.appendingPathComponent("command_center.before-import-20270115T080000Z", isDirectory: true)
+        let backup = root.appendingPathComponent("command_center.backup-20270115T080000Z", isDirectory: true)
         XCTAssertThrowsError(try DataImporter().importCommandCenter(from: source, to: destination, now: now)) {
             XCTAssertEqual($0 as? DataImportError, .backupExists(backup.path))
         }
@@ -134,9 +134,252 @@ final class DataImporterTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: destination.appendingPathComponent("circuit_mcp.sqlite3")), "fresh-app-db")
         XCTAssertTrue(fileManager.fileExists(atPath: destination.appendingPathComponent("files").path))
         let leftovers = try fileManager.contentsOfDirectory(atPath: root.path)
-            .filter { $0.hasPrefix("command_center.before-import-") }
-        XCTAssertEqual(leftovers, [], "the data is back at the destination, so no backup may be left behind")
+            .filter { $0.hasPrefix("command_center.") }
+        XCTAssertEqual(leftovers, [], "the data is back at the destination, so no backup or partial copy may be left behind")
         XCTAssertEqual(try String(contentsOf: source.appendingPathComponent("circuit_mcp.sqlite3")), "repo-db")
+    }
+
+    // MARK: - A copy that can be watched and cancelled
+
+    /// A command center with `uploads` files of `bytes` each under `files/`, as a notebook with
+    /// uploaded worksheets has.
+    private func notebook(_ name: String, marker: String, uploads: Int, bytes: Int) throws -> URL {
+        let folder = try commandCenter(name, marker: marker)
+        for number in 1...uploads {
+            try Data(repeating: UInt8(number % 256), count: bytes)
+                .write(to: folder.appendingPathComponent("files/upload-\(number).bin"))
+        }
+        return folder
+    }
+
+    private func appData(_ destination: URL) throws -> String {
+        try String(contentsOf: destination.appendingPathComponent("circuit_mcp.sqlite3"))
+    }
+
+    /// The old import moved the student's data aside first and then ran one uncancellable copy into
+    /// its place, so stopping part-way meant a rollback. The copy is now made beside the data
+    /// folder, which is not touched until the copy is complete; putting it in place is a rename.
+    func testTheDataFolderIsLeftInPlaceUntilTheCopyIsComplete() throws {
+        let source = try commandCenter("repo", marker: "repo-db")
+        let destination = try commandCenter("command_center", marker: "app-db")
+        var copiedInto: URL?
+        var dataDuringTheCopy: String?
+        let importer = DataImporter(copy: { from, to, progress in
+            copiedInto = to
+            dataDuringTheCopy = try self.appData(destination)
+            try DataImporter.copyFolder(from, to: to, progress: progress)
+        })
+        _ = try importer.importCommandCenter(from: source, to: destination, now: now)
+
+        XCTAssertEqual(dataDuringTheCopy, "app-db", "the data folder was moved before the copy was complete")
+        let staging = try XCTUnwrap(copiedInto)
+        XCTAssertEqual(staging.deletingLastPathComponent().standardizedFileURL, root.standardizedFileURL,
+                       "the copy is made beside the data folder, so putting it in place is a rename")
+        XCTAssertNotEqual(staging.standardizedFileURL, destination.standardizedFileURL)
+        XCTAssertFalse(fileManager.fileExists(atPath: staging.path), "the finished copy is the data folder now")
+        XCTAssertEqual(try appData(destination), "repo-db")
+    }
+
+    /// The acceptance case: cancelling while the copy is under way removes what it had copied, and
+    /// the student's data is exactly as it was -- not moved, so nothing has to be put back.
+    func testCancellingDuringTheCopyRemovesThePartialCopyAndLeavesTheDataAsItWas() throws {
+        let source = try notebook("repo", marker: "repo-db", uploads: 20, bytes: 10_000)
+        let destination = try commandCenter("command_center", marker: "app-db")
+        let staging = DataImporter.stagingFolder(for: destination)
+        let progress = Progress.discreteProgress(totalUnitCount: -1)
+        var partialCopyExisted = false
+        // The count changes on the copying thread, so this cancels after the first file, every time.
+        let observation = progress.observe(\.completedUnitCount) { progress, _ in
+            guard progress.completedUnitCount > 0, !progress.isCancelled else { return }
+            partialCopyExisted = FileManager.default.fileExists(atPath: staging.path)
+            progress.cancel()
+        }
+        defer { observation.invalidate() }
+
+        XCTAssertThrowsError(try DataImporter().importCommandCenter(from: source, to: destination, now: now, progress: progress)) {
+            XCTAssertTrue($0 is CancellationError, "a cancelled import says it was cancelled, not that it failed: \($0)")
+        }
+        XCTAssertTrue(partialCopyExisted, "the cancel has to land in the middle of the copy for this to test anything")
+        XCTAssertEqual(try appData(destination), "app-db")
+        XCTAssertEqual(try fileManager.contentsOfDirectory(atPath: root.path).sorted(), ["command_center", "repo"],
+                       "no partial copy and no backup is left behind")
+    }
+
+    func testAnImportCancelledBeforeItsCopyStartsChangesNothing() throws {
+        let source = try commandCenter("repo", marker: "repo-db")
+        let destination = try commandCenter("command_center", marker: "app-db")
+        let progress = Progress.discreteProgress(totalUnitCount: -1)
+        progress.cancel()
+        XCTAssertThrowsError(try DataImporter().importCommandCenter(from: source, to: destination, now: now, progress: progress)) {
+            XCTAssertTrue($0 is CancellationError, "\($0)")
+        }
+        XCTAssertEqual(try appData(destination), "app-db")
+        XCTAssertEqual(try fileManager.contentsOfDirectory(atPath: root.path).sorted(), ["command_center", "repo"])
+    }
+
+    /// What the import screen's bar is drawn from: every byte to copy is counted before the copy
+    /// starts, and the count moves as each file is copied rather than once at the end.
+    func testProgressCountsEveryByteAndMovesFileByFile() throws {
+        let source = try notebook("repo", marker: "repo-db", uploads: 20, bytes: 10_000)
+        let destination = root.appendingPathComponent("app/command_center", isDirectory: true)
+        let progress = Progress.discreteProgress(totalUnitCount: -1)
+        var seen: [Int64] = []
+        let observation = progress.observe(\.completedUnitCount) { progress, _ in seen.append(progress.completedUnitCount) }
+        defer { observation.invalidate() }
+
+        _ = try DataImporter().importCommandCenter(from: source, to: destination, now: now, progress: progress)
+        XCTAssertEqual(progress.totalUnitCount, 20 * 10_000 + Int64("repo-db".utf8.count))
+        XCTAssertEqual(progress.completedUnitCount, progress.totalUnitCount)
+        XCTAssertEqual(seen, seen.sorted(), "the count never goes backwards")
+        XCTAssertGreaterThanOrEqual(Set(seen.filter { $0 > 0 && $0 < progress.totalUnitCount }).count, 19,
+                                    "the count moves with each file: \(seen)")
+    }
+
+    /// A force-quit, or a quit that stopped waiting for a stalled copy, leaves the partial copy
+    /// behind. It holds nothing of the student's -- the folder it came from is untouched -- and the
+    /// next import removes it rather than letting it sit in Application Support for good.
+    func testAPartialCopyAnImportDidNotLiveToFinishIsRemovedByTheNext() throws {
+        let source = try commandCenter("repo", marker: "repo-db")
+        let destination = try commandCenter("command_center", marker: "app-db")
+        let abandoned = DataImporter.stagingFolder(for: destination)
+        try fileManager.createDirectory(at: abandoned.appendingPathComponent("files"), withIntermediateDirectories: true)
+        try Data("half a worksheet".utf8).write(to: abandoned.appendingPathComponent("files/half.bin"))
+
+        _ = try DataImporter().importCommandCenter(from: source, to: destination, now: now)
+        XCTAssertFalse(fileManager.fileExists(atPath: abandoned.path))
+        XCTAssertEqual(try appData(destination), "repo-db")
+        XCTAssertFalse(fileManager.fileExists(atPath: destination.appendingPathComponent("files/half.bin").path),
+                       "the abandoned copy must not be mixed into the new one")
+    }
+
+    // MARK: - How many backups successful imports keep
+
+    private func at(_ day: Int) -> Date { now.addingTimeInterval(Double(day) * 86_400) }
+
+    private func folders(_ prefix: String) throws -> [String] {
+        try fileManager.contentsOfDirectory(atPath: root.path).filter { $0.hasPrefix(prefix) }.sorted()
+    }
+
+    /// Every successful import kept the whole notebook it replaced, forever. Now the backup an
+    /// import makes is kept until the next successful import, which deletes it: however many
+    /// imports run, Application Support holds the data folder and one backup -- the one that holds
+    /// what the latest import replaced.
+    func testRepeatedImportsKeepOnlyTheBackupOfTheLatestImport() throws {
+        let destination = try commandCenter("command_center", marker: "original")
+        var previous = "original"
+        for (day, name) in ["a", "b", "c", "d"].enumerated() {
+            let source = try commandCenter("checkout-\(name)", marker: "db-\(name)")
+            let result = try DataImporter().importCommandCenter(from: source, to: destination, now: at(day))
+            let backup = try XCTUnwrap(result.backup)
+            XCTAssertEqual(try folders("command_center."), [backup.lastPathComponent], "after import \(name)")
+            XCTAssertEqual(try appData(backup), previous, "the backup holds what this import replaced")
+            XCTAssertEqual(try appData(destination), "db-\(name)")
+            XCTAssertEqual(result.deletedBackups.count, day == 0 ? 0 : 1)
+            previous = "db-\(name)"
+        }
+    }
+
+    /// Cleanup runs only once an import's copy is in place. One that fails deletes nothing, so the
+    /// latest good import's backup is still there for the student to go back to.
+    func testAFailedImportDeletesNoBackup() throws {
+        let destination = try commandCenter("command_center", marker: "original")
+        let first = try DataImporter().importCommandCenter(from: try commandCenter("checkout-a", marker: "db-a"),
+                                                            to: destination, now: at(0))
+        let broken = try notebook("checkout-b", marker: "db-b", uploads: 1, bytes: 10)
+        let unreadable = broken.appendingPathComponent("files/upload-1.bin")
+        try fileManager.setAttributes([.posixPermissions: 0o000], ofItemAtPath: unreadable.path)
+        defer { try? fileManager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: unreadable.path) }
+
+        XCTAssertThrowsError(try DataImporter().importCommandCenter(from: broken, to: destination, now: at(1)))
+        XCTAssertEqual(try folders("command_center."), [try XCTUnwrap(first.backup).lastPathComponent])
+        XCTAssertEqual(try appData(XCTUnwrap(first.backup)), "original")
+        XCTAssertEqual(try appData(destination), "db-a")
+    }
+
+    /// A folder an import moved aside and could not put back may be the only copy of the student's
+    /// data -- the server creates an empty data folder over the gap at its next start. Cleanup only
+    /// ever deletes the backups successful imports named as theirs, so this one is never touched.
+    func testCleanupNeverDeletesDataAnImportCouldNotPutBack() throws {
+        let destination = try commandCenter("command_center", marker: "empty desk the server made")
+        let stranded = try commandCenter("command_center.before-import-20270101T000000Z", marker: "the only copy")
+        for (day, name) in ["a", "b"].enumerated() {
+            _ = try DataImporter().importCommandCenter(from: try commandCenter("checkout-\(name)", marker: "db-\(name)"),
+                                                       to: destination, now: at(day))
+        }
+        XCTAssertEqual(try appData(stranded), "the only copy")
+    }
+
+    /// The backups are named after the time of their import, and a clock set back would make the
+    /// newest backup sort as the oldest. Which one survives is decided by which import made it.
+    func testTheBackupThisImportMadeIsKeptEvenWhenTheClockHasGoneBack() throws {
+        let destination = try commandCenter("command_center", marker: "original")
+        _ = try DataImporter().importCommandCenter(from: try commandCenter("checkout-a", marker: "db-a"),
+                                                   to: destination, now: at(5))
+        let result = try DataImporter().importCommandCenter(from: try commandCenter("checkout-b", marker: "db-b"),
+                                                            to: destination, now: at(1))
+        let kept = try XCTUnwrap(result.backup)
+        XCTAssertEqual(try folders("command_center."), [kept.lastPathComponent])
+        XCTAssertEqual(try appData(kept), "db-a")
+    }
+
+    /// With no data folder to replace, an import makes no backup -- and so the backup from the
+    /// import before it is still the latest good one, and stays.
+    func testAnImportWithNoDataToReplaceKeepsTheLastBackup() throws {
+        let destination = root.appendingPathComponent("command_center", isDirectory: true)
+        let earlier = try commandCenter("command_center.backup-20270101T000000Z", marker: "earlier")
+        let result = try DataImporter().importCommandCenter(from: try commandCenter("checkout-a", marker: "db-a"),
+                                                            to: destination, now: at(0))
+        XCTAssertNil(result.backup)
+        XCTAssertEqual(result.deletedBackups, [])
+        XCTAssertEqual(try appData(earlier), "earlier")
+    }
+
+    /// The success alert used to name the backup and stop. It has to say how long it is kept, and
+    /// what an import deleted, so nothing disappears without the student having been told.
+    func testTheSuccessAlertSaysHowLongTheBackupIsKeptAndWhatWasDeleted() throws {
+        let destination = try commandCenter("command_center", marker: "original")
+        let first = try DataImporter().importCommandCenter(from: try commandCenter("checkout-a", marker: "db-a"),
+                                                           to: destination, now: at(0))
+        let firstBackup = try XCTUnwrap(first.backup)
+        XCTAssertTrue(first.summary.contains(firstBackup.path), first.summary)
+        XCTAssertTrue(first.summary.contains("until your next import"), first.summary)
+        XCTAssertFalse(first.summary.contains("deleted"), first.summary)
+
+        let second = try DataImporter().importCommandCenter(from: try commandCenter("checkout-b", marker: "db-b"),
+                                                            to: destination, now: at(1))
+        XCTAssertEqual(second.deletedBackups.map(\.standardizedFileURL), [firstBackup.standardizedFileURL])
+        XCTAssertTrue(second.summary.contains(try XCTUnwrap(second.backup).path), second.summary)
+        XCTAssertTrue(second.summary.contains("deleted"), second.summary)
+        XCTAssertTrue(second.summary.contains(firstBackup.path), second.summary)
+
+        let fresh = try DataImporter().importCommandCenter(from: try commandCenter("checkout-c", marker: "db-c"),
+                                                           to: root.appendingPathComponent("elsewhere/command_center"),
+                                                           now: at(2))
+        XCTAssertEqual(fresh.summary, "There was no previous app data.")
+    }
+
+    /// The confirmation before an import is where the student can still move a backup somewhere
+    /// safe, so it names the one the import will delete.
+    func testTheImportConfirmationCanNameTheBackupItWillDelete() throws {
+        let destination = try commandCenter("command_center", marker: "original")
+        XCTAssertEqual(try DataImporter().backupsDeletedByNextImport(at: destination), [])
+        let first = try DataImporter().importCommandCenter(from: try commandCenter("checkout-a", marker: "db-a"),
+                                                           to: destination, now: at(0))
+        XCTAssertEqual(try DataImporter().backupsDeletedByNextImport(at: destination).map(\.standardizedFileURL),
+                       [try XCTUnwrap(first.backup).standardizedFileURL])
+        try fileManager.removeItem(at: destination)
+        XCTAssertEqual(try DataImporter().backupsDeletedByNextImport(at: destination), [],
+                       "with no data folder the import makes no backup, so it deletes none")
+    }
+
+    func testTheImportScreenSaysWhatTheCopyIsDoing() {
+        let progress = Progress.discreteProgress(totalUnitCount: -1)
+        XCTAssertEqual(DataImporter.progressDescription(progress), "Counting the files to copy…")
+        progress.totalUnitCount = 3_000_000
+        progress.completedUnitCount = 1_500_000
+        XCTAssertEqual(DataImporter.progressDescription(progress), "1.5 MB of 3 MB copied")
+        progress.cancel()
+        XCTAssertEqual(DataImporter.progressDescription(progress), "Stopping the copy. Your data is left as it was.")
     }
 
     /// A rollback that fails reports only to the unified log, and the error the caller is handed

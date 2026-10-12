@@ -53,9 +53,10 @@ def test_dac_output_with_a_dropped_minus_sign_is_a_sign_error():
     assert vo["hint"]["kind"] == "sign"
 
 
-def test_dac_output_at_the_negative_rail_is_clipping():
+def test_dac_output_at_the_negative_limit_is_saturated():
     vo = entry(compare_readings(lab1.EXP7_DAC, {"vo": -9.45}), "vo")
     assert vo["hint"]["kind"] == "rail"
+    assert "saturated" in vo["hint"]["message"]
 
 
 def test_a_zero_volt_expectation_uses_an_absolute_band():
@@ -206,3 +207,55 @@ def test_a_gain_with_no_measurable_input_is_reported_not_dropped():
     assert gain["error_pct"] is None
     assert gain["within_tolerance"] is False
     assert "1 mV" in gain["reason"]
+
+
+@pytest.mark.parametrize("label", ["CH1 vi", "CH2 vo"])
+@pytest.mark.parametrize("reading", [-4.54, {"vrms": -4.54}, {"vpp": -12.85}, {"vpk": -6.42}])
+def test_a_negative_ac_reading_is_refused_as_a_magnitude(label, reading):
+    # An inverting stage's "-4.54 V" is its phase written as a sign; judged as a level it was 200% off.
+    with pytest.raises(CompareError, match="AC readings are magnitudes and cannot be negative"):
+        compare_readings(lab1.EXP3_INVERTING, {"CH1 vi": 0.2, "CH2 vo": 4.54, label: reading})
+
+
+@pytest.mark.parametrize("basis", ["vrms", "vpp", "vpk"])
+def test_an_inverting_stage_read_as_magnitudes_has_a_positive_gain(basis):
+    p = predicted(lab1.EXP3_INVERTING)
+    result = compare_readings(lab1.EXP3_INVERTING, {label: {basis: p[label][basis]} for label in p})
+    gain = result["gains"][0]
+    assert gain["measured"] > 0
+    assert gain["within_tolerance"] is True
+
+
+@pytest.mark.parametrize("reading", [10.0, -10.0])
+def test_a_dac_output_past_its_swing_is_a_probe_on_the_supply_rail(reading):
+    # A reading on a +/-10 V rail is nearer it than the LM324's -9.5..8.5 V limits: the probe is on the power bus.
+    hint = entry(compare_readings(lab1.EXP7_DAC, {"vo": reading}), "vo")["hint"]
+    assert hint["kind"] == "supply"
+    assert "supply rail" in hint["message"]
+    assert "clipping" not in hint["message"]
+
+
+def test_a_dac_output_just_past_its_modelled_limit_is_still_on_the_limit():
+    # 8.5 V is a typical figure for the LM324, not a wall: 9 V is nearer it than the 10 V rail.
+    hint = entry(compare_readings(lab1.EXP7_DAC, {"vo": 9.0}), "vo")["hint"]
+    assert hint["kind"] == "rail"
+    assert "Check the feedback wiring first" in hint["message"]
+
+
+def test_a_buffer_stuck_at_its_low_limit_points_at_the_feedback_wiring():
+    # A unity buffer predicted at 11.33 V has no gain to lower: at a limit, its feedback path is the suspect.
+    hint = entry(compare_readings(lab1.EXP4B_BUFFERED, {"VA": 11.33, "VB": 0.1}), "VB")["hint"]
+    assert hint["kind"] == "rail"
+    assert "saturated" in hint["message"]
+    assert "feedback wiring" in hint["message"]
+    assert "Lower the input or the gain" not in hint["message"]
+
+
+@pytest.mark.parametrize("reading, kind, named", [
+    (14.9, "rail", "saturated"),           # on the op amp's 14.9 V limit, 0.1 V under VDC's 15 V
+    (14.99, "source", "VDC"),              # on VDC's 15 V setting, just past the limit
+])
+def test_a_buffer_reading_near_both_its_limit_and_its_source_names_the_closer(reading, kind, named):
+    hint = entry(compare_readings(lab1.EXP4B_BUFFERED, {"VA": 11.33, "VB": reading}), "VB")["hint"]
+    assert hint["kind"] == kind
+    assert named in hint["message"]

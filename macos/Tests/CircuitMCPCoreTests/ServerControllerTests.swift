@@ -17,7 +17,8 @@ final class ServerControllerTests: XCTestCase {
         try? FileManager.default.removeItem(at: logDirectory)
     }
 
-    private func controller(_ mode: String, readyTimeout: TimeInterval = 10, grace: TimeInterval = 10) throws -> ServerController {
+    private func controller(_ mode: String, readyTimeout: TimeInterval = 10, grace: TimeInterval = 10,
+                            maxLogBytes: Int = LogFiles.maxBytes) throws -> ServerController {
         let script = try XCTUnwrap(Bundle.module.url(forResource: "fake_server", withExtension: "sh", subdirectory: "Fixtures"))
         let server = ServerController(configuration: ServerConfiguration(
             executable: URL(fileURLWithPath: "/bin/sh"),
@@ -25,7 +26,8 @@ final class ServerControllerTests: XCTestCase {
             environment: ["PATH": "/usr/bin:/bin"],
             logFile: logDirectory.appendingPathComponent("server-\(mode).log"),
             readyTimeout: readyTimeout,
-            stopGracePeriod: grace
+            stopGracePeriod: grace,
+            maxLogBytes: maxLogBytes
         ))
         controllers.append(server)
         return server
@@ -131,6 +133,29 @@ final class ServerControllerTests: XCTestCase {
     func testExitingBeforeReadyReportsTheStatusAndKeepsTheOutput() throws {
         XCTAssertEqual(firstEvent(of: try controller("die-early")), .failed(.exitedBeforeReady(status: 1)))
         XCTAssertTrue(try log("die-early").contains("Traceback: boom"))
+    }
+
+    /// A server stuck printing wrote every chunk into one file with no limit. Through the real
+    /// reader, the launch log stays under its cap and still ends with the line that explains the
+    /// failure -- which is also what the error screen's tail of it shows.
+    func testANoisyServerKeepsItsLogUnderTheCapAndItsLastWordsInIt() throws {
+        XCTAssertEqual(firstEvent(of: try controller("noisy", maxLogBytes: 16_384)), .failed(.exitedBeforeReady(status: 1)))
+        let url = logDirectory.appendingPathComponent("server-noisy.log")
+        let size = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int)
+        XCTAssertLessThanOrEqual(size, 16_384)
+        XCTAssertTrue(try log("noisy").contains("dropped"), "the log has to say output was dropped")
+        XCTAssertTrue(try LogFiles.tail(of: url).hasSuffix("noise 4999\nTraceback: the newest line"))
+    }
+
+    /// Through the real reader: a line of several megabytes with no newline neither stops the
+    /// READY line after it from being read nor is lost from the log, which has every byte of it.
+    func testAHugeLineWithNoNewlineDoesNotHideTheReadyLineAfterIt() throws {
+        let server = try controller("long-line")
+        XCTAssertEqual(firstEvent(of: server), .ready(port: 45678))
+        let output = try log("long-line")
+        XCTAssertEqual(output.utf8.count, 4_000_000 + "\nREADY 45678\n".utf8.count)
+        XCTAssertTrue(output.hasSuffix("xxxx\nREADY 45678\n"))
+        XCTAssertEqual(server.stop(), .stoppedGracefully)
     }
 
     func testAnExitAfterReadyIsReportedThroughOnExit() throws {
@@ -250,13 +275,13 @@ final class ServerControllerTests: XCTestCase {
     /// the whole test binary would then run under) or a scratch filesystem to fill; a descriptor
     /// that is not open for writing fails at the same call with the same thrown error, which is
     /// what the reader has to survive.
-    private func unwritableLog(_ name: String) throws -> FileHandle {
+    private func unwritableLog(_ name: String) throws -> LogWriter {
         let path = logDirectory.appendingPathComponent(name)
         XCTAssertTrue(FileManager.default.createFile(atPath: path.path, contents: nil))
         let handle = try FileHandle(forReadingFrom: path)
         XCTAssertThrowsError(try handle.write(contentsOf: Data("probe".utf8)),
                              "the fixture must fail the very write the reader is being tested on")
-        return handle
+        return try LogWriter(url: path, handle: handle, maxBytes: LogFiles.maxBytes)
     }
 
     /// A pipe already holding `text`, so the reader's first `read` returns without blocking.
