@@ -169,6 +169,15 @@ def test_three_outputs_on_one_node_are_all_named():
         parse_build(build)
 
 
+def test_two_op_amp_outputs_on_one_node_are_refused():
+    second = {"ref": "U1B", "chip": "U1", "section": "B", "inp": "vi", "inn": "fb", "out": "out"}
+    with pytest.raises(BuildError) as refused:
+        parse_build(spec(opamps=MINIMAL["opamps"] + [second]))
+    message = str(refused.value)
+    assert "op amp U1A and op amp U1B both drive node 'out'" in message
+    assert "short" in message
+
+
 def test_a_probe_must_name_a_node_in_the_build():
     with pytest.raises(BuildError, match="not in the build"):
         parse_build(spec(probes=[{"label": "x", "node": "nowhere"}]))
@@ -781,7 +790,7 @@ CROWDED = [
      "probes": [{"label": "CH1", "node": "n4", "role": "output"}]},
     {"supply": {"vplus": 5, "vminus": -15}, "chips": [{"ref": "U1", "part": "LMC660"}],
      "opamps": [{"ref": "U1B", "chip": "U1", "section": "b", "inp": "n2", "inn": "n0", "out": "n3"},
-                {"ref": "U1A", "chip": "U1", "section": "a", "inp": "gnd", "inn": "n4", "out": "n3"}],
+                {"ref": "U1A", "chip": "U1", "section": "a", "inp": "gnd", "inn": "n4", "out": "n5"}],
      "parts": [{"ref": "X0", "kind": "resistor", "nodes": ["n3", "gnd"], "value": "1k"},
                {"ref": "X1", "kind": "resistor", "nodes": ["gnd", "n3"], "value": "1k"},
                {"ref": "X2", "kind": "resistor", "nodes": ["gnd", "n2"], "value": "1k"},

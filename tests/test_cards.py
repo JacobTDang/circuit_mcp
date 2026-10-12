@@ -213,6 +213,7 @@ def test_when_the_written_form_cannot_be_laid_out_the_canonical_form_is_flagged(
 
 # --- breadboard and expected ------------------------------------------------------
 
+from circuit_mcp.compare import CompareError, compare_readings  # noqa: E402
 from tests.fixtures import lab1  # noqa: E402
 
 
@@ -247,6 +248,18 @@ def test_tied_sources_are_refused_by_the_breadboard_and_expected_cards_alike():
     for kind in ("breadboard", "expected"):
         with pytest.raises(CardError, match="source V1 and source V2 both drive node 'drive'"):
             build_card(kind, "x", build)
+
+
+def test_tied_op_amp_outputs_are_refused_by_both_cards_and_compare_readings():
+    """The breadboard card told the student to tie U1A and U1B together; the expected card read None."""
+    second = {"ref": "U1B", "chip": "U1", "section": "B", "inp": "vi", "inn": "fb", "out": "out"}
+    build = {**lab1.EXP1_NONINVERTING, "opamps": lab1.EXP1_NONINVERTING["opamps"] + [second]}
+    tied = "op amp U1A and op amp U1B both drive node 'out'"
+    for kind in ("breadboard", "expected"):
+        with pytest.raises(CardError, match=tied):
+            build_card(kind, "x", build)
+    with pytest.raises(CompareError, match=tied):
+        compare_readings(build, {"CH2 vo": 8.0})
 
 
 def test_a_repeated_probe_label_is_refused_by_the_breadboard_and_expected_cards_alike():
