@@ -49,7 +49,10 @@ their iPad:
    first, then the pot position, then the model. Put numbers on that with
    `compare_readings`: pass the same build and the student's readings, and it
    reports each probe's error and names a lost minus sign, a probe on a source
-   instead of its node, or an output on a rail.
+   or a supply rail instead of its node, or an output at its limit: clipping
+   when the build predicts it, otherwise saturated, so check the feedback
+   wiring. AC readings are magnitudes; never pass a minus sign for an inverting
+   stage.
 
 When the user has already attached or uploaded a privacy-scoped image, skip
 steps 1–3: do not require a workspace configuration and do not capture the
