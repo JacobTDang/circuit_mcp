@@ -117,6 +117,26 @@ def test_problem_attempt_evidence_tags_context_and_progress(tmp_path):
     assert context["problems"][0]["id"] == problem["id"]
 
 
+def test_a_completed_attempt_is_final_and_a_retry_is_a_new_attempt(tmp_path):
+    """Re-completing would erase the first divergence, the only record of the mistake."""
+    db, _ = database(tmp_path)
+    problem = db.create_problem("Divider", "dividers", "find V2")
+    first = db.create_attempt(problem["id"], "student")
+    wrong = db.complete_attempt(first["id"], "V2 = V*R1/(R1+R2)", "incorrect",
+                                "KCL at node 2: current direction reversed")
+
+    with pytest.raises(StorageError, match="start a new attempt"):
+        db.complete_attempt(first["id"], "V2 = V*R2/(R1+R2)", "correct")
+
+    assert db.get_attempt(first["id"]) == wrong
+    retry = db.create_attempt(problem["id"], "student")
+    db.complete_attempt(retry["id"], "V2 = V*R2/(R1+R2)", "correct")
+    history = db.attempt_history(problem["id"])
+    assert sorted((a["status"], a["first_divergence"]) for a in history) == [
+        ("correct", None), ("incorrect", "KCL at node 2: current direction reversed")]
+    assert db.course_progress()["attempts"] == {"correct": 1, "incorrect": 1}
+
+
 def test_repository_inputs_are_parameterized_and_bounded(tmp_path):
     db, data = database(tmp_path); document = add_document(db, data, name="safe.md")
     assert db.list_documents(query="%' OR 1=1 --") == []

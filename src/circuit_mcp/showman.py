@@ -412,12 +412,15 @@ class ShowmanManager:
 
         A video element seeks by range; answering 200 with the whole file makes
         seeking a full re-download. Streaming also keeps a 200 MB render out of
-        this process's memory.
+        this process's memory. It never starts the worker: the desk serves this
+        to a GET, and any page can send one.
         """
         if not OBJECT_KEY.fullmatch(key) or ".." in key.split("/"):
             raise ValueError("invalid Showman object key")
-        if not self.start().get("ok"):
-            raise RuntimeError(self._last_error or "Showman is unavailable")
+        state = self.status()
+        if not state["ok"]:
+            raise RuntimeError(state["unavailable"] or
+                               "Showman is not running; the desk starts it with POST /api/showman/start")
         request = urllib.request.Request(f"{self.base_url}/objects/{key}")
         if byte_range is not None:
             start, end = byte_range
