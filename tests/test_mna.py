@@ -8,7 +8,12 @@ import pytest
 import sympy as sp
 
 from circuit_mcp.analysis import S
-from circuit_mcp.mna import SetupResult, check_setup, circuit_equations
+from circuit_mcp.mna import (
+    MissingGainError,
+    SetupResult,
+    check_setup,
+    circuit_equations,
+)
 from circuit_mcp.symbols import bind
 
 DIVIDER = """
@@ -576,3 +581,253 @@ def test_a_node_law_beyond_a_stacked_source_is_still_a_law():
     result = check_setup(STACKED, equations, ["V1", "V2", "V3"])
     assert result.ok, result.message
     assert roles(result) == ("law", "law", "law")
+
+
+# --------------------------------------------------------------------------
+# check_setup -- the ideal op-amp model
+#
+# lcapy's op-amp always carries a finite gain, so against the circuit as
+# written the inverting input sits at R*V/(A*Ri + ...), not at ground, and the
+# textbook virtual-ground equation is false. Mode 'ideal' judges the equations
+# against the A -> oo limit instead. It must accept the textbook setup without
+# going soft on a wrong one.
+# --------------------------------------------------------------------------
+
+NON_INVERTING = """
+Vs 1 0 {V}
+Rg 2 0 {Rg}
+Rf 2 3 {Rf}
+E1 3 0 opamp 1 2 {A}
+"""
+
+CASCADE = """
+Vs 1 0 {V}
+R1 1 2 {R1}
+R2 2 3 {R2}
+E1 3 0 opamp 0 2 {A}
+R3 3 4 {R3}
+R4 4 5 {R4}
+E2 5 0 opamp 0 4 {A}
+"""
+
+OPEN_LOOP = """
+Vs 1 0 {V}
+R1 1 2 {R1}
+E1 3 0 opamp 2 0 {A}
+RL 3 0 {RL}
+"""
+
+Rg, R4 = sp.symbols("Rg R4")
+V4, V5 = sp.symbols("V4 V5")
+
+IDEAL_INVERTING_SETUP = [
+    sp.Eq(V2, 0),                          # virtual ground
+    sp.Eq((V1 - V2) / Ri, (V2 - V3) / Rf),  # KCL at the inverting input
+    sp.Eq(V1, V),
+]
+
+
+def test_an_ideal_inverting_setup_passes_in_ideal_mode():
+    result = check_setup(INVERTING, IDEAL_INVERTING_SETUP, ["V1", "V2", "V3"],
+                         mode="ideal")
+    assert result.ok, result.message
+    assert result.kind == "ok"
+    assert "ideal" in result.message
+
+
+def test_the_ideal_setup_is_still_false_of_the_finite_gain_circuit():
+    """The default is unchanged: at finite A the inverting input is not at 0."""
+    result = check_setup(INVERTING, IDEAL_INVERTING_SETUP, ["V1", "V2", "V3"])
+    assert not result.ok
+    assert result.kind == "not_satisfied"
+    assert result.failing_equation == 0
+
+
+def test_a_finite_gain_failure_that_holds_ideally_says_which_mode_would_pass():
+    """The verdict stands; the message stops the reader calling the work wrong."""
+    result = check_setup(INVERTING, IDEAL_INVERTING_SETUP, ["V1", "V2", "V3"])
+    assert "mode 'ideal'" in result.message
+
+
+def test_a_finite_gain_failure_that_is_wrong_ideally_too_says_nothing_of_modes():
+    equations = [sp.Eq(V1, V), sp.Eq((V1 - V2) / Ri + (V3 - V2) / Rf, 0),
+                 sp.Eq(V3, A * V2)]
+    result = check_setup(INVERTING, equations, ["V1", "V2", "V3"])
+    assert result.failing_equation == 2
+    assert "mode" not in result.message
+
+
+def test_a_wrong_ideal_kcl_is_still_caught_in_ideal_mode():
+    equations = [
+        sp.Eq(V2, 0),
+        sp.Eq((V1 - V2) / Ri, (V3 - V2) / Rf),   # the feedback current reversed
+        sp.Eq(V1, V),
+    ]
+    result = check_setup(INVERTING, equations, ["V1", "V2", "V3"], mode="ideal")
+    assert not result.ok
+    assert result.kind == "not_satisfied"
+    assert result.failing_equation == 1
+
+
+def test_a_virtual_ground_where_there_is_none_is_caught_in_ideal_mode():
+    """V+ is driven here, so V- = 0 is the inverting habit misapplied."""
+    equations = [sp.Eq(V2, 0), sp.Eq(V2 / Rg, (V3 - V2) / Rf), sp.Eq(V1, V)]
+    result = check_setup(NON_INVERTING, equations, ["V1", "V2", "V3"],
+                         mode="ideal")
+    assert not result.ok
+    assert result.kind == "not_satisfied"
+    assert result.failing_equation == 0
+
+
+def test_an_ideal_non_inverting_setup_passes_in_ideal_mode():
+    equations = [
+        sp.Eq(V2, V1),                        # virtual short, V- = V+
+        sp.Eq(V2 / Rg, (V3 - V2) / Rf),       # KCL at the inverting input
+        sp.Eq(V1, V),
+    ]
+    result = check_setup(NON_INVERTING, equations, ["V1", "V2", "V3"],
+                         mode="ideal")
+    assert result.ok, result.message
+    assert roles(result) == ("law", "law", "law")
+
+
+def test_a_wrong_non_inverting_gain_is_caught_in_ideal_mode():
+    equations = [sp.Eq(V2, V), sp.Eq(V3, -Rf * V / Rg)]
+    result = check_setup(NON_INVERTING, equations, ["V2", "V3"], mode="ideal")
+    assert not result.ok
+    assert result.failing_equation == 1
+
+
+def test_ideal_mode_is_refused_for_a_circuit_without_an_open_loop_gain():
+    with pytest.raises(MissingGainError, match="'A'"):
+        check_setup(DIVIDER, [sp.Eq(V1, V), sp.Eq((V1 - V2) / R1, V2 / R2)],
+                    ["V1", "V2"], mode="ideal")
+
+
+def test_ideal_mode_is_refused_for_an_op_amp_whose_gain_is_not_named_A():
+    """lcapy names an unspecified gain after the element, which is not 'A'."""
+    unnamed = "Vs 1 0 {V}\nRi 1 2 {Ri}\nRf 2 3 {Rf}\nE1 3 0 opamp 0 2"
+    with pytest.raises(MissingGainError, match="E1"):
+        check_setup(unnamed, IDEAL_INVERTING_SETUP, ["V1", "V2", "V3"],
+                    mode="ideal")
+
+
+def test_ideal_mode_is_refused_when_one_op_amp_would_stay_finite():
+    """Taking A to infinity leaves A2 alone -- half an ideal circuit is no model."""
+    mixed = CASCADE.replace("opamp 0 4 {A}", "opamp 0 4 {A2}")
+    with pytest.raises(MissingGainError, match="E2"):
+        check_setup(mixed, [sp.Eq(V2, 0)], ["V2"], mode="ideal")
+
+
+def test_a_finite_gain_law_is_refused_in_ideal_mode_rather_than_misjudged():
+    """`V3 = -A*V2` is true at every finite A. Against the ideal solution it
+    reads V3 = -A*0, which would call a correct law wrong."""
+    equations = [sp.Eq(V1, V), sp.Eq((V1 - V2) / Ri + (V3 - V2) / Rf, 0),
+                 sp.Eq(V3, -A * V2)]
+    result = check_setup(INVERTING, equations, ["V1", "V2", "V3"], mode="ideal")
+    assert not result.ok
+    assert result.kind == "error"
+    assert "Equation 2" in result.message
+    assert "'finite'" in result.message
+
+
+def test_an_op_amp_without_negative_feedback_has_no_ideal_solution():
+    result = check_setup(OPEN_LOOP, [sp.Eq(V2, V)], ["V2"], mode="ideal")
+    assert not result.ok
+    assert result.kind == "error"
+    assert "V3" in result.message
+    assert "feedback" in result.message
+
+
+def test_an_unknown_mode_is_refused():
+    with pytest.raises(ValueError, match="gbw"):
+        check_setup(INVERTING, IDEAL_INVERTING_SETUP, ["V1", "V2", "V3"],
+                    mode="gbw")
+
+
+def test_the_ideal_model_reaches_branch_currents_too():
+    """With V- at 0, all of V/Ri flows through Ri -- only true in the limit."""
+    I_Ri = sp.Symbol("I_Ri")
+    equations = [sp.Eq(I_Ri, V / Ri)]
+    assert check_setup(INVERTING, equations, ["I_Ri"]).kind == "not_satisfied"
+    result = check_setup(INVERTING, equations, ["I_Ri"], mode="ideal")
+    assert result.ok, result.message
+
+
+# --------------------------------------------------------------------------
+# classification under the ideal model
+#
+# The virtual short is the op-amp's own relation, and it makes the inverting
+# input a known potential whose KCL stays writable -- an ideal input draws no
+# current. So KCL at the summing node, with V- and the source substituted,
+# is affine in the output alone: the same form as the answer.
+# --------------------------------------------------------------------------
+
+def test_a_virtual_ground_is_the_op_amps_relation():
+    result = check_setup(INVERTING, IDEAL_INVERTING_SETUP, ["V1", "V2", "V3"],
+                         mode="ideal")
+    assert roles(result) == ("law", "law", "law")
+    assert result.equation_roles[0].element == "E1"
+
+
+def test_a_virtual_short_with_the_source_substituted_is_still_a_law():
+    """`V2 = V` is V- = V+ with V+ = V put in, just as `V2 = Iin*R2` is Ohm's law."""
+    equations = [sp.Eq(V2, V), sp.Eq(V2 / Rg, (V3 - V2) / Rf)]
+    result = check_setup(NON_INVERTING, equations, ["V2", "V3"], mode="ideal")
+    assert result.ok, result.message
+    assert roles(result) == ("law", "law")
+    assert result.equation_roles[0].element == "E1"
+    assert "solved value" not in result.message
+
+
+def test_summing_node_kcl_and_the_inverting_answer_get_the_same_verdict():
+    kcl = check_setup(INVERTING, [sp.Eq(V / Ri, -V3 / Rf)], ["V3"], mode="ideal")
+    answer = check_setup(INVERTING, [sp.Eq(V3, -Rf * V / Ri)], ["V3"],
+                         mode="ideal")
+    assert kcl.ok and answer.ok
+    assert roles(kcl) == roles(answer) == ("ambiguous",)
+    assert "node 2" in kcl.equation_roles[0].detail
+
+
+def test_the_non_inverting_answer_is_ambiguous_too():
+    result = check_setup(NON_INVERTING, [sp.Eq(V3, (1 + Rf / Rg) * V)], ["V3"],
+                         mode="ideal")
+    assert result.ok, result.message
+    assert roles(result) == ("ambiguous",)
+    assert "node 2" in result.equation_roles[0].detail
+
+
+def test_a_source_current_into_the_summing_node_leaves_its_kcl_writable():
+    """A current source adds a known current, not an unknown one.
+
+    The shunt Rs is a photodiode's own resistance. It carries nothing at a
+    virtual ground, and it keeps Is and Rf from reading as one series chain.
+    """
+    transimpedance = "Is 0 2 {Iin}\nRs 2 0 {Rs}\nRf 2 3 {Rf}\nE1 3 0 opamp 0 2 {A}"
+    result = check_setup(transimpedance, [sp.Eq(V3, Iin * Rf)], ["V3"],
+                         mode="ideal")
+    assert result.ok, result.message
+    assert roles(result) == ("ambiguous",)
+    assert "node 2" in result.equation_roles[0].detail
+
+
+def test_a_cascade_answer_is_reported_as_solved():
+    """KCL at the second summing node still involves the first stage's output."""
+    result = check_setup(CASCADE, [sp.Eq(V5, R2 * R4 * V / (R1 * R3))], ["V5"],
+                         mode="ideal")
+    assert result.ok, result.message
+    assert roles(result) == ("solved",)
+    detail = result.equation_roles[0].detail
+    assert "node 4" in detail and "node 3" in detail
+
+
+def test_a_cascade_setup_is_all_laws():
+    equations = [
+        sp.Eq(V1, V), sp.Eq(V2, 0), sp.Eq(V4, 0),
+        sp.Eq((V1 - V2) / R1, (V2 - V3) / R2),
+        sp.Eq((V3 - V4) / R3, (V4 - V5) / R4),
+    ]
+    result = check_setup(CASCADE, equations, ["V1", "V2", "V3", "V4", "V5"],
+                         mode="ideal")
+    assert result.ok, result.message
+    assert roles(result) == ("law",) * 5
