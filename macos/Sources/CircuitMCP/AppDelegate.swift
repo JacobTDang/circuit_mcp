@@ -490,17 +490,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .available(let value):
             key.stringValue = value ?? ""
         case .unavailable(let reason):
-            key.placeholderString = "Unavailable — existing API key will not be changed"
+            key.placeholderString = "Unavailable — could not be read from the Keychain"
             key.isEnabled = false
-            alert.informativeText += "\n\nThe existing API key is unavailable: \(reason)"
+            alert.informativeText += "\n\nThe API key could not be read: \(reason)"
         }
         switch loaded.model {
         case .available(let value):
             model.stringValue = value ?? ""
         case .unavailable(let reason):
-            model.placeholderString = "Unavailable — existing model will not be changed"
+            model.placeholderString = "Unavailable — could not be read from the Keychain"
             model.isEnabled = false
-            alert.informativeText += "\n\nThe existing model is unavailable: \(reason)"
+            alert.informativeText += "\n\nThe model could not be read: \(reason)"
+        }
+        if !loaded.canSave {
+            alert.informativeText += "\n\nSave is turned off so the stored settings stay as they are. Fix Keychain access, then reopen Settings."
         }
         let fields = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 54))
         fields.addSubview(key)
