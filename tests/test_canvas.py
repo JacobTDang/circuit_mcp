@@ -338,6 +338,16 @@ def test_app_js_shows_the_pot_positions_on_the_expected_card(tmp_path, monkeypat
         assert "p.pots" in footer, "the expected card never names the pot settings the numbers assume"
 
 
+def test_app_js_names_each_parts_swing_in_the_expected_cards_footer(tmp_path, monkeypatch):
+    """A build mixing an LM324 and an LMC660 has a swing per part; one range would be one chip's, or neither's."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        footer = app_script.split("card.kind==='expected'", 1)[1].split("card-verified", 1)[1].split("\n", 1)[0]
+        assert "output swing about ${swingText(p.swing)}" in footer
+        swing = app_script.split("function swingText(s)", 1)[1].split("\n", 1)[0]
+        assert "Array.isArray(s)" in swing and "escapeHtml(x.part)" in swing
+
+
 def test_app_js_draws_the_net_legend_and_links_each_step_to_the_board(tmp_path, monkeypatch):
     with _browser(tmp_path, monkeypatch) as browser:
         app_script = browser.get("/assets/app.js").text

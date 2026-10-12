@@ -259,3 +259,41 @@ def test_a_buffer_reading_near_both_its_limit_and_its_source_names_the_closer(re
     hint = entry(compare_readings(lab1.EXP4B_BUFFERED, {"VA": 11.33, "VB": reading}), "VB")["hint"]
     assert hint["kind"] == kind
     assert named in hint["message"]
+
+
+# The issue #126 cascade, an LM324 follower into an LMC660 one, probed after each stage.
+MIXED = {
+    "supply": {"vplus": 7.5, "vminus": -7.5},
+    "chips": [{"ref": "U1", "part": "LM324"}, {"ref": "U2", "part": "LMC660"}],
+    "parts": [{"ref": "R1", "kind": "resistor", "value": "10k", "nodes": ["o1", "n1"]},
+              {"ref": "R2", "kind": "resistor", "value": "10k", "nodes": ["o2", "n2"]}],
+    "opamps": [{"ref": "U1A", "chip": "U1", "section": "A", "inp": "vin", "inn": "n1", "out": "o1"},
+               {"ref": "U2A", "chip": "U2", "section": "A", "inp": "o1", "inn": "n2", "out": "o2"}],
+    "sources": [{"ref": "VS", "kind": "sine", "node": "vin", "vrms": 0.1, "freq": 1000}],
+    "probes": [{"label": "in", "node": "vin", "role": "input"}, {"label": "mid", "node": "o1", "role": "output"},
+               {"label": "out", "node": "o2", "role": "output"}],
+}
+
+
+def test_a_mixed_build_words_each_rail_hint_with_its_own_chips_limits():
+    result = compare_readings(MIXED, {"mid": {"vpk": 6.0}, "out": {"vpk": 7.4}})
+    assert entry(result, "mid")["hint"] == {
+        "kind": "rail", "message": "mid reads 6 V peak, at the LM324's output limit (-7 V to 6 V on this supply): "
+                                   "the output is clipping. Lower the input or the gain."}
+    assert entry(result, "out")["hint"] == {
+        "kind": "rail", "message": "out reads 7.4 V peak, at the LMC660's output limit (-7.4 V to 7.4 V on this "
+                                   "supply): the output is clipping. Lower the input or the gain."}
+
+
+def test_a_reading_on_one_chips_limit_is_not_on_the_rail_of_the_other():
+    """6 V peak is the LM324's limit and 1.4 V inside the LMC660's: the LMC660 stage is not clipping there."""
+    out = entry(compare_readings(MIXED, {"out": {"vpk": 6.0}}), "out")
+    assert out["within_tolerance"] is False and "hint" not in out
+
+
+def test_a_mixed_build_names_the_chip_whose_limit_a_supply_rail_reading_is_past():
+    held = copy.deepcopy(MIXED)
+    held["sources"] = [{"ref": "VS", "kind": "dc", "node": "vin", "volts": 1}]
+    hint = entry(compare_readings(held, {"mid": 7.5}), "mid")["hint"]
+    assert hint["kind"] == "supply"
+    assert "at the 7.5 V supply rail and past the LM324's output limit (-7 V to 6 V on this supply)" in hint["message"]

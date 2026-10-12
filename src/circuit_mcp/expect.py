@@ -115,18 +115,41 @@ def _phase(correlation: float) -> str:
     return "quadrature (about 90 degrees)"
 
 
-def _swing(build: Build) -> tuple[float, float]:
+Swing = dict[str, Any]   # {"low", "high"} in volts, and "part" when the build's chips swing differently
+
+
+def _swings(build: Build) -> list[Swing]:
+    """Each part's output swing on this supply, in the order its chips are listed.
+
+    Chips that all stop the same distance short of the rails share one swing,
+    unnamed, as every build did before one could mix parts; a build with no chip
+    swings rail to rail. Otherwise each swing names its part, because a limit
+    read without its chip would judge one chip's output by the other's.
+    """
     if not build.chips:
-        return build.vminus, build.vplus
-    # One swing judges every output here, so chips that stop short of the rails
-    # by different amounts would have one of them judged by the other's limits.
-    swings = {(chip.headroom_low, chip.headroom_high): chip.part for chip in build.chips.values()}
-    if len(swings) > 1:
-        raise ExpectError(f"this build mixes {' and '.join(sorted(swings.values()))}, whose outputs stop short of "
-                          f"the rails by different amounts; the expected card predicts one output swing per build, "
-                          f"so it cannot judge clipping on both")
-    chip = next(iter(build.chips.values()))
-    return build.vminus + chip.headroom_low, build.vplus - chip.headroom_high
+        return [{"low": build.vminus, "high": build.vplus}]
+    by_part: dict[str, Swing] = {}
+    for chip in build.chips.values():
+        by_part.setdefault(chip.part, {"part": chip.part, "low": build.vminus + chip.headroom_low,
+                                       "high": build.vplus - chip.headroom_high})
+    if len({(swing["low"], swing["high"]) for swing in by_part.values()}) == 1:
+        first = next(iter(by_part.values()))
+        return [{"low": first["low"], "high": first["high"]}]
+    return list(by_part.values())
+
+
+def output_swings(build: Build) -> dict[str, Swing]:
+    """The swing each op-amp output is judged by: that of the chip driving it."""
+    swings = _swings(build)
+    if len(swings) == 1:
+        return {use.out: swings[0] for use in build.opamps}
+    by_part = {swing["part"]: swing for swing in swings}
+    return {use.out: by_part[build.chips[use.chip].part] for use in build.opamps}
+
+
+def swing_owner(swing: Swing) -> str:
+    """Whose limit a swing is, as a sentence names it: the op amp, or its part when the build mixes parts."""
+    return swing.get("part", "op amp")
 
 
 def expectations(content: Any) -> dict[str, Any]:
@@ -138,8 +161,10 @@ def expectations(content: Any) -> dict[str, Any]:
     netlist = deck(build)
     ac = [s for s in build.sources if s.kind != "dc"]
     outputs = [f"v({_spice_node(p.node)})" for p in build.probes]
-    lo_limit, hi_limit = _swing(build)
-    opamp_outputs = {u.out for u in build.opamps}
+    swings = _swings(build)
+    by_output = output_swings(build)
+    # A probe that no op amp drives is drawn against the widest swing in the build.
+    widest = {"low": min(swing["low"] for swing in swings), "high": max(swing["high"] for swing in swings)}
     if ac:
         freq = min(s.freq for s in ac)
         period = 1 / freq
@@ -186,11 +211,13 @@ def expectations(content: Any) -> dict[str, Any]:
             vpk = (vmax - vmin) / 2
             mean = sum(trace) / len(trace)
             vrms = math.sqrt(sum((v - mean) ** 2 for v in trace) / len(trace))
-            clipped = probe.node in opamp_outputs and (vmax >= hi_limit - 0.05 or vmin <= lo_limit + 0.05)
+            swing = by_output.get(probe.node)
+            clipped = swing is not None and (vmax >= swing["high"] - 0.05 or vmin <= swing["low"] + 0.05)
+            scale = swing or widest
             readings.append({"label": probe.label, "node": probe.node, "role": probe.role, "kind": "ac",
                              "vpp": round(vmax - vmin, 4), "vpk": round(vpk, 4), "vrms": round(vrms, 4),
                              "mean": round(mean, 4), "clipped": clipped,
-                             "sparkline": _sparkline(trace, min(lo_limit, vmin), max(hi_limit, vmax))})
+                             "sparkline": _sparkline(trace, min(scale["low"], vmin), max(scale["high"], vmax))})
             levels.append(vpk)
         else:
             readings.append({"label": probe.label, "node": probe.node, "role": probe.role, "kind": "dc",
@@ -211,7 +238,9 @@ def expectations(content: Any) -> dict[str, Any]:
     notes = supply_notes(build)
     for r in readings:
         if r.get("clipped"):
-            notes.append(f"{r['label']} is clipping: the op amp output cannot go beyond about {lo_limit:g} V to {hi_limit:g} V on this supply.")
+            swing = by_output[r["node"]]
+            notes.append(f"{r['label']} is clipping: the {swing_owner(swing)} output cannot go beyond about "
+                         f"{swing['low']:g} V to {swing['high']:g} V on this supply.")
     for ref, position in build.pot_positions.items():
         if position <= 0.0 or position >= 1.0:
             # The deck clamps a pot's end section to 1 ohm, because a 0 ohm
@@ -220,5 +249,5 @@ def expectations(content: Any) -> dict[str, Any]:
             end = "first" if position <= 0.0 else "second"
             notes.append(f"{ref} is at its {end} end; that section is modelled as 1 ohm, not 0.")
     return {"analysis": result["analysis"], "readings": readings, "gains": gains,
-            "swing": {"low": lo_limit, "high": hi_limit}, "notes": notes,
+            "swing": swings[0] if len(swings) == 1 else swings, "notes": notes,
             "pots": dict(build.pot_positions), "deck": netlist}

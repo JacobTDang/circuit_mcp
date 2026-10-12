@@ -87,7 +87,8 @@ def test_exp1_clips_when_the_pot_is_turned_up():
     result = expectations(hot)
     assert reading(result, "CH2 vo")["clipped"] is True
     assert result["swing"] == {"low": -14.5, "high": 13.5}
-    assert any("clipping" in note for note in result["notes"])
+    assert ("CH2 vo is clipping: the op amp output cannot go beyond about -14.5 V to 13.5 V on this supply."
+            in result["notes"])
 
 
 def test_exp3_inverting_gain_and_phase():
@@ -231,10 +232,45 @@ def test_two_chips_of_one_part_are_predicted_with_that_parts_swing():
     assert result["swing"] == {"low": -11.5, "high": 10.5}
 
 
-def test_two_chips_that_swing_differently_are_refused_rather_than_judged_by_one_of_them():
-    """One swing per build would flag an LMC660 output as clipping where an LM324's would."""
-    mixed = copy.deepcopy(TWO_FOLLOWERS)
-    mixed["chips"][1]["part"] = "LMC660"
-    mixed["supply"] = {"vplus": 7.5, "vminus": -7.5}   # +/-12 V is past the LMC660's 16 V absolute maximum
-    with pytest.raises(ExpectError, match="LM324 and LMC660"):
-        expectations(mixed)
+# The issue #126 cascade, an LM324 follower into an LMC660 one, at a supply the LMC660 takes, probed after each stage.
+ISSUE_126_CASCADE = {**TWO_FOLLOWERS, "supply": {"vplus": 7.5, "vminus": -7.5},
+                     "chips": [{"ref": "U1", "part": "LM324"}, {"ref": "U2", "part": "LMC660"}],
+                     "probes": TWO_FOLLOWERS["probes"] + [{"label": "mid", "node": "o1", "role": "output"}]}
+
+
+def test_a_build_mixing_an_lm324_and_an_lmc660_names_each_parts_swing():
+    result = expectations(ISSUE_126_CASCADE)
+    assert result["gains"][0]["gain"] == pytest.approx(1.0, abs=0.01)
+    assert result["swing"] == [{"part": "LM324", "low": -7.0, "high": 6.0},
+                               {"part": "LMC660", "low": -7.4, "high": 7.4}]
+
+
+def test_each_output_of_a_mixed_build_is_judged_by_its_own_chips_swing():
+    """6.5 V peak in: the LM324 stage clips at its 6 V limit; the LMC660 stage after it is 1.4 V clear of its own."""
+    hot = copy.deepcopy(ISSUE_126_CASCADE)
+    hot["sources"][0]["vrms"] = 6.5 / math.sqrt(2)
+    result = expectations(hot)
+    assert reading(result, "mid")["clipped"] is True
+    assert reading(result, "out")["clipped"] is False
+    assert "mid is clipping: the LM324 output cannot go beyond about -7 V to 6 V on this supply." in result["notes"]
+    assert not [note for note in result["notes"] if note.startswith("out ")]
+
+
+AC_FIELDS = {"label", "node", "role", "kind", "vpp", "vpk", "vrms", "mean", "clipped", "sparkline"}
+DC_FIELDS = {"label", "node", "role", "kind", "volts"}
+LMC660_PAIR = {**TWO_FOLLOWERS, "supply": {"vplus": 7.5, "vminus": -7.5},
+               "chips": [{"ref": "U1", "part": "LMC660"}, {"ref": "U2", "part": "LMC660"}]}
+
+
+@pytest.mark.parametrize("build", [lab1.EXP1_NONINVERTING, lab1.EXP4B_BUFFERED, lab1.EXP5_INTEGRATOR,
+                                   lab1.EXP7_DAC, lab1.EXP8_INSTRUMENTATION, TWO_FOLLOWERS, LMC660_PAIR],
+                         ids=["exp1", "exp4b", "exp5", "exp7", "exp8", "two-lm324", "two-lmc660"])
+def test_a_build_of_one_part_keeps_its_one_unnamed_swing(build):
+    """Only a build mixing parts reports a swing per part; every other payload is the one it always was."""
+    parsed = parse_build(build)
+    chip = next(iter(parsed.chips.values()))
+    result = expectations(build)
+    assert set(result) == {"analysis", "readings", "gains", "swing", "notes", "pots", "deck"}
+    assert result["swing"] == {"low": parsed.vminus + chip.headroom_low, "high": parsed.vplus - chip.headroom_high}
+    for r in result["readings"]:
+        assert set(r) == (AC_FIELDS if r["kind"] == "ac" else DC_FIELDS), r

@@ -1960,7 +1960,9 @@ def canvas_card_add(
     * ``expected`` -- the same build; returns what a meter and scope should show at
       each probe (DC volts, or peak/rms, waveform, clipping) plus gain and phase
       between ``input`` and ``output`` probes, from ngspice with a rail-limited
-      op amp. Sources: ``dc`` (``volts``), ``sine`` (``vrms``, ``freq``),
+      op amp. Each output is judged against its own chip's swing; a build
+      mixing an LM324 and an LMC660 reports ``swing`` as one entry per part.
+      Sources: ``dc`` (``volts``), ``sine`` (``vrms``, ``freq``),
       ``square`` (``vpp``, ``freq``).
 
     The ``formula``, ``walkthrough`` and ``vocabulary`` cards take expressions in
@@ -2047,7 +2049,7 @@ def compare_readings(
     whenever both of its probes were measured. An out-of-tolerance reading
     carries a hint naming the likeliest cause: a lost minus sign (``sign``), a
     probe on a source or on a supply rail instead of its node (``source``,
-    ``supply``), or an output on the op amp's limit (``rail``), which is
+    ``supply``), or an output on its own chip's limit (``rail``), which is
     clipping when the build predicts it there and otherwise a saturated output
     whose feedback wiring should be checked first. An expected 0 V is judged
     with an absolute 0.05 V band instead of a percentage.
