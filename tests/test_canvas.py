@@ -517,3 +517,14 @@ def test_app_js_places_nothing_on_a_desk_it_cannot_measure(tmp_path, monkeypatch
         assert "contentRect" not in observer, \
             "the content box is 2px narrower than the border-box width a card is given, so each reload shrank it"
         assert "el.offsetWidth" in observer and "if(!w||" in observer, "a hidden card reports width 0"
+
+
+def test_app_js_fit_sets_the_width_and_leaves_the_card_where_it_is(tmp_path, monkeypatch):
+    """Issue #127: Fit pulled the card up to y=40, over whatever was at the top of the desk."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        size = _app_function(app_script, "function sizeIPad(")
+        fit = size.split("mode==='fit'", 1)[1].split("}else{", 1)[0]
+        assert "item.y" not in fit and "style.top" not in fit, "Fit moves the card up the desk"
+        assert "item.x=Math.max(0,Math.min(item.x,canvas.clientWidth-item.w))" in fit, "a fitted card stays inside the canvas"
+        assert "settleCanvas()" in size, "a wider card must move what it now covers out of the way"
