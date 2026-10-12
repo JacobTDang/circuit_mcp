@@ -219,9 +219,16 @@ fixtures for both.
 One assignment is one page: `GET /solutions?tag=m2-hw1` renders every problem
 carrying that tag in page order, each with its prompt, the given values as
 chips, the drawn schematic, the numbered steps, an answer box with its unit,
-and a line saying which recorded checks stand behind it. A problem with no
-solution card still appears, saying so -- a sheet that quietly omits unfinished
-work hides the one thing worth seeing.
+and a line saying which recorded checks stand behind it. Those checks come only
+from the cited attempt, and only when it is an attempt at that same problem:
+`canvas_card_add` refuses a solution citing another problem's attempt or one
+that does not exist (`wrong_attempt`). A problem with no solution card still
+appears, saying so -- a sheet that quietly omits unfinished work hides the one
+thing worth seeing. Clearing the desk never reaches a solution: the board and
+`canvas_card_list` do not show one, and `canvas_card_remove` and the board's
+close route refuse one. A tag no problem carries gets a page saying so, with the
+tags that are in use and no export button; a tag no problem could ever carry is
+refused with a 400.
 
 The page is rendered on the server, so what is handed in is what the tests
 assert. Export is the browser's own print: the stylesheet sets US Letter,
