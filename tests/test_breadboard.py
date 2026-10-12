@@ -775,3 +775,53 @@ def test_an_led_value_reaches_the_wire_list():
     steps = wire_list(place(parse_build(build)))
     led = next(step for step in steps if "D1" in step)
     assert "red" in led
+
+
+def _channel(value: int) -> float:
+    unit = value / 255
+    return unit / 12.92 if unit <= 0.04045 else ((unit + 0.055) / 1.055) ** 2.4
+
+
+def _contrast(fore: str, back: str) -> float:
+    def luminance(hex_colour: str) -> float:
+        red, green, blue = (int(hex_colour[i:i + 2], 16) for i in (1, 3, 5))
+        return 0.2126 * _channel(red) + 0.7152 * _channel(green) + 0.0722 * _channel(blue)
+
+    lighter, darker = sorted((luminance(fore), luminance(back)))
+    return (darker + 0.05) / (lighter + 0.05)
+
+
+def _column_glyph(x: float, y: float, text: str, size: float = 7.0) -> tuple:
+    """Ink box of a middle-anchored column number. Matches Chromium's getBBox for the drawing's monospace."""
+    advance = size * 0.603
+    width = len(text) * advance
+    left, top = x - width / 2, y - size * 0.944
+    return (left, top, left + width, top + size * 1.161)
+
+
+def test_pin_functions_are_large_enough_to_read_on_the_chip():
+    """At a 760px card the drawing is 720px wide, and an unused pin name was 10px gray on the black body."""
+    picture = svg(place(parse_build(lab1.EXP1_NONINVERTING)))
+    view_width = float(re.search(r'viewBox="0 0 ([\d.]+)', picture).group(1))
+    scale = 720 / view_width
+    row_letters = {float(size) for size in re.findall(r'font-size="([\d.]+)"[^>]*>[a-j]<', picture)}
+    assert row_letters == {7.5}
+    functions = re.findall(r'<text class="pin-function"[^>]*font-size="([\d.]+)"[^>]*fill="(#[0-9A-Fa-f]{6})"', picture)
+    assert len(functions) >= 14
+    assert len({fill for _, fill in functions}) == 1
+    for size, fill in functions:
+        assert float(size) >= 7.5
+        assert float(size) * scale >= 14, f"pin function renders at {float(size) * scale:.1f}px"
+        assert _contrast(fill, "#2B2F33") >= 4.5
+
+
+@pytest.mark.parametrize("name", sorted(lab1.ALL))
+def test_a_column_number_is_not_covered_by_a_tag_or_a_badge(name):
+    layout = place(parse_build(lab1.ALL[name]))
+    drawing = draw(layout)
+    for col in range(drawing.first_col, drawing.last_col + 1):
+        x = drawing.x(col)
+        for row in ("numbers-top", "numbers-bottom"):
+            glyph = _column_glyph(x, drawing.y(row) + 2.5, str(col))
+            for label in drawing.labels:
+                assert not _overlap(glyph, label), f"{name}: column {col} on {row} sits under {label}"
