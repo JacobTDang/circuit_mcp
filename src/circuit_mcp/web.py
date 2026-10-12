@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import mimetypes
 import os
 import re
@@ -17,15 +18,15 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from pypdf import PdfReader
+from pypdf.errors import FileNotDecryptedError, PdfReadError
 from starlette.datastructures import Headers
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from . import paths, screen_recording, solution_sheet
+from . import paths, pdf_text, screen_recording, solution_sheet
 from .ocr_client import OCR_WORKER
 from .ocr_install import OCR_INSTALLER, OCRInstallError
-from .storage import CommandCenterDB, NotADeskCardError, StorageError
+from .storage import CommandCenterDB, NotADeskCardError, StorageError, non_finite
 from .capture import CaptureError, capture_workspace as _capture_workspace
 from .workspace import configure_display as _configure_display
 from .ipad_capture import IPAD_CAPTURE, IPadCaptureError
@@ -70,6 +71,7 @@ HISTORY = DATA / "history.jsonl"
 DATABASE = DATA / "circuit_mcp.sqlite3"
 TRASH = DATA / "trash"
 MAX_UPLOAD = 50 * 1024 * 1024
+TEXT_LIMIT = 2_000_000
 ALLOWED = {
     ".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg", ".txt": "text/plain", ".md": "text/markdown",
@@ -204,6 +206,14 @@ class SourceRequest(BaseModel):
     source: str = "auto"
 
 
+@app.exception_handler(Exception)
+async def _unexpected(request: Request, exc: Exception) -> JSONResponse:
+    """A bug still answers 500 and is still logged, because Starlette re-raises it after
+    this. Only the body changes, to JSON with the reason, which the desk can show."""
+    reason = ": ".join(part for part in (type(exc).__name__, str(exc)) if part)
+    return JSONResponse({"detail": f"unexpected server error: {reason}"}, status_code=500)
+
+
 def _db() -> CommandCenterDB:
     database = CommandCenterDB(DATA / "circuit_mcp.sqlite3")
     database.prepare(INDEX, HISTORY)
@@ -227,10 +237,9 @@ def _record(kind: str, name: str, ok: bool, entity_type: str | None = None,
 
 def _extract(path: Path, extension: str) -> tuple[str, int | None]:
     if extension == ".pdf":
-        reader = PdfReader(path)
-        return "\n".join((page.extract_text() or "") for page in reader.pages)[:2_000_000], len(reader.pages)
+        return pdf_text.extract(path, TEXT_LIMIT)
     if extension in {".txt", ".md", ".csv"}:
-        return path.read_text(errors="replace")[:2_000_000], None
+        return path.read_text(errors="replace")[:TEXT_LIMIT], None
     return "", None
 
 
@@ -448,7 +457,10 @@ def library(q: str = "", category: str = "") -> dict[str, Any]:
 
 
 @app.post("/api/library")
-async def upload(file: UploadFile = File(...), category: str = Form("homework")) -> dict[str, Any]:
+def upload(file: UploadFile = File(...), category: str = Form("homework")) -> dict[str, Any]:
+    # A plain def runs in the threadpool. This waits seconds for a long PDF's text and on
+    # SQLite, and on the event loop that wait held up every other request: the board's
+    # poll, the iPad, /healthz.
     _prepare()
     if category not in {"homework", "lecture", "reference", "solution"}:
         raise HTTPException(400, "invalid category")
@@ -462,13 +474,25 @@ async def upload(file: UploadFile = File(...), category: str = Form("homework"))
     digest = hashlib.sha256()
     try:
         with target.open("xb") as stream:
-            while chunk := await file.read(1024 * 1024):
+            while chunk := file.file.read(1024 * 1024):
                 size += len(chunk)
                 if size > MAX_UPLOAD:
                     raise HTTPException(413, "file exceeds 50 MB")
                 stream.write(chunk)
                 digest.update(chunk)
         text, pages = _extract(target, extension)
+    except FileNotDecryptedError as exc:
+        target.unlink(missing_ok=True)
+        raise HTTPException(422, f"{original} needs a password to open. "
+                                 "Remove the password and upload it again.") from exc
+    except PdfReadError as exc:
+        target.unlink(missing_ok=True)
+        raise HTTPException(422, f"{original} is not a readable PDF ({exc}); it may be "
+                                 "damaged or only partly downloaded.") from exc
+    except pdf_text.TooSlowToRead as exc:
+        target.unlink(missing_ok=True)
+        raise HTTPException(422, f"{original} {exc}; it may be damaged. Download it again, "
+                                 "or save it as a new PDF, and upload that.") from exc
     except Exception:
         target.unlink(missing_ok=True)
         raise
@@ -678,17 +702,43 @@ def run_tool(name: str, request: ToolRequest) -> Any:
         # This path records the call itself. A tool that recorded a second one
         # would double-count a single check on the board.
         raise HTTPException(422, "pass attempt_id beside arguments, not inside them")
+    # The JSON parser reads NaN, Infinity and 1e400, and no evidence row can hold them.
+    found = non_finite(request.arguments, "arguments")
+    if found:
+        raise HTTPException(422, found)
+    database = _db()
+    if request.attempt_id is not None:
+        # Looked up first, so a stale id is refused before the tool runs, not after.
+        try: database.get_attempt(request.attempt_id)
+        except StorageError as exc: raise HTTPException(404, str(exc)) from exc
     started = time.monotonic()
     try:
         result = tool(**request.arguments)
     except TypeError as exc:
         raise HTTPException(422, str(exc)) from exc
     duration_ms = (time.monotonic() - started) * 1000
-    evidence = _db().record_tool_call(name, request.arguments, result, duration_ms, request.attempt_id)
-    _record("tool", name, bool(result.get("ok")), "tool_call", evidence["id"],
-            {"attempt_id": request.attempt_id, "duration_ms": duration_ms})
+    details = {"attempt_id": request.attempt_id, "duration_ms": duration_ms}
+    try:
+        evidence = database.record_tool_call(name, request.arguments, result, duration_ms, request.attempt_id)
+    except StorageError as exc:
+        # The tool ran. Its answer still goes back, saying why it was not filed, as the MCP path does.
+        _record("tool", name, bool(result.get("ok")), "tool_call", None,
+                {**details, "evidence_warning": str(exc)})
+        return {**_finite_json(result), "evidence_warning": str(exc)}
+    _record("tool", name, bool(result.get("ok")), "tool_call", evidence["id"], details)
     result["evidence_id"] = evidence["id"]
     return result
+
+
+def _finite_json(value: Any) -> Any:
+    """JSON has no infinity or NaN, so each becomes null; the warning beside it names the value."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _finite_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite_json(item) for item in value]
+    return value
 
 
 @app.get("/api/history")
@@ -810,7 +860,9 @@ def progress() -> dict[str, Any]: return _db().course_progress()
 
 
 @app.get("/api/context")
-def context(q: str) -> dict[str, Any]: return _db().study_context(q)
+def context(q: str) -> dict[str, Any]:
+    try: return _db().study_context(q)
+    except StorageError as exc: raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/database/integrity")

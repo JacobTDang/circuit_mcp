@@ -14,17 +14,23 @@ def config_path() -> Path:
     return paths.workspace_config()
 
 
+def _not_configured(path: Path) -> dict:
+    return {
+        "ok": False,
+        "configured": False,
+        "path": str(path),
+        "message": "No iPad screen source or capture region is configured.",
+    }
+
+
 def read_workspace() -> dict:
     path = config_path()
     if not path.exists():
-        return {
-            "ok": False,
-            "configured": False,
-            "path": str(path),
-            "message": "No iPad screen source or capture region is configured.",
-        }
+        return _not_configured(path)
     try:
         value = json.loads(path.read_text())
+        if not isinstance(value, dict):
+            raise ValueError("the file must hold a JSON object.")
         if value.get("mode") == "display":
             display = int(value.get("display", 0))
             if display < 1:
@@ -41,7 +47,9 @@ def read_workspace() -> dict:
             "path": str(path),
             "message": f"Workspace configuration is invalid: {exc}",
         }
-    assert region is not None
+    if region is None:
+        # Every coordinate absent, as in a placeholder `{}`: nothing was configured.
+        return _not_configured(path)
     return {
         "ok": True,
         "configured": True,

@@ -95,11 +95,12 @@ from .instruments import instrument_status as _instrument_status
 from .ipad_capture import IPAD_CAPTURE, IPadCaptureError
 from .lab import LabDataError, import_waveform_csv as _import_waveform_csv
 from . import matlab_bridge
-from .mna import CircuitError, SetupInputError
+from .mna import CircuitError, MissingGainError, SetupInputError
+from .mna import MODES as _SETUP_MODES
 from .mna import check_setup as _mna_check_setup
 from .mna import circuit_equations as _mna_circuit_equations
 from .ocr_client import OCR_WORKER
-from .parsing import ParseError, parse_equation, parse_expression
+from .parsing import ParseError, as_text, parse_equation, parse_expression
 from .steps import check_steps, check_written
 from .spice import SpiceError, simulate_spice as _simulate_spice
 from .symbols import SubstitutionError, SymbolConflictError, bind
@@ -111,7 +112,9 @@ server = MCPServer("circuit_mcp")
 
 # Wall-clock budget for one tool call, in seconds. Generous enough for a
 # second-order rational function through ``simplify``, short enough that a
-# pathological input is a bounded annoyance rather than a wedged server.
+# pathological input is a bounded annoyance rather than a wedged server. It
+# runs from the moment the call is made, so time queued behind other calls
+# for the one worker is spent from it -- that is time the caller waited too.
 TIMEOUT_SECONDS = 20.0
 
 # The open-loop gain symbol, as the course and ``analysis`` both spell it. A
@@ -145,9 +148,12 @@ def _rendered(expr: Any) -> dict[str, str]:
     Note that recovery is exact in *value*, not necessarily in *tree*: SymPy
     re-evaluates as it rebuilds, so a non-canonical expression out of lcapy can
     come back reassociated. Compare with ``equivalent()``, not with ``==``.
+
+    ``text`` is ``as_text``, not ``str``: ``str`` prints the imaginary unit in a
+    phasor as ``I``, which the next tool would read as a current.
     """
     expr = sp.sympify(expr)
-    return {"text": str(expr), "srepr": sp.srepr(expr)}
+    return {"text": as_text(expr), "srepr": sp.srepr(expr)}
 
 
 def _rendered_values(values: dict[str, Any]) -> dict[str, dict[str, str]]:
@@ -184,10 +190,13 @@ def _rendered_matrix(matrix: dict | None) -> dict | None:
 
 
 def _stringified(counterexample: dict | None) -> dict[str, str] | None:
-    """A counterexample's keys are SymPy symbols; JSON needs strings."""
+    """A counterexample's keys are SymPy symbols; JSON needs strings.
+
+    A value can be complex, and ``str`` would write its imaginary unit as ``I``.
+    """
     if not counterexample:
         return None
-    return {str(symbol): str(value) for symbol, value in counterexample.items()}
+    return {str(symbol): as_text(value) for symbol, value in counterexample.items()}
 
 
 def _failure(kind: str, message: str) -> dict[str, Any]:
@@ -395,8 +404,15 @@ def _circuit_equations(netlist: str) -> dict[str, Any]:
 
 
 def _check_setup(
-    netlist: str, equations: list[str], unknowns: list[str]
+    netlist: str, equations: list[str], unknowns: list[str], mode: str = "finite"
 ) -> dict[str, Any]:
+    if mode not in _SETUP_MODES:
+        return _failure(
+            "bad_mode",
+            f"Unknown mode {mode!r}. Use 'finite' to judge the equations against "
+            f"the circuit as written, or 'ideal' to judge them against the ideal "
+            f"op-amp, with the open-loop gain taken to infinity.",
+        )
     known: dict[str, sp.Symbol] = {}
     parsed: list[sp.Eq] = []
     for index, text in enumerate(equations, start=1):
@@ -404,10 +420,16 @@ def _check_setup(
         known.update(bind(equation))
         parsed.append(equation)
 
-    result = _mna_check_setup(netlist, parsed, list(unknowns))
+    try:
+        result = _mna_check_setup(netlist, parsed, list(unknowns), mode, _GAIN)
+    except MissingGainError as exc:
+        # The netlist cannot answer the question asked; that is not a verdict
+        # on the student's equations, and must not be recorded as one.
+        return _failure("missing_gain", str(exc))
     return {
         "ok": result.ok,
         "kind": result.kind,
+        "mode": mode,
         "message": result.message,
         "failing_equation": result.failing_equation,
         "counterexample": _stringified(result.counterexample),
@@ -821,6 +843,49 @@ def _tail(stream: bytes) -> str:
     return f"Worker stderr: {text}" if text else "The worker said nothing."
 
 
+def _queued_out(
+    name: str, limit: float, waited: float, holder: str | None
+) -> dict[str, Any]:
+    """A call that never reached the worker. Nothing ran, so nothing is blamed."""
+    behind = f"still busy with {holder}" if holder else "still busy"
+    return _failure(
+        "busy",
+        f"{name} was not run: it waited {waited:.1f}s for the worker, which was "
+        f"{behind} when the {limit}s wall-clock limit ran out. The input was "
+        f"never evaluated, so this says nothing about it -- send it again once "
+        f"the calls ahead of it have finished.",
+    )
+
+
+def _timed_out(
+    name: str, limit: float, queued: float, ran: float, fresh: bool
+) -> dict[str, Any]:
+    """A call killed at its deadline, saying where its budget actually went.
+
+    ``fresh`` says the worker had to be started for this call -- typically
+    because the call ahead was killed with it -- so part of ``ran`` was
+    interpreter start-up rather than this input.
+    """
+    if ran > queued:
+        advice = (
+            "An expression can parse instantly and still take unbounded time to "
+            "evaluate -- 9^(9^9) is the standing example. Simplify the input, or "
+            "reduce the size of the literals in it."
+        )
+    else:
+        advice = (
+            "Most of that was the queue, not this input, which may be fine on its "
+            "own -- send it again once the calls ahead of it have finished."
+        )
+    running = "starting a fresh worker and running" if fresh else "running"
+    return _failure(
+        "timeout",
+        f"{name} hit the {limit}s wall-clock limit {queued + ran:.1f}s after it "
+        f"was sent ({queued:.1f}s waiting for the worker behind other calls, "
+        f"{ran:.1f}s {running}), and the worker was killed. {advice}",
+    )
+
+
 def _exit_detail(status: int) -> str:
     """Why a forked child produced no answer, in the terms the OS reported it."""
     if os.WIFSIGNALED(status):
@@ -841,7 +906,9 @@ class _Worker:
     Serialised by a lock: mcp dispatches synchronous tools on a thread pool, so
     two calls really can arrive at once, and one worker behind one pair of pipes
     has no way to tell whose frame is whose. The work itself is milliseconds,
-    so queueing costs far less than the start-up it avoids.
+    so queueing costs far less than the start-up it avoids -- until a call ahead
+    is a runaway. The budget is therefore counted from when a call is made, and
+    a call still queued when it runs out is answered ``busy`` without being run.
     """
 
     def __init__(self) -> None:
@@ -851,6 +918,10 @@ class _Worker:
         # Set by abort() from a signal handler, without the lock: once the
         # window that asked for the work is closing, no call may start another.
         self._closing = False
+        # The call that last took the lock, so that one which gave up queueing
+        # can say what it was waiting behind. Read without the lock; a name
+        # one call stale costs a message nothing.
+        self._holder: str | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -977,6 +1048,10 @@ class _Worker:
                 os.killpg(process.pid, signal.SIGKILL)
 
     def call(self, name: str, kwargs: dict[str, Any], limit: float) -> dict[str, Any]:
+        sent = time.monotonic()
+        # One deadline for the whole call: the wait for the lock and both
+        # attempts below all spend from it, so no stage gets a fresh budget.
+        deadline = sent + limit
         request = pickle.dumps((name, kwargs), protocol=pickle.HIGHEST_PROTOCOL)
         if self._closing:
             return _failure(
@@ -984,37 +1059,44 @@ class _Worker:
                 f"The server is stopping, so the {name} worker was not started.",
             )
 
-        with self._lock:
+        if not self._lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            # The call ahead keeps its worker: it has a deadline of its own,
+            # and killing it would answer a question nobody here asked.
+            return _queued_out(name, limit, time.monotonic() - sent, self._holder)
+        try:
+            ahead, self._holder = self._holder, name
+            started = time.monotonic()
             # Two attempts, and only for a worker that was already gone. A tool
             # body runs in a forked child and cannot bring the worker down, so
             # "the worker vanished" is never a statement about this input --
             # which is what makes retrying it honest rather than a loop around
             # a crash.
             for attempt in (0, 1):
-                deadline = time.monotonic() + limit
                 if self._closing:
                     return _failure(
                         "shutting_down",
                         f"The server is stopping, so the {name} call was cut short.",
                     )
+                if attempt == 0 and started >= deadline:
+                    # Its turn came with nothing left; a worker started now
+                    # would only be killed before it answered.
+                    return _queued_out(name, limit, started - sent, ahead)
+                before = self.pid
                 try:
                     process = self._ensure()
                 except OSError as exc:
                     return _failure(
                         "internal_error", f"Could not start the {name} worker: {exc}"
                     )
+                fresh = self.pid != before
 
                 try:
                     return self._exchange(process, request, deadline)
                 except _WorkerTimeout:
                     self._discard()  # kills the runaway child with its group
-                    return _failure(
-                        "timeout",
-                        f"{name} exceeded the {limit}s wall-clock limit and the "
-                        f"worker was killed. An expression can parse instantly "
-                        f"and still take unbounded time to evaluate -- 9^(9^9) "
-                        f"is the standing example. Simplify the input, or reduce "
-                        f"the size of the literals in it.",
+                    ended = time.monotonic()
+                    return _timed_out(
+                        name, limit, started - sent, ended - started, fresh
                     )
                 except _WorkerGone:
                     stderr = self._read_stderr()
@@ -1034,6 +1116,8 @@ class _Worker:
                         f"The {name} worker returned something unreadable "
                         f"({type(exc).__name__}: {exc}). {_tail(stderr)}",
                     )
+        finally:
+            self._lock.release()
 
         # Unreachable: the loop either returns or continues exactly once.
         return _failure("internal_error", f"The {name} worker could not be reached.")
@@ -1257,12 +1341,25 @@ def check_equivalence(expr_a: str, expr_b: str, attempt_id: str | None = None) -
     disagreement, strong evidence when it does not. A disagreement comes with a
     ``counterexample``: the values at which the two sides differ.
 
+    The random values are positive, which cannot tell ``Abs(x)``, ``re(x)`` or
+    ``conjugate(x)`` from ``x``. Inside those, ``sign``, ``arg``, ``im``,
+    ``Max``, ``Min``, ``Heaviside`` and a root of a square such as
+    ``sqrt(x^2)``, symbols are also tried at negative and complex values, so
+    ``Abs(Vo)`` is not ``Vo``; ``detail`` names the values that broke it. A
+    phasor written with ``j`` keeps the symbols beside ``j`` real.
+
     Both sides are parsed onto one set of symbols, so ``Rf`` on the left is the
     same object as ``Rf`` on the right.
 
     ``is`` is read as ``i_s``: it is the standard source-current name and a
     Python keyword, so it is rewritten before parsing and echoed back in
     ``renamed_symbols``.
+
+    ``I`` and ``E`` are ordinary symbols -- a current, an EMF -- not SymPy's
+    constants. ``j`` is the imaginary unit and ``e`` is Euler's number, so
+    ``e^(-t/(R*C))`` is ``exp(-t/(R*C))``; write ``j*w``, since ``jw`` is one
+    name. Each ``j`` or ``e`` read is echoed in ``renamed_symbols`` (``"j":
+    "sqrt(-1)"``), and every returned ``text`` spells them the same way.
 
     Pass ``attempt_id`` to file this check against an attempt; it then appears
     in ``attempt_history`` with its verdict.
@@ -1302,6 +1399,13 @@ def check_derivation(
     Python keyword, so it is rewritten before parsing and echoed back in
     ``renamed_symbols``.
 
+    ``I`` and ``E`` are ordinary symbols -- a current, an EMF -- not SymPy's
+    constants. ``j`` is the imaginary unit and ``e`` is Euler's number, so
+    ``e^(-t/(R*C))`` is ``exp(-t/(R*C))``; write ``j*w``, since ``jw`` is one
+    name. Each ``j`` or ``e`` read is echoed in ``renamed_symbols`` (``"j":
+    "sqrt(-1)"``), and every returned ``text`` spells them the same way, so
+    :func:`derive`'s ``text`` reads back unchanged as ``truth``.
+
     Pass ``attempt_id`` to file this check against an attempt; it then appears
     in ``attempt_history`` with its verdict.
     """
@@ -1327,7 +1431,7 @@ def circuit_equations(netlist: str) -> dict[str, Any]:
 
 @server.tool()
 def check_setup(
-    netlist: str, equations: list[str], unknowns: list[str],
+    netlist: str, equations: list[str], unknowns: list[str], mode: str = "finite",
     attempt_id: str | None = None,
 ) -> dict[str, Any]:
     """Does a system of equations describe this circuit?
@@ -1336,6 +1440,11 @@ def check_setup(
     system solves for: node voltages as ``V1`` or ``V_1``, branch currents as
     ``I_R1`` or ``IR1``.
 
+    In ``equations``, ``I`` and ``E`` are ordinary symbols -- a current, an EMF
+    -- ``j`` is the imaginary unit and ``e`` is Euler's number, so a phasor
+    setup writes ``j*omega_0*C*V2``. lcapy reads a netlist value ``I`` or ``j``
+    as the imaginary unit, so name a current source's value ``Is``, not ``I``.
+
     This is not a diff against lcapy's equations -- there are many correct
     formulations, and flagging a correct-but-different one is the worst thing
     this tool could do. Instead each equation is checked against the circuit's
@@ -1343,6 +1452,17 @@ def check_setup(
     ``not_satisfied`` when an equation is false of the circuit (``failing_equation``
     is its 0-based index) and ``underdetermined`` when every equation holds but
     they do not pin the unknowns down.
+
+    ``mode`` is the op-amp model the equations are judged against. ``finite``
+    (the default) is the circuit as written, open-loop gain ``A`` included:
+    there the inverting input is *not* at ground, so a virtual-ground or
+    virtual-short equation (``V2 = 0``, ``V- = V+``) is reported
+    ``not_satisfied``. Use ``ideal`` for a setup written with the ideal op-amp
+    model: every node voltage and branch current is taken to its limit as ``A``
+    goes to infinity first. ``ideal`` needs every op-amp's gain written ``{A}``
+    in the netlist (``missing_gain`` otherwise), and refuses an equation that
+    still contains ``A``; check a finite-gain law such as ``V3 = -A*V2`` with
+    ``finite``.
 
     ``equation_roles`` classifies each satisfied equation as ``law``, ``solved``,
     ``ambiguous``, or ``trivial``. This is advisory and never changes the
@@ -1363,6 +1483,7 @@ def check_setup(
         netlist=netlist,
         equations=list(equations),
         unknowns=list(unknowns),
+        mode=mode,
     )
 
 
@@ -1849,14 +1970,16 @@ def canvas_card_add(
       Every step is checked: each transition must be an algebraic identity and the
       last step must equal ``truth``. A card with one bad step is refused, naming
       the transition (``card_refused``). Substituting a circuit law such as
-      ``I = C*dV_C`` is not an identity -- a walkthrough is the algebra *after*
-      setup, so start a new card at the substituted form.
+      ``I = C*dV_C``, with ``I`` the capacitor current, is not an identity -- a
+      walkthrough is the algebra *after* setup, so start a new card at the
+      substituted form.
     * ``vocabulary`` -- ``{"terms": [{"term", "definition", "expression"?}, ...]}``
     * ``breadboard`` -- a *build*: ``{"supply": {"vplus", "vminus"}, "chips": [{"ref", "part"}],
       "parts": [{"ref", "kind", "value", "nodes"}], "opamps": [{"ref", "chip", "section",
       "inp", "inn", "out"}], "sources": [...], "probes": [{"label", "node", "role"}],
       "pot_positions": {ref: 0..1}}``. Kinds: resistor, capacitor, inductor, led
-      (``[anode, cathode]``), pot (``[end, wiper, end]``). Chips: LM324, LMC660.
+      (``[anode, cathode]``), pot (``[end, wiper, end]``). Chips: LM324, LMC660;
+      one or two chips per build, each section named by its ``chip`` ref.
       Ground is ``gnd``; ``vminus: 0`` is single supply. The card is the wiring
       picture plus a build-order wire list; a layout that does not realise every
       net is refused. The drawing goes to the canvas, so the result carries the
@@ -1882,6 +2005,10 @@ def canvas_card_add(
     it.
     The drawing is read back out of its own geometry and refused unless it still
     says that netlist. The browser escapes every text field either way.
+
+    In every card's expressions ``I`` and ``E`` are ordinary symbols -- a
+    current, an EMF -- ``j`` is the imaginary unit and ``e`` is Euler's number,
+    so ``e^(-t/(R*C))`` is ``exp(-t/(R*C))``. Write ``j*w``: ``jw`` is one name.
     """
     if kind == "solution" and not problem_id:
         return _failure(

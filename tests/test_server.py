@@ -19,6 +19,7 @@ import asyncio
 import base64
 import json
 import os
+import pickle
 import re
 import signal
 import sys
@@ -712,6 +713,65 @@ def test_the_parsed_equations_are_echoed_back():
     assert [eq["text"] for eq in result["equations"]] == ["Eq(V1, V)"]
 
 
+# The inverting amplifier exactly as issue #118 reported it.
+ISSUE_118 = "Vi 1 0 {Vi}\nR1 1 2 {R1}\nR2 2 3 {R2}\nE1 3 0 opamp 0 2 {A}"
+IDEAL_SETUP = ["V2 = 0", "(V1 - V2)/R1 = (V2 - V3)/R2", "V1 = Vi"]
+
+
+def test_an_ideal_op_amp_setup_passes_in_ideal_mode():
+    result = check_setup(ISSUE_118, IDEAL_SETUP, ["V1", "V2", "V3"], mode="ideal")
+    assert result["ok"] is True, result["message"]
+    assert result["kind"] == "ok"
+    assert result["mode"] == "ideal"
+
+
+def test_a_wrong_ideal_setup_is_still_not_satisfied_in_ideal_mode():
+    wrong = ["V2 = 0", "(V1 - V2)/R1 = (V3 - V2)/R2", "V1 = Vi"]
+    result = check_setup(ISSUE_118, wrong, ["V1", "V2", "V3"], mode="ideal")
+    assert result["ok"] is False
+    assert result["kind"] == "not_satisfied"
+    assert result["failing_equation"] == 1
+
+
+def test_ideal_mode_on_a_netlist_without_A_is_a_named_error_not_a_verdict():
+    for netlist in (ISSUE_118.replace(" {A}", ""), DIVIDER):
+        result = check_setup(netlist, ["V1 = V"], ["V1"], mode="ideal")
+        assert result["ok"] is False
+        assert result["error"] == "missing_gain", result
+        assert "kind" not in result
+
+
+def test_a_missing_gain_is_recorded_as_an_error_not_a_failed_check(tmp_path, monkeypatch):
+    """The student's work was never judged, so the board must not show a fail."""
+    _, _, attempt = _open_attempt(tmp_path, monkeypatch)
+    result = check_setup(DIVIDER, ["V1 = V"], ["V1"], mode="ideal",
+                         attempt_id=attempt["id"])
+    assert result["error"] == "missing_gain"
+    assert result["verdict"] == "error"
+
+
+def test_check_setup_defaults_to_the_finite_gain_model():
+    result = check_setup(ISSUE_118, IDEAL_SETUP, ["V1", "V2", "V3"])
+    assert result["kind"] == "not_satisfied"
+    assert result["failing_equation"] == 0
+    assert result["mode"] == "finite"
+    finite = ["V3 = -A*V2", "(V1 - V2)/R1 = (V2 - V3)/R2", "V1 = Vi"]
+    assert check_setup(ISSUE_118, finite, ["V1", "V2", "V3"])["ok"] is True
+
+
+def test_check_setup_refuses_a_mode_it_does_not_have():
+    result = check_setup(ISSUE_118, IDEAL_SETUP, ["V1", "V2", "V3"], mode="gbw")
+    assert result["ok"] is False
+    assert result["error"] == "bad_mode"
+
+
+def test_check_setup_description_says_when_to_use_each_mode():
+    tools = {tool.name: tool for tool in asyncio.run(server_module.server.list_tools())}
+    description = tools["check_setup"].description
+    assert "``finite``" in description and "``ideal``" in description
+    assert "virtual" in description
+
+
 # --------------------------------------------------------------------------
 # the wall-clock bound, and the worker that enforces it
 # --------------------------------------------------------------------------
@@ -949,6 +1009,196 @@ def test_state_is_still_clean_after_a_timeout_forced_a_restart(monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# the bound counts from when the call was made, not from when the worker was free
+#
+# One worker behind one lock serves every call, so a call can queue behind
+# others. Time spent queued is time the caller spent waiting. Most of these
+# stub the exchange, so they hold the lock as long as they choose and need no
+# runaway expression to do it.
+# --------------------------------------------------------------------------
+
+def _stubbed_worker(monkeypatch, exchange):
+    worker = server_module._Worker()
+    discarded: list[bool] = []
+    monkeypatch.setattr(worker, "_ensure", lambda: object())
+    monkeypatch.setattr(worker, "_exchange", exchange)
+    monkeypatch.setattr(worker, "_discard", lambda: discarded.append(True))
+    monkeypatch.setattr(worker, "_read_stderr", lambda: b"")
+    return worker, discarded
+
+
+def _in_thread(call) -> tuple[threading.Thread, dict]:
+    result: dict = {}
+    thread = threading.Thread(target=lambda: result.update(call()))
+    thread.start()
+    return thread, result
+
+
+def test_a_queued_call_gives_up_at_its_own_deadline_and_leaves_the_worker_alone(monkeypatch):
+    holding, release = threading.Event(), threading.Event()
+    exchanged: list[str] = []
+
+    def exchange(process, request, deadline):
+        exchanged.append(pickle.loads(request)[0])
+        holding.set()
+        release.wait(10)
+        return {"ok": True, "answer": "derived"}
+
+    worker, discarded = _stubbed_worker(monkeypatch, exchange)
+    active, active_result = _in_thread(lambda: worker.call("derive", {}, 10.0))
+    try:
+        assert holding.wait(5)
+        sent = time.monotonic()
+        queued, queued_result = _in_thread(
+            lambda: worker.call("check_equivalence", {}, 0.3))
+        queued.join(timeout=3)
+        elapsed = time.monotonic() - sent
+        assert not queued.is_alive(), "the queued call outlived its own budget"
+    finally:
+        release.set()
+        active.join(timeout=5)
+        queued.join(timeout=5)
+
+    assert elapsed < 1.5, f"returned {elapsed:.1f}s after it was sent, on a 0.3s budget"
+    assert queued_result["ok"] is False
+    assert queued_result["error"] == "busy"
+    assert "derive" in queued_result["message"], "it should name what held the worker"
+    assert "waited" in queued_result["message"]
+    assert exchanged == ["derive"], "the queued call must never reach the worker"
+    assert discarded == [], "giving up in the queue must not kill the busy call's worker"
+    assert active_result == {"ok": True, "answer": "derived"}
+
+
+class _LockFreedAtTheDeadline:
+    """The lock comes free only once the caller's whole budget is spent."""
+
+    def __init__(self, wait: float) -> None:
+        self.wait = wait
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        time.sleep(self.wait)
+        return True
+
+    def release(self) -> None:
+        pass
+
+    def __enter__(self) -> bool:
+        return self.acquire()
+
+    def __exit__(self, *_: object) -> None:
+        self.release()
+
+
+def test_a_call_whose_turn_comes_with_no_budget_left_starts_no_worker(monkeypatch):
+    def refuse(*_: object):
+        raise AssertionError("a worker was started with no budget left to run in")
+
+    worker, discarded = _stubbed_worker(monkeypatch, refuse)
+    monkeypatch.setattr(worker, "_ensure", refuse)
+    monkeypatch.setattr(worker, "_lock", _LockFreedAtTheDeadline(0.25))
+
+    result = worker.call("check_equivalence", {}, 0.2)
+
+    assert result["error"] == "busy"
+    assert discarded == []
+
+
+def test_a_replacement_worker_gets_what_is_left_of_the_budget_not_a_new_one(monkeypatch):
+    deadlines: list[float] = []
+
+    def exchange(process, request, deadline):
+        deadlines.append(deadline)
+        if len(deadlines) == 1:
+            time.sleep(0.1)  # the first worker vanishes partway through
+            raise server_module._WorkerGone
+        return {"ok": True}
+
+    worker, _ = _stubbed_worker(monkeypatch, exchange)
+    assert worker.call("derive", {}, 5.0) == {"ok": True}
+    assert len(deadlines) == 2
+    assert deadlines[0] == deadlines[1], "the retry was handed a fresh budget"
+
+
+def test_a_timeout_after_queueing_says_how_long_it_waited_and_does_not_blame_the_input(
+        monkeypatch):
+    holding = threading.Event()
+
+    def exchange(process, request, deadline):
+        if pickle.loads(request)[0] == "derive":
+            holding.set()
+            time.sleep(0.6)
+            return {"ok": True}
+        time.sleep(max(0.0, deadline - time.monotonic()))
+        raise server_module._WorkerTimeout
+
+    worker, discarded = _stubbed_worker(monkeypatch, exchange)
+    active, _ = _in_thread(lambda: worker.call("derive", {}, 10.0))
+    assert holding.wait(5)
+    result = worker.call("check_equivalence", {}, 0.8)
+    active.join(timeout=5)
+
+    assert result["error"] == "timeout"
+    message = result["message"]
+    total = re.search(r"(\d+\.\d)s after it was sent", message)
+    queued = re.search(r"(\d+\.\d)s waiting for the worker", message)
+    assert total and queued, f"the message does not say how long it waited: {message}"
+    assert 0.7 <= float(total.group(1)) <= 1.1, message
+    assert 0.3 <= float(queued.group(1)) <= 0.7, message
+    assert "9^(9^9)" not in message, "most of the budget was the queue, not the input"
+    assert discarded == [True], "its own runaway child is still killed"
+
+
+def test_a_timeout_that_had_to_start_the_worker_says_so(monkeypatch):
+    """The call ahead was killed with its worker, so this one paid for a new one."""
+    def exchange(process, request, deadline):
+        time.sleep(max(0.0, deadline - time.monotonic()))
+        raise server_module._WorkerTimeout
+
+    worker, _ = _stubbed_worker(monkeypatch, exchange)
+
+    def start():
+        worker._process = type("Started", (), {"pid": 4242})()
+        return worker._process
+
+    monkeypatch.setattr(worker, "_ensure", start)
+    result = worker.call("check_equivalence", {}, 0.2)
+    assert "starting a fresh worker" in result["message"], result["message"]
+
+
+def test_a_call_queued_behind_two_runaways_returns_within_its_own_budget():
+    """Issue #149's reproduction, on a 1.5 s budget instead of 20 s.
+
+    Before, the trivial call waited out both runaways -- twice the budget plus
+    its own run -- and the second runaway reported a limit it never ran into.
+    """
+    budget = 1.5
+    worker = server_module._Worker()
+    try:
+        worker.prewarm()
+        runaway = lambda: worker.call(  # noqa: E731
+            "check_equivalence", {"expr_a": "9^(9^9)", "expr_b": "1"}, budget)
+        first, first_result = _in_thread(runaway)
+        second, second_result = _in_thread(runaway)
+        time.sleep(0.2)
+        sent = time.monotonic()
+        trivial = worker.call(
+            "check_equivalence", {"expr_a": "R1+R2", "expr_b": "R2+R1"}, budget)
+        elapsed = time.monotonic() - sent
+        first.join(timeout=10)
+        second.join(timeout=10)
+    finally:
+        worker.shutdown()
+
+    assert elapsed < budget + 0.5, f"returned {elapsed:.1f}s after it was sent"
+    assert trivial.get("equivalent") is True or trivial["error"] in ("busy", "timeout")
+    outcomes = sorted([first_result["error"], second_result["error"]])
+    assert outcomes in (["busy", "timeout"], ["timeout", "timeout"]), outcomes
+    for result in (first_result, second_result, trivial):
+        if not result.get("ok"):
+            assert "wait" in result["message"], result["message"]
+
+
+# --------------------------------------------------------------------------
 # worker lifecycle
 # --------------------------------------------------------------------------
 
@@ -1179,6 +1429,124 @@ def test_check_equivalence_reports_the_rename():
 def test_a_derivation_without_a_reserved_name_reports_no_rename():
     result = check_derivation(["Rf/Ri"], "Rf/Ri")
     assert result["renamed_symbols"] == {}
+
+
+# --- circuit notation: I and E are quantities, j and e are constants ----------
+
+@pytest.mark.parametrize("left, right", [
+    ("I^2*R", "-R"),
+    ("V/I", "-I*V"),
+    ("E/(R1+R2)", "exp(1)/(R1+R2)"),
+])
+def test_a_current_or_an_emf_is_never_read_as_a_constant(left, right):
+    result = check_equivalence(left, right)
+    assert result["ok"] is True
+    assert result["equivalent"] is False
+
+
+def test_a_squared_current_no_longer_derives_a_minus_sign():
+    result = check_derivation(["I^2*R*t", "-R*t"], "I^2*R*t")
+    assert result["ok"] is False
+    assert result["kind"] == "algebra"
+
+
+def test_an_rc_decay_written_with_e_checks_out_and_says_how_e_was_read():
+    result = check_derivation(["V0*e^(-t/(R*C))"], "V0*exp(-t/(R*C))")
+    assert result["ok"] is True
+    assert result["renamed_symbols"] == {"e": "exp(1)"}
+
+
+def test_j_squared_is_minus_one_and_says_how_j_was_read():
+    result = check_equivalence("j^2", "-1")
+    assert result["equivalent"] is True
+    assert result["renamed_symbols"] == {"j": "sqrt(-1)"}
+
+
+def test_a_phasor_setup_is_written_with_j_as_lcapy_solves_it():
+    """lcapy's AC solution carries the imaginary unit; the student writes it as j."""
+    result = check_setup(
+        "V1 1 0 ac Vs\nR1 1 2 R\nC1 2 0 C",
+        ["V1 = Vs", "(V2 - V1)/R + j*omega_0*C*V2 = 0"],
+        ["V1", "V2"],
+    )
+    assert result["ok"] is True, result
+
+
+def test_a_setup_message_spells_the_imaginary_unit_j():
+    """The note quotes lcapy's phasor; written with I it names a current."""
+    result = check_setup(
+        "V1 1 0 ac Vs\nR1 1 2 R\nC1 2 0 C",
+        ["V1 = Vs", "V2 = Vs/(1 + j*omega_0*R*C)"],
+        ["V1", "V2"],
+    )
+    assert result["ok"] is True
+    assert "V2 = -j*Vs/(C*R*omega_0 - j)" in result["message"]
+
+
+def test_circuit_equations_display_spells_the_imaginary_unit_j():
+    result = circuit_equations("V1 1 0 j\nR1 1 2 R\nR2 2 0 R")
+    assert "V1 = j" in result["display"]
+
+
+def test_a_phasor_mismatch_is_explained_with_j():
+    result = check_equivalence("1/(1 + j*w)", "1/(1 - j*w)")
+    assert result["equivalent"] is False
+    assert "j" in result["detail"] and "I" not in result["detail"]
+
+
+def test_derived_text_reads_back_as_the_same_expression():
+    """A result's text is what goes back into the next tool, so I must print as j."""
+    Vs, C, R, w0 = sp.symbols("Vs C R omega_0", positive=True)
+    rendered = server_module._rendered(-sp.I * Vs / (C * R * w0 - sp.I))
+    assert "I" not in rendered["text"]
+    assert check_equivalence(rendered["text"], "-j*Vs/(C*R*omega_0 - j)")["equivalent"] is True
+
+
+def test_derive_refuses_text_that_would_read_a_value_named_e_back_as_eulers_number():
+    result = derive("V1 1 0 Vs\nR1 1 2 e\nR2 2 0 R", 1, 0, 2, 0, "finite")
+    assert result["ok"] is False
+    assert result["error"] == "parse_error"
+    assert "'e'" in result["message"]
+
+
+@pytest.mark.parametrize("left, right", [("Abs(Vo)", "Vo"), ("re(Z)", "Z"), ("conjugate(H)", "H")])
+def test_a_magnitude_real_part_or_conjugate_is_not_its_argument(left, right):
+    result = check_equivalence(left, right)
+    assert result["ok"] is True
+    assert result["equivalent"] is False
+    assert result["counterexample"]
+
+
+def test_a_complex_counterexample_is_written_with_j():
+    result = check_equivalence("re(Z)", "Z")
+    value = result["counterexample"]["Z"]
+    assert "j" in value and "I" not in value
+    assert check_equivalence(f"re({value})", value)["equivalent"] is False
+
+
+def test_a_derivation_that_drops_a_magnitude_is_not_an_equality():
+    result = check_derivation(["Abs(Vo)/R", "Vo/R"], "Vo/R")
+    assert result["ok"] is False
+    assert result["kind"] == "algebra"
+
+
+def test_a_walkthrough_that_drops_a_magnitude_is_refused():
+    result = canvas_card_add("walkthrough", "magnitude", {
+        "truth": "Vo",
+        "steps": [{"expression": "Abs(Vo)"}, {"expression": "Vo"}],
+    })
+    assert result["ok"] is False
+    assert result["error"] == "card_refused"
+
+
+@pytest.mark.parametrize("name", ["check_equivalence", "check_derivation", "check_setup",
+                                  "canvas_card_add"])
+def test_every_expression_tool_says_how_I_E_j_and_e_are_read(name):
+    tools = {tool.name: tool for tool in asyncio.run(server_module.server.list_tools())}
+    description = " ".join(tools[name].description.split())
+    assert "``I`` and ``E`` are ordinary symbols" in description
+    assert "``j`` is the imaginary unit" in description
+    assert "``e`` is Euler's number" in description
 
 def test_check_equivalence_confirms_a_bounded_sum_against_its_closed_form():
     """The n-term sum a summing amplifier writes, checked at n = 1 through 4."""

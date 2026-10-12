@@ -46,10 +46,14 @@ Deliberately *not* enabled: ``lambda_notation`` (first entry of
 
 Two notation collisions, called out because both would be silent:
 
-* ``I`` is SymPy's imaginary unit, not a current, and ``E`` is Euler's number,
-  not a source. They keep their SymPy meanings, because ground truth comes from
-  lcapy and disagreeing with lcapy's own output would report correct work as
-  wrong. Write currents as ``Ic``/``i_c``.
+* ``I`` and ``E`` are ordinary symbols -- a current and an EMF, as a circuits
+  course writes them -- and the imaginary unit is ``j`` and Euler's number
+  ``e``. SymPy's own spelling, ``I`` and ``E``, made ``I^2*R`` "equal" to
+  ``-R`` and failed every ``e^(-t/(R*C))``. Each read of ``j`` or ``e`` is
+  reported beside the result, the way ``is`` is, and ``as_text`` prints the two
+  constants back as ``j`` and ``e`` so a result's text still parses to the same
+  expression. lcapy reads a netlist value ``e`` as a symbol; text naming such a
+  symbol would come back as 2.718, so ``as_text`` refuses it instead.
 * ``Rf(Ri)`` is rejected rather than read as a product. Function-call syntax on
   a non-function is ambiguous, and guessing is worse than refusing.
 
@@ -65,6 +69,7 @@ from __future__ import annotations
 
 import keyword
 import re
+from tokenize import NAME, NUMBER, OP
 
 import sympy as sp
 from sympy.parsing.sympy_parser import (
@@ -75,6 +80,7 @@ from sympy.parsing.sympy_parser import (
     parse_expr,
     rationalize,
 )
+from sympy.printing.str import StrPrinter
 
 
 class ParseError(ValueError):
@@ -190,8 +196,13 @@ def _bounded_sum(expression: object, index: object, lower: object, upper: object
     build a sum over the integer 2, which SymPy accepts and no one means.
     """
     if not isinstance(index, sp.Symbol):
+        name = printed(index)
+        constant = (
+            f" {name} is read as {_meaning(name)}, so index over another letter, such as k."
+            if name in _READINGS else ""
+        )
         raise ParseError(
-            f"sum_n's index must be a name, not {index!r}. Write "
+            f"sum_n's index must be a name, not {name}.{constant} Write "
             f"sum_n(V/R^i, i, 1, n), where i is the name the summand varies over."
         )
     if index not in expression.free_symbols and not _indexed_names(expression, index):
@@ -201,6 +212,22 @@ def _bounded_sum(expression: object, index: object, lower: object, upper: object
             f"product, or index a name in the summand, such as R_{index}."
         )
     return sp.Sum(expression, (index, lower, upper))
+
+
+def _phase_part(function):
+    """``re``, ``im`` or ``conjugate``, kept whole when its argument is written with ``j``.
+
+    SymPy distributes them over such an argument -- ``re(R + j*X)`` becomes
+    ``re(R) - im(X)`` -- which erases the one sign that ``R`` and ``X`` are a
+    phasor's real parts. ``equivalence`` reads that sign to decide which symbols
+    may be complex. The value is the same either way, and a number still
+    evaluates. ``evaluate`` is accepted because ``parse_as_written`` passes it.
+    """
+    def call(argument, evaluate=True):
+        argument = sp.sympify(argument)
+        phasor = argument.has(sp.I) and bool(argument.free_symbols)
+        return function(argument, evaluate=evaluate and not phasor)
+    return call
 
 
 # The functions a string may call.
@@ -223,19 +250,31 @@ _FUNCTIONS: dict[str, object] = {
     "tanh": sp.tanh,
     "Abs": sp.Abs,
     "sign": sp.sign,
-    "re": sp.re,
-    "im": sp.im,
+    "re": _phase_part(sp.re),
+    "im": _phase_part(sp.im),
     "arg": sp.arg,
-    "conjugate": sp.conjugate,
+    "conjugate": _phase_part(sp.conjugate),
     "Max": sp.Max,
     "Min": sp.Min,
     "Heaviside": sp.Heaviside,
     "DiracDelta": sp.DiracDelta,
 }
 
-# ``I`` is the imaginary unit and ``E`` is Euler's number -- see the module
-# docstring on the collision with EE's current and source symbols.
-_CONSTANTS: dict[str, object] = {"pi": sp.pi, "I": sp.I, "E": sp.E, "oo": sp.oo}
+# ``j`` and ``e``, not SymPy's ``I`` and ``E``: a circuits course writes a
+# current as ``I`` and an EMF as ``E``. See the module docstring.
+_CONSTANTS: dict[str, object] = {"pi": sp.pi, "j": sp.I, "e": sp.E, "oo": sp.oo}
+
+# What each course spelling of a constant is read as: the text echoed back in
+# ``renames``, and the words an error message uses.
+_READINGS: dict[str, tuple[str, str]] = {
+    "j": ("sqrt(-1)", "the imaginary unit"),
+    "e": ("exp(1)", "Euler's number"),
+}
+
+
+def _meaning(name: str) -> str:
+    """What the name of a constant is read as, in words."""
+    return _READINGS[name][1] if name in _READINGS else f"the constant {name}"
 
 # The only namespace a parsed string can see. ``__builtins__`` must be present
 # and empty: ``eval`` silently inserts the real one otherwise.
@@ -258,13 +297,36 @@ _GLOBAL_DICT: dict[str, object] = {
 # A name immediately before '(' is function-call syntax.
 _CALL_PATTERN = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 
-_TRANSFORMATIONS = (
-    auto_symbol,
-    auto_number,
-    convert_xor,
-    implicit_multiplication,
-    rationalize,
-)
+def _course_constants(read: set[str]):
+    """The first token pass: ``2j`` becomes ``2*j``, and every ``j`` or ``e`` is noted in ``read``.
+
+    Python's tokenizer makes ``2j`` one imaginary literal, and ``auto_number``
+    spells its unit ``I`` -- a current here, and one the caller's symbol table
+    may well bind. Splitting the literal leaves one spelling of the imaginary
+    unit and one rule for a name after a number: ``2J`` is ``2*J``, as ``2R`` is
+    ``2*R``.
+    """
+    def transform(tokens, local_dict, global_dict):
+        result = []
+        for kind, value in tokens:
+            if kind == NUMBER and value[-1] in "jJ":
+                result.extend([(NUMBER, value[:-1]), (OP, "*"), (NAME, value[-1])])
+            else:
+                result.append((kind, value))
+        read.update(value for kind, value in result if kind == NAME and value in _READINGS)
+        return result
+    return transform
+
+
+def _transformations(read: set[str]) -> tuple:
+    return (
+        _course_constants(read),
+        auto_symbol,
+        auto_number,
+        convert_xor,
+        implicit_multiplication,
+        rationalize,
+    )
 
 
 def _require_text(text: str) -> str:
@@ -370,6 +432,13 @@ def _resolve_symbols(symbols: dict[str, sp.Symbol] | None) -> dict[str, sp.Symbo
                 f"Binding a name to a differently-named symbol substitutes one "
                 f"quantity for another without saying so."
             )
+        # A binding would win over the constant, so ``j`` would mean sqrt(-1)
+        # in one call and a quantity in the next.
+        if name in _CONSTANTS:
+            raise ParseError(
+                f"symbols[{name!r}] would make {name!r} a quantity, but expressions "
+                f"read {name!r} as {_meaning(name)}. Give the quantity another name."
+            )
     # auto_symbol writes discovered names into local_dict, so hand it a copy.
     return dict(symbols)
 
@@ -389,13 +458,14 @@ def parse_expression(
     _screen(stripped)
     required = _resolve_symbols(symbols)
     local_dict = dict(required)  # SymPy writes discovered names into this one
+    read: set[str] = set()
 
     try:
         expr = parse_expr(
             stripped,
             local_dict=local_dict,
             global_dict=dict(_GLOBAL_DICT),
-            transformations=_TRANSFORMATIONS,
+            transformations=_transformations(read),
             evaluate=True,
         )
     except Exception as exc:  # translated, not swallowed -- the cause is chained
@@ -426,6 +496,10 @@ def parse_expression(
                 f"supplied ({sp.srepr(symbol)} vs {sp.srepr(wanted)}). Comparing "
                 f"these would report correct work as wrong."
             )
+    # Reported like the ``is`` rename: ``j`` and ``e`` look like names, and the
+    # caller echoes what they were read as beside the verdict.
+    if renames is not None:
+        renames.update({name: _READINGS[name][0] for name in read})
     return expr
 
 
@@ -447,7 +521,7 @@ def parse_as_written(text: str) -> sp.Expr:
             stripped,
             local_dict={},
             global_dict={**_GLOBAL_DICT, "Mul": sp.Mul, "Add": sp.Add, "Pow": sp.Pow},
-            transformations=_TRANSFORMATIONS,
+            transformations=_transformations(set()),
             evaluate=False,
         )
     except Exception as exc:  # translated, not swallowed -- the cause is chained
@@ -501,3 +575,41 @@ def parse_equation(
         parse_expression(rhs, symbols, renames),
         evaluate=False,
     )
+
+
+class _CourseNotation(StrPrinter):
+    """``str()``, with the two constants spelled the way this module reads them."""
+
+    def _print_ImaginaryUnit(self, expr):
+        return "j"
+
+    def _print_Exp1(self, expr):
+        return "e"
+
+
+_PRINTER = _CourseNotation()
+
+
+def printed(expr: object) -> str:
+    """An expression for a message: SymPy's ``str``, with ``j`` and ``e`` for its ``I`` and ``E``."""
+    return _PRINTER.doprint(sp.sympify(expr))
+
+
+def as_text(expr: object) -> str:
+    """Text that ``parse_expression`` reads back as ``expr`` -- what a result hands the next tool.
+
+    ``str`` would print the imaginary unit as ``I``, which reads back as a
+    current. A symbol that is itself named ``j`` or ``e`` cannot be written at
+    all: lcapy makes one from a netlist value ``e``, and its text would come back
+    as Euler's number. That is refused rather than printed.
+    """
+    expr = sp.sympify(expr)
+    reserved = sorted({str(symbol) for symbol in expr.free_symbols if str(symbol) in _CONSTANTS})
+    if reserved:
+        readings = ", ".join(f"{name!r} as {_meaning(name)}" for name in reserved)
+        raise ParseError(
+            f"This result names a quantity {', '.join(map(repr, reserved))}, but "
+            f"expressions read {readings}, so its text would not read back as the same "
+            f"expression. Rename it -- in a netlist, a value 'e' could be 'emf'."
+        )
+    return _PRINTER.doprint(expr)
