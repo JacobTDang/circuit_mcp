@@ -1889,6 +1889,11 @@ def canvas_card_add(
     if not built.get("ok"):
         return built
     database = _storage()
+    attempt_id = built["payload"].get("attempt_id") if built["kind"] == "solution" else None
+    if attempt_id:
+        refused = _foreign_evidence(database, attempt_id, problem_id)
+        if refused:
+            return refused
     try:
         card = database.create_card(built["kind"], built["title"], built["payload"], problem_id)
     except StorageError as exc:
@@ -1900,6 +1905,32 @@ def canvas_card_add(
         # gets the wire list instead of 20 KB of holes it cannot act on.
         card = {**card, "payload": {**card["payload"], "svg": "(rendered on the canvas)"}}
     return {"ok": True, "card": card}
+
+
+def _foreign_evidence(database: CommandCenterDB, attempt_id: str,
+                      problem_id: str | None) -> dict[str, Any] | None:
+    """Refuse an attempt that is not one of the problem's own, else None.
+
+    The sheet prints the cited attempt's checks as this problem's evidence, so
+    another problem's attempt would hand in checks this one never had, and a
+    made-up id would hide that the link is broken behind "no checks recorded".
+    """
+    try:
+        attempt = database.get_attempt(attempt_id)
+    except StorageError:
+        return _failure(
+            "wrong_attempt",
+            f"attempt {attempt_id!r} does not exist: pass the attempt_id that attempt_create "
+            "returned for this problem, whose checks are this solution's evidence.",
+        )
+    if attempt["problem_id"] != problem_id:
+        owner = database.get_problem(attempt["problem_id"])
+        return _failure(
+            "wrong_attempt",
+            f"attempt {attempt_id!r} belongs to the problem {owner['title']!r}, not this one, so "
+            "its checks are not evidence for this solution: pass an attempt of this problem.",
+        )
+    return None
 
 
 @server.tool()

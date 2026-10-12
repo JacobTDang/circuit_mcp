@@ -798,9 +798,17 @@ class CommandCenterDB:
                     "AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1", (problem["id"],))]
                 problem["solution"] = cards[0] if cards else None
                 attempt_id = (cards[0]["payload"].get("attempt_id") if cards else None)
+                # Only an attempt at this same problem counts as its evidence: a
+                # card citing another problem's attempt, or one that does not
+                # exist, shows no checks and is flagged rather than reading as
+                # merely unchecked.
+                own = connection.execute("SELECT 1 FROM attempts WHERE id=? AND problem_id=?",
+                                         (attempt_id, problem["id"])).fetchone() if attempt_id else None
+                problem["foreign_attempt"] = bool(attempt_id) and own is None
                 problem["tool_calls"] = [dict(row) for row in connection.execute(
-                    "SELECT tool_name,verdict,created_at FROM tool_calls WHERE attempt_id=? "
-                    "ORDER BY created_at", (attempt_id,))] if attempt_id else []
+                    "SELECT t.tool_name,t.verdict,t.created_at FROM tool_calls t "
+                    "JOIN attempts a ON a.id=t.attempt_id WHERE t.attempt_id=? AND a.problem_id=? "
+                    "ORDER BY t.created_at", (attempt_id, problem["id"]))] if attempt_id else []
         return problems
 
     def create_attempt(self, problem_id: str, actor: str, answer: str = "", status: str = "working") -> dict[str, Any]:

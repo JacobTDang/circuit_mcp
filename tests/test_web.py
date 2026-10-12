@@ -530,6 +530,54 @@ def test_a_solution_whose_attempt_has_no_checks_says_so(tmp_path, monkeypatch):
     assert "no checks recorded against this attempt" in page
 
 
+def _article(page: str, title: str) -> str:
+    start = page.index(f"<h2>{title}</h2>")
+    return page[start:page.index("</article>", start)]
+
+
+def test_the_sheet_never_shows_another_problems_checks_as_evidence(tmp_path, monkeypatch):
+    """A stored card citing a foreign attempt must not hand in checks its problem never had."""
+    with client(tmp_path, monkeypatch) as browser:
+        database = web._db()
+        mine = database.create_problem("HW1 P1 divider", "dividers", "find V2", source_page=1)
+        other = database.create_problem("HW1 P2 other", "dividers", "find V3", source_page=2)
+        for problem in (mine, other):
+            database.tag_problem(problem["id"], "m2-hw1")
+        own, foreign = (database.create_attempt(p["id"], "student") for p in (mine, other))
+        database.record_tool_call("check_setup", {}, {"ok": False}, 5.0, own["id"])
+        database.record_tool_call("check_setup", {}, {"ok": True}, 5.0, foreign["id"])
+        database.record_tool_call("check_derivation", {}, {"ok": True}, 5.0, foreign["id"])
+        for problem, attempt in ((mine, foreign), (other, foreign)):
+            card = build_card("solution", problem["title"], {
+                "given": [], "steps": [{"expression": "5"}],
+                "answer": {"expression": "5", "unit": "V"}, "attempt_id": attempt["id"]})
+            database.create_card(card["kind"], card["title"], card["payload"], problem["id"])
+
+        page = browser.get("/solutions?tag=m2-hw1").text
+
+    borrowed = _article(page, "HW1 P1 divider")
+    assert ">pass<" not in borrowed and "check_derivation" not in borrowed
+    assert "not one of this problem's attempts" in borrowed
+    assert _article(page, "HW1 P2 other").count(">pass<") == 2
+
+
+def test_the_sheet_says_so_when_a_solution_cites_an_attempt_that_does_not_exist(tmp_path, monkeypatch):
+    """'No checks recorded' would hide that the evidence link itself is broken."""
+    with client(tmp_path, monkeypatch) as browser:
+        database = web._db()
+        problem = database.create_problem("Problem 3", "dividers", "find V_out", source_page=3)
+        database.tag_problem(problem["id"], "hw3")
+        card = build_card("solution", "P3", {
+            "given": [], "steps": [{"expression": "2"}], "answer": {"expression": "2", "unit": "V"},
+            "attempt_id": "0123456789abcdef0123456789abcdef"})
+        database.create_card(card["kind"], card["title"], card["payload"], problem["id"])
+
+        page = browser.get("/solutions?tag=hw3").text
+
+    assert "not one of this problem's attempts" in page
+    assert "no checks recorded against this attempt" not in page
+
+
 def test_healthz_answers_without_touching_the_desk(tmp_path, monkeypatch):
     """A launcher polls this until the server is up, so it must be cheap and always 200."""
     response = client(tmp_path, monkeypatch).get("/healthz")

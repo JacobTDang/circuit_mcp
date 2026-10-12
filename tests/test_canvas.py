@@ -218,6 +218,45 @@ def test_the_browser_cannot_close_a_solution(tmp_path, monkeypatch):
     assert "no solution yet" not in sheet and 'class="answer"' in sheet
 
 
+def test_a_solution_citing_its_own_problems_attempt_is_stored(tmp_path, monkeypatch):
+    with _desk_and_sheet(tmp_path, monkeypatch):
+        problem = web._db().create_problem("Problem 1", "op-amps", "find the gain")
+        attempt = web._db().create_attempt(problem["id"], "student")
+
+        added = server.canvas_card_add("solution", "P1 gain", {**SOLUTION, "attempt_id": attempt["id"]},
+                                       problem_id=problem["id"])
+
+    assert added["ok"] is True, added
+    assert added["card"]["payload"]["attempt_id"] == attempt["id"]
+
+
+def test_a_solution_citing_another_problems_attempt_is_refused(tmp_path, monkeypatch):
+    """The sheet prints the cited attempt's checks as this problem's evidence."""
+    with _desk_and_sheet(tmp_path, monkeypatch):
+        database = web._db()
+        mine = database.create_problem("HW1 P1 divider", "dividers", "find V2")
+        other = database.create_problem("HW1 P2 other", "dividers", "find V3")
+        borrowed = database.create_attempt(other["id"], "student")
+
+        refused = server.canvas_card_add("solution", "P1", {**SOLUTION, "attempt_id": borrowed["id"]},
+                                         problem_id=mine["id"])
+
+        assert refused["ok"] is False and refused["error"] == "wrong_attempt"
+        assert "HW1 P2 other" in refused["message"]
+        assert database.list_cards(kind="solution") == []
+
+
+def test_a_solution_citing_an_attempt_that_does_not_exist_is_refused(tmp_path, monkeypatch):
+    with _desk_and_sheet(tmp_path, monkeypatch):
+        problem = web._db().create_problem("Problem 3", "dividers", "find V_out")
+        for made_up in ("0123456789abcdef0123456789abcdef", "not-an-attempt"):
+            refused = server.canvas_card_add("solution", "P3", {**SOLUTION, "attempt_id": made_up},
+                                             problem_id=problem["id"])
+            assert refused["ok"] is False and refused["error"] == "wrong_attempt"
+            assert made_up in refused["message"]
+        assert web._db().list_cards(kind="solution") == []
+
+
 def test_clearing_the_desk_through_mcp_leaves_every_solution_on_the_sheet(tmp_path, monkeypatch):
     """List the desk and remove everything listed -- the natural way to clear it between problems."""
     with _desk_and_sheet(tmp_path, monkeypatch) as browser:
