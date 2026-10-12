@@ -157,6 +157,30 @@ def _ref(value: Any, where: str, seen: set[str]) -> str:
     return value
 
 
+def _sources_drive_alone(opamps: list[OpAmpUse], sources: list[Source]) -> None:
+    """Refuse a source on a node that another source or an op amp output also drives.
+
+    Each forces the node's voltage. The layout gives every attachment its own
+    hole on the strip, and the connectivity check passes because both name the
+    same net, so without this the card tells the student to tie the outputs
+    together.
+    """
+    drivers: dict[str, list[str]] = {}
+    for use in opamps:
+        drivers.setdefault(use.out, []).append(f"op amp {use.ref}")
+    for source in sources:
+        drivers.setdefault(source.node, []).append(f"source {source.ref}")
+    for source in sources:
+        names = drivers[source.node]
+        if len(names) > 1:
+            listed = f"{', '.join(names[:-1])} and {names[-1]}"
+            raise BuildError(
+                f"{listed} {'both' if len(names) == 2 else 'all'} drive node {source.node!r}: outputs "
+                f"tied together short into each other even at the same setting, and the current can "
+                f"damage a supply, a generator or an op amp; give each output its own node, with a "
+                f"resistor between them if they are meant to combine")
+
+
 def parse_build(content: Any) -> Build:
     if not isinstance(content, dict):
         raise BuildError("build must be an object")
@@ -257,6 +281,7 @@ def parse_build(content: Any) -> Build:
         if kind != "dc" and freq <= 0:
             raise BuildError(f"{ref}: freq must be positive")
         sources.append(Source(ref, kind, node, amplitude, freq))
+    _sources_drive_alone(opamps, sources)
 
     probes: list[Probe] = []
     for entry in _entries(content, "probes", "probe"):

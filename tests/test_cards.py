@@ -237,6 +237,18 @@ def test_a_bad_build_is_refused_naming_the_field():
         build_card("expected", "x", {**lab1.EXP7_DAC, "probes": []})
 
 
+def test_tied_sources_are_refused_by_the_breadboard_and_expected_cards_alike():
+    """The expected card used to reach ngspice and come back with "DC solution failed"."""
+    build = {"supply": {"vplus": 5, "vminus": 0},
+             "parts": [{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": ["drive", "gnd"]}],
+             "sources": [{"ref": "V1", "kind": "dc", "node": "drive", "volts": 1},
+                         {"ref": "V2", "kind": "dc", "node": "drive", "volts": 2}],
+             "probes": [{"label": "drive", "node": "drive", "role": "output"}]}
+    for kind in ("breadboard", "expected"):
+        with pytest.raises(CardError, match="source V1 and source V2 both drive node 'drive'"):
+            build_card(kind, "x", build)
+
+
 # --- schematic ----------------------------------------------------------------
 
 INVERTING_NETLIST = "Vs 1 0 {V}\nRi 1 2 10e3\nRf 2 3 100e3\nE1 3 0 opamp 0 2 {A}"

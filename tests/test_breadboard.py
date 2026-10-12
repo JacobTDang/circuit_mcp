@@ -93,6 +93,48 @@ def test_a_source_must_drive_a_node_that_exists_and_is_not_ground():
         parse_build(spec(sources=[{"ref": "VS", "kind": "dc", "node": "0", "volts": 1}]))
 
 
+TIED_SOURCES = {
+    "supply": {"vplus": 5, "vminus": 0},
+    "parts": [{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": ["drive", "gnd"]}],
+    "probes": [{"label": "drive", "node": "drive", "role": "output"}],
+}
+DC1 = {"kind": "dc", "volts": 1}
+SINE = {"kind": "sine", "vrms": 1, "freq": 1000}
+
+
+def tied(first, second):
+    return {**TIED_SOURCES, "sources": [{"ref": "V1", "node": "drive", **first},
+                                        {"ref": "V2", "node": "drive", **second}]}
+
+
+@pytest.mark.parametrize("first,second", [
+    (DC1, {"kind": "dc", "volts": 2}),
+    (DC1, DC1),                         # the same setting still fights: no two supplies are exactly equal
+    (DC1, SINE),
+    (SINE, {"kind": "square", "vpp": 2, "freq": 500}),
+    (SINE, SINE),
+])
+def test_two_sources_on_one_node_are_refused_naming_both_the_node_and_the_short(first, second):
+    with pytest.raises(BuildError) as refused:
+        parse_build(tied(first, second))
+    message = str(refused.value)
+    assert "source V1 and source V2 both drive node 'drive'" in message
+    assert "short" in message and "damage" in message
+
+
+def test_a_source_on_an_op_amp_output_is_refused_as_tied_outputs():
+    generator = {"ref": "VX", "kind": "dc", "node": "out", "volts": 1}
+    with pytest.raises(BuildError, match="op amp U1A and source VX both drive node 'out'"):
+        parse_build(spec(sources=MINIMAL["sources"] + [generator]))
+
+
+def test_three_outputs_on_one_node_are_all_named():
+    build = tied(DC1, SINE)
+    build["sources"].append({"ref": "V3", "kind": "dc", "node": "drive", "volts": 3})
+    with pytest.raises(BuildError, match="source V1, source V2 and source V3 all drive node 'drive'"):
+        parse_build(build)
+
+
 def test_a_probe_must_name_a_node_in_the_build():
     with pytest.raises(BuildError, match="not in the build"):
         parse_build(spec(probes=[{"label": "x", "node": "nowhere"}]))
