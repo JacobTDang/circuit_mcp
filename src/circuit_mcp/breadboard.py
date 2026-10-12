@@ -35,7 +35,8 @@ JUMPER_ROWS = {"top": "bcdae", "bottom": "ihgjf"}
 PART_ROWS = {"top": "bcda", "bottom": "ihgj"}
 MAX_SPAN = 4   # columns a bent quarter-watt resistor lead reaches
 GROUND_ALIASES = {"0", "gnd", "ground"}
-NET_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+# Names are checked with fullmatch: in re.match, $ also matches before a final newline.
+NET_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 PART_KINDS = {"resistor": 2, "capacitor": 2, "inductor": 2, "led": 2, "pot": 3}
 SOURCE_KINDS = {"dc", "sine", "square"}
 MAX_PARTS = 24
@@ -130,10 +131,11 @@ def _entries(content: dict, key: str, what: str) -> list:
 def _node(name: Any, where: str) -> str:
     if not isinstance(name, str) or not name.strip():
         raise BuildError(f"{where}: node name must be text")
-    name = name.strip()
+    # Refused rather than trimmed, as a ref is: the name the student wrote is the
+    # name the board and the simulator use.
     if name.lower() in GROUND_ALIASES:
         return GROUND
-    if not NET_NAME.match(name):
+    if not NET_NAME.fullmatch(name):
         raise BuildError(
             f"{where}: node name {name!r} must start with a letter and continue "
             f"with letters, digits, or underscore")
@@ -149,7 +151,7 @@ def _number(value: Any, where: str) -> float:
 
 
 def _ref(value: Any, where: str, seen: set[str]) -> str:
-    if not isinstance(value, str) or not re.match(r"^[A-Za-z][A-Za-z0-9]*$", value):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", value):
         raise BuildError(f"{where}: ref must be letters and digits, like R1 or U1A")
     # ngspice folds case: R1 and r1 would be two parts on the board and one
     # device to the simulator.

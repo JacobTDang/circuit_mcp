@@ -203,6 +203,21 @@ def test_rail_names_are_reserved():
         parse_build(spec(parts=[{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": ["vplus", "out"]}]))
 
 
+@pytest.mark.parametrize("ref", ["R1\n", "R1 ", " R1"])
+def test_a_ref_with_whitespace_around_it_is_refused(ref):
+    """R1 with a trailing newline passed the old pattern and split its line in the simulator's deck."""
+    parts = [{"ref": ref, "kind": "resistor", "value": "1k", "nodes": ["fb", "0"]}, MINIMAL["parts"][1]]
+    with pytest.raises(BuildError, match="ref must be letters and digits"):
+        parse_build(spec(parts=parts))
+
+
+@pytest.mark.parametrize("node", ["fb\n", "fb ", " fb", "gnd\n"])
+def test_a_node_with_whitespace_around_it_is_refused(node):
+    parts = [{"ref": "R1", "kind": "resistor", "value": "1k", "nodes": [node, "0"]}, MINIMAL["parts"][1]]
+    with pytest.raises(BuildError, match="must start with a letter and continue"):
+        parse_build(spec(parts=parts))
+
+
 def test_pot_positions_default_to_the_middle_and_are_bounded():
     pot = {"ref": "R3", "kind": "pot", "value": "10k", "nodes": ["vi", "w", "0"]}
     assert parse_build(spec(parts=MINIMAL["parts"] + [pot])).pot_positions == {"R3": 0.5}
