@@ -221,6 +221,15 @@ def test_app_js_shows_the_pot_positions_on_the_expected_card(tmp_path, monkeypat
         assert "p.pots" in footer, "the expected card never names the pot settings the numbers assume"
 
 
+def test_the_breadboard_drawing_has_no_minimum_width(tmp_path, monkeypatch):
+    """min-width:560px stopped the second press of minus from shrinking the drawing."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        css = browser.get("/assets/canvas.css").text
+        rule = css.split(".card-board svg{", 1)[1].split("}", 1)[0]
+        assert "560px" not in rule
+        assert "min-width:0" in rule
+
+
 def test_app_js_draws_the_net_legend_and_links_each_step_to_the_board(tmp_path, monkeypatch):
     with _browser(tmp_path, monkeypatch) as browser:
         app_script = browser.get("/assets/app.js").text
