@@ -100,7 +100,7 @@ from .mna import MODES as _SETUP_MODES
 from .mna import check_setup as _mna_check_setup
 from .mna import circuit_equations as _mna_circuit_equations
 from .ocr_client import OCR_WORKER
-from .parsing import ParseError, parse_equation, parse_expression
+from .parsing import ParseError, as_text, parse_equation, parse_expression
 from .steps import check_steps, check_written
 from .spice import SpiceError, simulate_spice as _simulate_spice
 from .symbols import SubstitutionError, SymbolConflictError, bind
@@ -148,9 +148,12 @@ def _rendered(expr: Any) -> dict[str, str]:
     Note that recovery is exact in *value*, not necessarily in *tree*: SymPy
     re-evaluates as it rebuilds, so a non-canonical expression out of lcapy can
     come back reassociated. Compare with ``equivalent()``, not with ``==``.
+
+    ``text`` is ``as_text``, not ``str``: ``str`` prints the imaginary unit in a
+    phasor as ``I``, which the next tool would read as a current.
     """
     expr = sp.sympify(expr)
-    return {"text": str(expr), "srepr": sp.srepr(expr)}
+    return {"text": as_text(expr), "srepr": sp.srepr(expr)}
 
 
 def _rendered_values(values: dict[str, Any]) -> dict[str, dict[str, str]]:
@@ -187,10 +190,13 @@ def _rendered_matrix(matrix: dict | None) -> dict | None:
 
 
 def _stringified(counterexample: dict | None) -> dict[str, str] | None:
-    """A counterexample's keys are SymPy symbols; JSON needs strings."""
+    """A counterexample's keys are SymPy symbols; JSON needs strings.
+
+    A value can be complex, and ``str`` would write its imaginary unit as ``I``.
+    """
     if not counterexample:
         return None
-    return {str(symbol): str(value) for symbol, value in counterexample.items()}
+    return {str(symbol): as_text(value) for symbol, value in counterexample.items()}
 
 
 def _failure(kind: str, message: str) -> dict[str, Any]:
@@ -1335,12 +1341,25 @@ def check_equivalence(expr_a: str, expr_b: str, attempt_id: str | None = None) -
     disagreement, strong evidence when it does not. A disagreement comes with a
     ``counterexample``: the values at which the two sides differ.
 
+    The random values are positive, which cannot tell ``Abs(x)``, ``re(x)`` or
+    ``conjugate(x)`` from ``x``. Inside those, ``sign``, ``arg``, ``im``,
+    ``Max``, ``Min``, ``Heaviside`` and a root of a square such as
+    ``sqrt(x^2)``, symbols are also tried at negative and complex values, so
+    ``Abs(Vo)`` is not ``Vo``; ``detail`` names the values that broke it. A
+    phasor written with ``j`` keeps the symbols beside ``j`` real.
+
     Both sides are parsed onto one set of symbols, so ``Rf`` on the left is the
     same object as ``Rf`` on the right.
 
     ``is`` is read as ``i_s``: it is the standard source-current name and a
     Python keyword, so it is rewritten before parsing and echoed back in
     ``renamed_symbols``.
+
+    ``I`` and ``E`` are ordinary symbols -- a current, an EMF -- not SymPy's
+    constants. ``j`` is the imaginary unit and ``e`` is Euler's number, so
+    ``e^(-t/(R*C))`` is ``exp(-t/(R*C))``; write ``j*w``, since ``jw`` is one
+    name. Each ``j`` or ``e`` read is echoed in ``renamed_symbols`` (``"j":
+    "sqrt(-1)"``), and every returned ``text`` spells them the same way.
 
     Pass ``attempt_id`` to file this check against an attempt; it then appears
     in ``attempt_history`` with its verdict.
@@ -1380,6 +1399,13 @@ def check_derivation(
     Python keyword, so it is rewritten before parsing and echoed back in
     ``renamed_symbols``.
 
+    ``I`` and ``E`` are ordinary symbols -- a current, an EMF -- not SymPy's
+    constants. ``j`` is the imaginary unit and ``e`` is Euler's number, so
+    ``e^(-t/(R*C))`` is ``exp(-t/(R*C))``; write ``j*w``, since ``jw`` is one
+    name. Each ``j`` or ``e`` read is echoed in ``renamed_symbols`` (``"j":
+    "sqrt(-1)"``), and every returned ``text`` spells them the same way, so
+    :func:`derive`'s ``text`` reads back unchanged as ``truth``.
+
     Pass ``attempt_id`` to file this check against an attempt; it then appears
     in ``attempt_history`` with its verdict.
     """
@@ -1413,6 +1439,11 @@ def check_setup(
     ``equations`` are written ``"lhs = rhs"``. ``unknowns`` names what the
     system solves for: node voltages as ``V1`` or ``V_1``, branch currents as
     ``I_R1`` or ``IR1``.
+
+    In ``equations``, ``I`` and ``E`` are ordinary symbols -- a current, an EMF
+    -- ``j`` is the imaginary unit and ``e`` is Euler's number, so a phasor
+    setup writes ``j*omega_0*C*V2``. lcapy reads a netlist value ``I`` or ``j``
+    as the imaginary unit, so name a current source's value ``Is``, not ``I``.
 
     This is not a diff against lcapy's equations -- there are many correct
     formulations, and flagging a correct-but-different one is the worst thing
@@ -1939,8 +1970,9 @@ def canvas_card_add(
       Every step is checked: each transition must be an algebraic identity and the
       last step must equal ``truth``. A card with one bad step is refused, naming
       the transition (``card_refused``). Substituting a circuit law such as
-      ``I = C*dV_C`` is not an identity -- a walkthrough is the algebra *after*
-      setup, so start a new card at the substituted form.
+      ``I = C*dV_C``, with ``I`` the capacitor current, is not an identity -- a
+      walkthrough is the algebra *after* setup, so start a new card at the
+      substituted form.
     * ``vocabulary`` -- ``{"terms": [{"term", "definition", "expression"?}, ...]}``
     * ``breadboard`` -- a *build*: ``{"supply": {"vplus", "vminus"}, "chips": [{"ref", "part"}],
       "parts": [{"ref", "kind", "value", "nodes"}], "opamps": [{"ref", "chip", "section",
@@ -1973,6 +2005,10 @@ def canvas_card_add(
     it.
     The drawing is read back out of its own geometry and refused unless it still
     says that netlist. The browser escapes every text field either way.
+
+    In every card's expressions ``I`` and ``E`` are ordinary symbols -- a
+    current, an EMF -- ``j`` is the imaginary unit and ``e`` is Euler's number,
+    so ``e^(-t/(R*C))`` is ``exp(-t/(R*C))``. Write ``j*w``: ``jw`` is one name.
     """
     if kind == "solution" and not problem_id:
         return _failure(

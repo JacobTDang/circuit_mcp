@@ -15,7 +15,9 @@ their iPad:
 5. Stop and wait for confirmation or corrections. Never issue a mathematical
    verdict from an unconfirmed visual transcription.
 6. After confirmation, translate the work into lcapy netlist syntax and the
-   server's restricted SymPy text syntax.
+   server's restricted SymPy text syntax. In that syntax `I` and `E` are
+   ordinary symbols (a current, an EMF), `j` is the imaginary unit and `e` is
+   Euler's number: `e^(-t/(R*C))`, `1/(1 + j*w*R*C)`.
 7. Use `check_setup` for circuit laws (with `mode="ideal"` when the setup uses
    the ideal op-amp's virtual short, such as `V2 = 0`), `check_derivation` for
    ordered algebra, and `derive` only as the ground-truth oracle needed for
@@ -30,9 +32,9 @@ their iPad:
    `vocabulary` card for terms, and a `walkthrough` card for the algebra --
    ordered steps in the restricted syntax with a short note on each. A
    walkthrough is verified step by step and refused if any transition is not an
-   identity; a circuit-law substitution such as `I = C*dV_C` is not one, so
-   start a new card at the substituted form. Write the words as text, never
-   markup; the server renders the math.
+   identity; a circuit-law substitution such as `I = C*dV_C`, with `I` the
+   capacitor current, is not one, so start a new card at the substituted form.
+   Write the words as text, never markup; the server renders the math.
    A `schematic` card draws the circuit itself from the netlist `derive` was
    given, so the drawing and the maths cannot describe different circuits; it is
    the card to reach for on a design problem.

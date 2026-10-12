@@ -428,6 +428,17 @@ name, is rewritten to `i_s` before the screen runs, and every result that parsed
 reports `renamed_symbols` so the substitution is never silent. All other keywords
 stay rejected.
 
+The notation is a circuits course's, not SymPy's. `I` and `E` are ordinary symbols
+-- a current, an EMF. `j` is the imaginary unit and `e` is Euler's number, so
+`e^(-t/(R*C))` is `exp(-t/(R*C))` and `j^2` is `-1`; write `j*w`, since `jw` is one
+name. Each read of `j` or `e` is reported in `renamed_symbols` (`"j": "sqrt(-1)"`,
+`"e": "exp(1)"`). Read with SymPy's meanings, `I^2*R` was "proved" equal to `-R`.
+Every returned `text` spells the two constants the same way, so it reads back as the
+same expression. A result that names a quantity `e` -- lcapy reads a netlist value
+`e` as a symbol -- is refused rather than returned as text that would read back as
+2.718. lcapy reads a netlist value `I` or `j` as the imaginary unit, so give a
+current source a value such as `Is`.
+
 Parallel combination is written `par(R1, R2, ...)`, not `R1 || R2`: SymPy overloads
 `|` as boolean `Or`, so admitting the operator would silently turn a resistance into
 a logical expression.
@@ -435,6 +446,17 @@ a logical expression.
 An n-term sum is written `sum_n(V/R^i, i, 1, n)`. A summation bound is a term
 count rather than a continuous quantity, so `check_equivalence` expands it at
 n = 1 through 4 instead of substituting a random value for it.
+
+The random values are positive, and at a positive value `Abs(x)`, `re(x)` and
+`conjugate(x)` are just `x`. So where `Abs`, `sign`, `arg`, `re`, `im`, `conjugate`,
+`Max`, `Min`, `Heaviside` or a root of a square such as `sqrt(x^2)` appears, the
+symbols inside it are tried again at negative and then complex values: `Abs(Vo)`,
+`re(Z)` and `sqrt(Vo^2)` are not `Vo`, `Z` and `Vo`, and `detail` says which values
+broke the match. A symbol assumed positive, as lcapy's component values are, keeps
+positive values, and a phasor written with `j` takes the symbols beside `j` as real
+parts, so `Abs(1/(1 + j*w*R*C))` is still `1/sqrt(1 + (w*R*C)^2)`. Symbols outside
+those functions stay positive, so splitting `sqrt(L*C)` into `sqrt(L)*sqrt(C)` still
+holds.
 
 A name ending in the index is that term's own: `sum_n(Rf/RN_i*vN_i, i, 1, n)`
 expands to `Rf/RN_1*vN_1 + Rf/RN_2*vN_2 + …`, which is the shape a summing

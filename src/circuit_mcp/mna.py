@@ -41,6 +41,7 @@ from lcapy import Circuit
 
 from .analysis import ideal_limit
 from .equivalence import equivalent
+from .parsing import as_text, printed
 from .symbols import bind, safe_subs
 
 # lcapy raises these when a netlist is unbuildable or unsolvable. OSError is in
@@ -282,7 +283,6 @@ def circuit_equations(netlist: str) -> dict:
         )
 
     equations: list[sp.Eq] = []
-    display: list[str] = []
     unknowns: list[str] = []
     matrix: dict | None = None
 
@@ -301,13 +301,17 @@ def circuit_equations(netlist: str) -> dict:
             for value in nodal.nodal_equations().values():
                 lhs, rhs = sp.sympify(value.lhs.sympy), sp.sympify(value.rhs.sympy)
                 equations.append(sp.Eq(lhs, rhs, evaluate=False))
-                display.append(f"{lhs} = {rhs}")
             unknowns = [_unknown_name(u) for u in nodal.unknowns]
             matrix = {"A": sp.Matrix(nodal.A), "b": sp.Matrix(nodal.b)}
         except _LCAPY_ERRORS as exc:
             raise CircuitError(
                 f"lcapy could not form the nodal system: {exc}"
             ) from exc
+
+    # "lhs = rhs" is check_setup's own input form, so a line copied into it
+    # has to read back as this equation. Outside the try: a ParseError is a
+    # ValueError, and would be reported as lcapy's failure.
+    display = [f"{as_text(equation.lhs)} = {as_text(equation.rhs)}" for equation in equations]
 
     return {
         "domain": solution.domain,
@@ -823,7 +827,7 @@ def _roles_note(roles: tuple[EquationRole, ...]) -> str:
         if role.role in ("solved", "ambiguous"):
             lines.append(
                 f"Equation {role.index} is equivalent, on its own, to "
-                f"{role.unknown} = {role.value}: {role.detail}."
+                f"{role.unknown} = {printed(role.value)}: {role.detail}."
             )
     return " ".join(lines)
 

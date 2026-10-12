@@ -1430,6 +1430,124 @@ def test_a_derivation_without_a_reserved_name_reports_no_rename():
     result = check_derivation(["Rf/Ri"], "Rf/Ri")
     assert result["renamed_symbols"] == {}
 
+
+# --- circuit notation: I and E are quantities, j and e are constants ----------
+
+@pytest.mark.parametrize("left, right", [
+    ("I^2*R", "-R"),
+    ("V/I", "-I*V"),
+    ("E/(R1+R2)", "exp(1)/(R1+R2)"),
+])
+def test_a_current_or_an_emf_is_never_read_as_a_constant(left, right):
+    result = check_equivalence(left, right)
+    assert result["ok"] is True
+    assert result["equivalent"] is False
+
+
+def test_a_squared_current_no_longer_derives_a_minus_sign():
+    result = check_derivation(["I^2*R*t", "-R*t"], "I^2*R*t")
+    assert result["ok"] is False
+    assert result["kind"] == "algebra"
+
+
+def test_an_rc_decay_written_with_e_checks_out_and_says_how_e_was_read():
+    result = check_derivation(["V0*e^(-t/(R*C))"], "V0*exp(-t/(R*C))")
+    assert result["ok"] is True
+    assert result["renamed_symbols"] == {"e": "exp(1)"}
+
+
+def test_j_squared_is_minus_one_and_says_how_j_was_read():
+    result = check_equivalence("j^2", "-1")
+    assert result["equivalent"] is True
+    assert result["renamed_symbols"] == {"j": "sqrt(-1)"}
+
+
+def test_a_phasor_setup_is_written_with_j_as_lcapy_solves_it():
+    """lcapy's AC solution carries the imaginary unit; the student writes it as j."""
+    result = check_setup(
+        "V1 1 0 ac Vs\nR1 1 2 R\nC1 2 0 C",
+        ["V1 = Vs", "(V2 - V1)/R + j*omega_0*C*V2 = 0"],
+        ["V1", "V2"],
+    )
+    assert result["ok"] is True, result
+
+
+def test_a_setup_message_spells_the_imaginary_unit_j():
+    """The note quotes lcapy's phasor; written with I it names a current."""
+    result = check_setup(
+        "V1 1 0 ac Vs\nR1 1 2 R\nC1 2 0 C",
+        ["V1 = Vs", "V2 = Vs/(1 + j*omega_0*R*C)"],
+        ["V1", "V2"],
+    )
+    assert result["ok"] is True
+    assert "V2 = -j*Vs/(C*R*omega_0 - j)" in result["message"]
+
+
+def test_circuit_equations_display_spells_the_imaginary_unit_j():
+    result = circuit_equations("V1 1 0 j\nR1 1 2 R\nR2 2 0 R")
+    assert "V1 = j" in result["display"]
+
+
+def test_a_phasor_mismatch_is_explained_with_j():
+    result = check_equivalence("1/(1 + j*w)", "1/(1 - j*w)")
+    assert result["equivalent"] is False
+    assert "j" in result["detail"] and "I" not in result["detail"]
+
+
+def test_derived_text_reads_back_as_the_same_expression():
+    """A result's text is what goes back into the next tool, so I must print as j."""
+    Vs, C, R, w0 = sp.symbols("Vs C R omega_0", positive=True)
+    rendered = server_module._rendered(-sp.I * Vs / (C * R * w0 - sp.I))
+    assert "I" not in rendered["text"]
+    assert check_equivalence(rendered["text"], "-j*Vs/(C*R*omega_0 - j)")["equivalent"] is True
+
+
+def test_derive_refuses_text_that_would_read_a_value_named_e_back_as_eulers_number():
+    result = derive("V1 1 0 Vs\nR1 1 2 e\nR2 2 0 R", 1, 0, 2, 0, "finite")
+    assert result["ok"] is False
+    assert result["error"] == "parse_error"
+    assert "'e'" in result["message"]
+
+
+@pytest.mark.parametrize("left, right", [("Abs(Vo)", "Vo"), ("re(Z)", "Z"), ("conjugate(H)", "H")])
+def test_a_magnitude_real_part_or_conjugate_is_not_its_argument(left, right):
+    result = check_equivalence(left, right)
+    assert result["ok"] is True
+    assert result["equivalent"] is False
+    assert result["counterexample"]
+
+
+def test_a_complex_counterexample_is_written_with_j():
+    result = check_equivalence("re(Z)", "Z")
+    value = result["counterexample"]["Z"]
+    assert "j" in value and "I" not in value
+    assert check_equivalence(f"re({value})", value)["equivalent"] is False
+
+
+def test_a_derivation_that_drops_a_magnitude_is_not_an_equality():
+    result = check_derivation(["Abs(Vo)/R", "Vo/R"], "Vo/R")
+    assert result["ok"] is False
+    assert result["kind"] == "algebra"
+
+
+def test_a_walkthrough_that_drops_a_magnitude_is_refused():
+    result = canvas_card_add("walkthrough", "magnitude", {
+        "truth": "Vo",
+        "steps": [{"expression": "Abs(Vo)"}, {"expression": "Vo"}],
+    })
+    assert result["ok"] is False
+    assert result["error"] == "card_refused"
+
+
+@pytest.mark.parametrize("name", ["check_equivalence", "check_derivation", "check_setup",
+                                  "canvas_card_add"])
+def test_every_expression_tool_says_how_I_E_j_and_e_are_read(name):
+    tools = {tool.name: tool for tool in asyncio.run(server_module.server.list_tools())}
+    description = " ".join(tools[name].description.split())
+    assert "``I`` and ``E`` are ordinary symbols" in description
+    assert "``j`` is the imaginary unit" in description
+    assert "``e`` is Euler's number" in description
+
 def test_check_equivalence_confirms_a_bounded_sum_against_its_closed_form():
     """The n-term sum a summing amplifier writes, checked at n = 1 through 4."""
     result = check_equivalence("sum_n(V/R^i, i, 1, n)", "V*(1 - R^(-n))/(R - 1)")
