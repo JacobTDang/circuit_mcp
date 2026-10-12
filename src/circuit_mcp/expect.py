@@ -30,10 +30,16 @@ def _spice_node(net: str) -> str:
 
 
 def deck(build: Build) -> str:
-    """The ngspice netlist for a build. Deterministic, and returned to the caller."""
+    """The ngspice netlist for a build. Deterministic, and returned to the caller.
+
+    Every device name is its kind's letter and the ref, except the rails and a
+    pot's two halves, which carry an underscore. A ref is letters and digits, so
+    no part can take one of those names: written as Vplus and RR3a, they were
+    taken by a source called plus and by a resistor R3a beside pot R3.
+    """
     lines = [P.opamp_subcircuit(),
-             f"Vplus vplus 0 dc {build.vplus:g}",
-             f"Vminus vminus 0 dc {build.vminus:g}"]
+             f"V_plus vplus 0 dc {build.vplus:g}",
+             f"V_minus vminus 0 dc {build.vminus:g}"]
     led_is = P.led_saturation_current()
     lines.append(f".model led D(IS={led_is:.3e} N=2)")
     for part in build.parts:
@@ -46,8 +52,8 @@ def deck(build: Build) -> str:
             total = P.parse_value(part.value)
             pos = build.pot_positions[part.ref]
             upper, lower = max(1.0, total * (1 - pos)), max(1.0, total * pos)
-            lines.append(f"R{part.ref}a {nodes[0]} {nodes[1]} {upper:g}")
-            lines.append(f"R{part.ref}b {nodes[1]} {nodes[2]} {lower:g}")
+            lines.append(f"R{part.ref}_a {nodes[0]} {nodes[1]} {upper:g}")
+            lines.append(f"R{part.ref}_b {nodes[1]} {nodes[2]} {lower:g}")
     for use in build.opamps:
         chip = build.chips[use.chip]
         minus = "vminus" if build.dual_supply else "0"

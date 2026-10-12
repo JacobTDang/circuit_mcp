@@ -32,12 +32,33 @@ def probe(build, label):
 def test_the_deck_for_exp1_is_complete_and_deterministic():
     text = deck(parse_build(lab1.EXP1_NONINVERTING))
     assert ".subckt railamp" in text
-    assert "Vplus vplus 0 dc 15" in text and "Vminus vminus 0 dc -15" in text
-    assert "RR3a vsine vi 5000" in text and "RR3b vi 0 5000" in text
+    assert "V_plus vplus 0 dc 15" in text and "V_minus vminus 0 dc -15" in text
+    assert "RR3_a vsine vi 5000" in text and "RR3_b vi 0 5000" in text
     assert "RR1 fb 0 1000" in text and "RR2 out fb 15000" in text
     assert "XU1A vi fb out vplus vminus railamp hi=1.5 lo=0.5" in text
     assert "VVS vsine 0 dc 0 SIN(0 1.41421 1000)" in text
     assert text == deck(parse_build(lab1.EXP1_NONINVERTING))
+
+
+def test_no_ref_makes_a_device_name_ngspice_already_has():
+    """A pot's halves and the rail sources share ngspice's one case-blind namespace with
+    the build's refs: pot R3 became RR3a beside resistor R3a, and source plus became
+    Vplus beside the rail, and ngspice refused the second of each."""
+    build = {
+        "supply": {"vplus": 5, "vminus": -5},
+        "parts": [{"ref": "R3", "kind": "pot", "value": "10k", "nodes": ["top", "mid", "gnd"]},
+                  {"ref": "R3a", "kind": "resistor", "value": "1k", "nodes": ["a", "mid"]},
+                  {"ref": "R3b", "kind": "resistor", "value": "1k", "nodes": ["mid", "gnd"]}],
+        "sources": [{"ref": "plus", "kind": "dc", "node": "top", "volts": 1},
+                    {"ref": "Minus", "kind": "dc", "node": "a", "volts": 2}],
+        "probes": [{"label": "mid", "node": "mid"}],
+    }
+    text = deck(parse_build(build))
+    body = text.split(".ends railamp", 1)[1]
+    names = [line.split()[0] for line in body.splitlines() if line and not line.startswith(".")]
+    assert len({name.casefold() for name in names}) == len(names), names
+    # 5k up to 1 V, 1k up to 2 V, and 5k parallel 1k down: 11/12 V by nodal analysis.
+    assert math.isclose(reading(expectations(build), "mid")["volts"], 11 / 12, abs_tol=1e-3)
 
 
 def test_single_supply_ties_the_chip_to_ground_and_models_the_led():
