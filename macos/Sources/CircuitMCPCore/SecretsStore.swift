@@ -7,7 +7,7 @@ public enum SecretsStoreError: Error, Equatable {
 }
 
 /// The OpenRouter key and model, kept as generic passwords in the login Keychain.
-public struct SecretsStore {
+public struct SecretsStore: SettingsStoring {
     public static let apiKeyAccount = "OPENROUTER_API_KEY"
     public static let modelAccount = "OPENROUTER_MODEL"
 

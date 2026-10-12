@@ -478,24 +478,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         key.placeholderString = "OpenRouter API key"
         let model = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
         model.placeholderString = "Model, for example qwen/qwen3-coder:free"
-        do {
-            key.stringValue = try secrets.read(SecretsStore.apiKeyAccount) ?? ""
-            model.stringValue = try secrets.read(SecretsStore.modelAccount) ?? ""
-        } catch {
-            alert.informativeText += "\n\nCurrent values could not be read: \(error)"
+        let editor = SettingsEditor(store: secrets)
+        let loaded = editor.load()
+        switch loaded.apiKey {
+        case .available(let value):
+            key.stringValue = value ?? ""
+        case .unavailable(let reason):
+            key.placeholderString = "Unavailable — existing API key will not be changed"
+            key.isEnabled = false
+            alert.informativeText += "\n\nThe existing API key is unavailable: \(reason)"
+        }
+        switch loaded.model {
+        case .available(let value):
+            model.stringValue = value ?? ""
+        case .unavailable(let reason):
+            model.placeholderString = "Unavailable — existing model will not be changed"
+            model.isEnabled = false
+            alert.informativeText += "\n\nThe existing model is unavailable: \(reason)"
         }
         let fields = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 54))
         fields.addSubview(key)
         fields.addSubview(model)
         alert.accessoryView = fields
-        alert.addButton(withTitle: "Save")
+        let save = alert.addButton(withTitle: "Save")
+        save.isEnabled = loaded.canSave
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
-            try saveOrClear(key.stringValue, SecretsStore.apiKeyAccount)
-            try saveOrClear(model.stringValue, SecretsStore.modelAccount)
+            try editor.save(apiKey: key.stringValue, model: model.stringValue, original: loaded)
         } catch {
-            presentAlert("The settings were not saved.", "\(error)")
+            presentAlert("The settings were not saved.", error.localizedDescription)
             return
         }
         // The sheet has just promised that saving restarts the server, so it restarts
@@ -503,15 +515,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the folders this time or puts the reason back on screen with its buttons. Skipping the
         // restart when there are no folders yet saved the key and then said nothing at all.
         restartServer()
-    }
-
-    private func saveOrClear(_ value: String, _ account: String) throws {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            try secrets.delete(account)
-        } else {
-            try secrets.write(trimmed, for: account)
-        }
     }
 
     @objc private func copyMCPCommand() {
