@@ -25,21 +25,30 @@ verdict rather than an exception:
   which raises rather than quietly no-opping.
 * A circuit with no excitation solves to all-zero, which satisfies every
   homogeneous system ever written. That is refused, not reported as correct.
+
+lcapy's op-amp always has a finite gain, and at finite gain the inverting
+input is *not* at ground -- so the textbook virtual-ground equation is false of
+the circuit as written. ``mode="ideal"`` judges the equations against the limit
+as the open-loop gain goes to infinity instead, which is the model a setup
+written with ``V- = V+`` is actually using.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import sympy as sp
 from lcapy import Circuit
 
+from .analysis import ideal_limit
 from .equivalence import equivalent
-from .symbols import safe_subs
+from .symbols import bind, safe_subs
 
 # lcapy raises these when a netlist is unbuildable or unsolvable. OSError is in
 # the list because lcapy treats a single-line string as a *filename*, so a
 # garbled one-line netlist surfaces as FileNotFoundError.
 _LCAPY_ERRORS = (ValueError, KeyError, RuntimeError, OSError)
+
+MODES = ("finite", "ideal")
 
 
 class CircuitError(ValueError):
@@ -48,6 +57,15 @@ class CircuitError(ValueError):
 
 class SetupInputError(ValueError):
     """The equations or unknowns do not line up with the circuit."""
+
+
+class MissingGainError(ValueError):
+    """Mode 'ideal' was asked of a circuit with no open-loop gain to take to infinity.
+
+    Not a :class:`SetupInputError`: that becomes a verdict-shaped result, and
+    this says nothing about the equations -- the tool was asked something the
+    netlist cannot answer.
+    """
 
 
 @dataclass(frozen=True)
@@ -162,6 +180,74 @@ def _solve(circuit: Circuit) -> _Solution:
             for name, superposition in currents.items()
         },
         opaque_currents=opaque,
+    )
+
+
+def _opamps(circuit: Circuit) -> dict[str, tuple[str, str, str]]:
+    """Op-amp name -> (output, non-inverting input, inverting input)."""
+    return {
+        name: tuple(str(element.nodes[i]) for i in (0, 2, 3))
+        for name, element in circuit.elements.items()
+        if element.is_opamp
+    }
+
+
+def _ideal(solution: _Solution, gain: str) -> _Solution:
+    """The same solution with the op-amps' open-loop gain taken to infinity.
+
+    Every op-amp has to carry this one gain symbol: an op-amp whose gain is
+    named otherwise would stay finite, and half an ideal circuit labelled
+    ideal is a wrong answer. A value with no finite limit means the ideal model
+    has no solution for this circuit, and infinity substituted into an equation
+    proves nothing either way, so that is refused too.
+    """
+    misnamed = sorted(
+        f"op-amp {name}'s gain is named {str(element.args[0])!r}"
+        for name, element in solution.circuit.elements.items()
+        if element.is_opamp and str(element.args[0]) != gain
+    )
+    if misnamed:
+        raise MissingGainError(
+            f"Mode 'ideal' takes the open-loop gain {gain!r} to infinity, and "
+            f"an op-amp whose gain is named otherwise would stay finite: "
+            f"{'; '.join(misnamed)}. An op-amp written without a gain gets one "
+            f"named after itself. Write every op-amp's gain as {{{gain}}}, or "
+            f"use mode 'finite'."
+        )
+    present = sorted(
+        {name for value in solution.values.values() for name in bind(value)}
+    )
+    if gain not in present:
+        raise MissingGainError(
+            f"No symbol named {gain!r} in this circuit's solution ({present}), "
+            f"so there is no open-loop gain to take to infinity. Mode 'ideal' "
+            f"applies to a circuit whose op-amp gain is written {{{gain}}}; use "
+            f"mode 'finite' otherwise."
+        )
+
+    limits: dict[str, sp.Expr] = {}
+    for name, value in solution.values.items():
+        if gain not in bind(value):
+            limits[name] = value
+            continue
+        limit = ideal_limit(value, gain)
+        if limit.has(sp.Limit):
+            raise CircuitError(
+                f"SymPy could not take {name} to its limit as {gain} goes to "
+                f"infinity; it left {limit}."
+            )
+        if limit.has(sp.oo, -sp.oo, sp.zoo, sp.nan):
+            raise CircuitError(
+                f"{name} has no finite value as {gain} goes to infinity (it "
+                f"tends to {limit}), so the ideal op-amp model has no solution "
+                f"for this circuit -- an op-amp without negative feedback. Use "
+                f"mode 'finite'."
+            )
+        limits[name] = limit
+    return replace(
+        solution,
+        node_voltages={name: limits[name] for name in solution.node_voltages},
+        branch_currents={name: limits[name] for name in solution.branch_currents},
     )
 
 
@@ -397,6 +483,14 @@ def _is_zero(expr: sp.Expr):
 # * otherwise KCL there necessarily involves a neighbour that is not known, so
 #   it cannot have this form -> the equation supplies a solved value.
 #
+# The ideal op-amp changes two of those facts, and both have to be followed or
+# the standard ideal setup gets called a handed-over answer. Its virtual short
+# is its own relation, and it makes the inputs known potentials whose KCL is
+# still writable, because an ideal input draws no current. So `V- = V+` with
+# the source put in (`V2 = Vs`) is the op-amp's law, and KCL at the summing
+# node with V- and the source put in is affine in the output alone -- the same
+# form as the answer, exactly as the divider's node law is.
+#
 # None of this rejects anything. It is reported.
 # ---------------------------------------------------------------------------
 
@@ -422,27 +516,33 @@ def _element_quantities(circuit: Circuit) -> dict[str, set[str]]:
     return owned
 
 
-def _known_nodes(circuit: Circuit) -> set[str]:
+def _known_potentials(circuit: Circuit, ideal: bool) -> dict[str, set[str]]:
     """Nodes whose potential the independent sources fix without a solve.
 
     Ground, plus anything an independent voltage source ties to a node already
     known -- so two sources in series pin the far node too, and the relation
-    written across them stays a relation rather than a solved value.
+    written across them stays a relation rather than a solved value. Under the
+    ideal model an op-amp's virtual short ties its two inputs the same way, as
+    a source of zero volts.
+
+    Each node maps to the value symbols of the sources on its way from ground,
+    which is what a relation written with those knowns put in may mention.
     """
-    sources = [
-        circuit.elements[name]
-        for name in circuit.independent_sources
-        if circuit.elements[name].is_voltage_source
+    links = [
+        (str(element.nodes[0]), str(element.nodes[1]), _value_symbols(element))
+        for element in (circuit.elements[name] for name in circuit.independent_sources)
+        if element.is_voltage_source
     ]
-    known = {"0"}
+    if ideal:
+        links += [(plus, minus, set()) for _, plus, minus in _opamps(circuit).values()]
+    known: dict[str, set[str]] = {"0": set()}
     grew = True
     while grew:
         grew = False
-        for element in sources:
-            first, second = str(element.nodes[0]), str(element.nodes[1])
+        for first, second, values in links:
             for near, far in ((first, second), (second, first)):
                 if near in known and far not in known:
-                    known.add(far)
+                    known[far] = known[near] | values
                     grew = True
     return known
 
@@ -498,6 +598,104 @@ def _neighbours(circuit: Circuit) -> dict[str, set[str]]:
     return adjacent
 
 
+def _ideal_kcl(circuit: Circuit) -> tuple[dict[str, set[str]], dict[str, str]]:
+    """Under the ideal model: what KCL at each node involves, and what blocks it.
+
+    The first map is node -> the potentials KCL there brings in. An ideal
+    op-amp input draws no current, so the op-amp adds nothing at its inputs,
+    and an independent current source adds a known current, not a potential.
+    The second is node -> an element whose current nothing fixes -- a voltage
+    source, an op-amp output, a dependent current source -- so that KCL there
+    brings in an unknown that is not a node voltage.
+    """
+    involves: dict[str, set[str]] = {
+        str(node): {str(node)} for node in circuit.node_list
+    }
+    blocked: dict[str, str] = {}
+    for name, element in sorted(circuit.elements.items()):
+        terminals = [str(node) for node in element.nodes]
+        if element.is_opamp or element.is_voltage_source or (
+            element.is_source and element.is_dependent_source
+        ):
+            for node in terminals[:2]:
+                blocked.setdefault(node, name)
+        elif not element.is_source:
+            for node in terminals:
+                involves.setdefault(node, {node}).update(terminals)
+    return involves, blocked
+
+
+def _own_kcl_has_that_form(node: str) -> str:
+    return (
+        f"every node adjacent to node {node} is at a known potential, so KCL at "
+        f"node {node} has that same form and this check cannot tell a node law "
+        f"from the final answer here"
+    )
+
+
+def _node_role(
+    node: str, adjacent: dict[str, set[str]], known: set[str]
+) -> tuple[str, str]:
+    """Solved or ambiguous, for an equation fixing one node voltage on its own."""
+    unknown_neighbours = sorted(adjacent.get(node, set()) - known)
+    if not unknown_neighbours:
+        return "ambiguous", _own_kcl_has_that_form(node)
+    plural = "s" if len(unknown_neighbours) > 1 else ""
+    neighbours = ", ".join(unknown_neighbours)
+    return "solved", (
+        f"KCL at node {node} cannot take that form, because node {node} "
+        f"touches node{plural} {neighbours}, whose voltage no source fixes -- "
+        f"so this equation supplies a solved value rather than a setup law"
+    )
+
+
+def _ideal_node_role(
+    node: str,
+    involves: dict[str, set[str]],
+    blocked: dict[str, str],
+    held: set[str],
+    known: set[str],
+) -> tuple[str, str]:
+    """:func:`_node_role` under the ideal model, where KCL can be written elsewhere.
+
+    A node held by a virtual short is at a known potential *and* KCL there
+    stays writable, because the input draws no current. So KCL at the summing
+    node of an inverting amplifier, with ``V- = 0`` and the source put in, is
+    affine in the output alone -- the answer's own form -- although the output
+    node's own KCL cannot be written at all.
+    """
+    sites = [node] + sorted(
+        site for site in held if site != node and node in involves.get(site, set())
+    )
+    reasons = []
+    for site in sites:
+        if site in blocked:
+            reasons.append(
+                f"KCL at node {site} brings in the current of {blocked[site]}, "
+                f"which no equation here fixes"
+            )
+            continue
+        others = sorted(involves.get(site, {site}) - known - {node})
+        if not others:
+            if site == node:
+                return "ambiguous", _own_kcl_has_that_form(node)
+            return "ambiguous", (
+                f"node {site} is held by a virtual short and an ideal input "
+                f"draws no current, so KCL at node {site}, with its known "
+                f"potentials put in, has that same form and this check cannot "
+                f"tell a node law from the final answer here"
+            )
+        plural = "s" if len(others) > 1 else ""
+        reasons.append(
+            f"KCL at node {site} also involves node{plural} {', '.join(others)}, "
+            f"whose voltage nothing fixes"
+        )
+    return "solved", (
+        f"no KCL equation can take that form, because {', and '.join(reasons)} "
+        f"-- so this equation supplies a solved value rather than a setup law"
+    )
+
+
 def _vanishes(expr: sp.Expr) -> bool:
     return sp.cancel(sp.together(expr)) == 0
 
@@ -528,11 +726,38 @@ def _classify(
     unknowns: list[str],
     true_values: dict[str, sp.Expr],
     canonical_name,
+    ideal: bool,
 ) -> tuple[EquationRole, ...]:
     owned = _element_quantities(circuit)
-    known = _known_nodes(circuit)
-    adjacent = _neighbours(circuit)
+    potentials = _known_potentials(circuit, ideal)
+    known = set(potentials)
     node_of = {f"V{node}": str(node) for node in circuit.node_list}
+
+    if ideal:
+        # The op-amp's relation is now its virtual short and nothing else: the
+        # output is whatever the rest of the circuit needs it to be.
+        opamps = _opamps(circuit)
+        for name, (_, plus, minus) in opamps.items():
+            owned[name] = (
+                {f"V{plus}", f"V{minus}", f"I_{name}"}
+                | potentials.get(plus, set())
+                | potentials.get(minus, set())
+            )
+        held = {
+            node
+            for _, plus, minus in opamps.values()
+            for node in (plus, minus)
+            if node in known
+        }
+        involves, blocked = _ideal_kcl(circuit)
+
+        def node_role(node: str) -> tuple[str, str]:
+            return _ideal_node_role(node, involves, blocked, held, known)
+    else:
+        adjacent = _neighbours(circuit)
+
+        def node_role(node: str) -> tuple[str, str]:
+            return _node_role(node, adjacent, known)
 
     roles: list[EquationRole] = []
     for index, residual in enumerate(residuals):
@@ -584,25 +809,10 @@ def _classify(
             ))
             continue
 
-        unknown_neighbours = sorted(adjacent.get(node, set()) - known)
-        if not unknown_neighbours:
-            roles.append(EquationRole(
-                index, "ambiguous", unknown=name, value=value,
-                detail=f"every node adjacent to node {node} is at a known "
-                       f"potential, so KCL at node {node} has that same form "
-                       f"and this check cannot tell a node law from the final "
-                       f"answer here",
-            ))
-        else:
-            plural = "s" if len(unknown_neighbours) > 1 else ""
-            neighbours = ", ".join(unknown_neighbours)
-            roles.append(EquationRole(
-                index, "solved", unknown=name, value=value,
-                detail=f"KCL at node {node} cannot take that form, because "
-                       f"node {node} touches node{plural} {neighbours}, whose "
-                       f"voltage no source fixes -- so this equation supplies "
-                       f"a solved value rather than a setup law",
-            ))
+        role, detail = node_role(node)
+        roles.append(EquationRole(
+            index, role, unknown=name, value=value, detail=detail,
+        ))
     return tuple(roles)
 
 
@@ -618,7 +828,57 @@ def _roles_note(roles: tuple[EquationRole, ...]) -> str:
     return " ".join(lines)
 
 
-def check_setup(netlist: str, equations: list[sp.Eq], unknowns: list[str]) -> SetupResult:
+def _at(
+    residual: sp.Expr,
+    unknown_symbols: list[sp.Symbol],
+    values: list[sp.Expr],
+) -> sp.Expr:
+    """The residual with each unknown replaced by its value."""
+    for symbol, value in zip(unknown_symbols, values):
+        if symbol in residual.free_symbols:
+            residual = safe_subs(residual, symbol, value)
+    return residual
+
+
+def _ideal_hint(
+    solution: _Solution,
+    residual: sp.Expr,
+    unknowns: list[str],
+    unknown_symbols: list[sp.Symbol],
+    gain: str,
+) -> str:
+    """A sentence for a finite-gain failure that the ideal model would pass.
+
+    The verdict stands -- the equation is false of the circuit as written --
+    but a reader told only that will call a correct ideal setup wrong.
+    """
+    if gain in bind(residual):
+        return ""
+    try:
+        ideal = _ideal(solution, gain)
+    except (MissingGainError, CircuitError):
+        # This circuit has no ideal model, so there is no other mode to name.
+        return ""
+    values = _resolve(ideal, unknowns)
+    satisfied, _, _ = _is_zero(
+        _at(residual, unknown_symbols, [values[name] for name in unknowns])
+    )
+    if not satisfied:
+        return ""
+    return (
+        f" It does hold for the ideal op-amp ({gain} taken to infinity): a "
+        f"virtual-ground or virtual-short equation is only true in that limit, "
+        f"so check a setup written with the ideal model using mode 'ideal'."
+    )
+
+
+def check_setup(
+    netlist: str,
+    equations: list[sp.Eq],
+    unknowns: list[str],
+    mode: str = "finite",
+    gain: str = "A",
+) -> SetupResult:
     """Does this system of equations describe this circuit?
 
     ``unknowns`` names the quantities the system solves for: node voltages as
@@ -630,18 +890,45 @@ def check_setup(netlist: str, equations: list[sp.Eq], unknowns: list[str]) -> Se
     Node voltages are referenced to node ``0``. A setup written against a
     different reference node describes a different set of unknowns and is not
     recognised.
+
+    ``mode`` is the op-amp model the equations are judged against: ``finite``
+    is the circuit as written, open-loop gain ``gain`` included, and ``ideal``
+    takes that gain to infinity first. ``ideal`` raises
+    :class:`MissingGainError` when there is no such gain to take anywhere.
     """
+    if mode not in MODES:
+        raise ValueError(f"Unknown mode {mode!r}; expected one of {MODES}.")
+    ideal = mode == "ideal"
     try:
         circuit = _build(netlist)
         solution = _solve(circuit)
+        if ideal:
+            solution = _ideal(solution, gain)
         true_values = _resolve(solution, unknowns)
 
         if not equations:
             raise SetupInputError("No equations supplied; nothing to check.")
         residuals = [_residual(eq, i) for i, eq in enumerate(equations)]
+        if ideal:
+            for index, residual in enumerate(residuals):
+                if gain in bind(residual):
+                    raise SetupInputError(
+                        f"Equation {index} contains the open-loop gain {gain}, "
+                        f"which mode 'ideal' takes to infinity, so it cannot be "
+                        f"judged against the ideal solution: a finite-gain law "
+                        f"such as Vout = {gain}*(V+ - V-) holds at every finite "
+                        f"{gain} and would read as false there. Check it with "
+                        f"mode 'finite', or write the ideal relation V+ = V-."
+                    )
         canonical = _canonical_symbols(solution, residuals, unknowns)
     except (CircuitError, SetupInputError) as exc:
         return SetupResult(False, "error", str(exc))
+
+    if ideal:
+        described = "the circuit's ideal op-amp solution"
+        qualifier = f", {gain} taken to infinity"
+    else:
+        described, qualifier = "the circuit's actual solution", ""
 
     residuals = [_unify(residual, canonical) for residual in residuals]
     # An unknown no equation mentions still needs a symbol, so that it shows up
@@ -652,10 +939,9 @@ def check_setup(netlist: str, equations: list[sp.Eq], unknowns: list[str]) -> Se
 
     # 1. Every equation must be satisfied by the circuit's actual solution.
     for index, residual in enumerate(residuals):
-        substituted = residual
-        for name, symbol in zip(unknowns, unknown_symbols):
-            if symbol in substituted.free_symbols:
-                substituted = safe_subs(substituted, symbol, true_values[name])
+        substituted = _at(
+            residual, unknown_symbols, [true_values[name] for name in unknowns]
+        )
 
         satisfied, counterexample, inconclusive = _is_zero(substituted)
         if inconclusive:
@@ -674,11 +960,15 @@ def check_setup(netlist: str, equations: list[sp.Eq], unknowns: list[str]) -> Se
                     "named for that element in the netlist -- check the "
                     "direction if the magnitude looks right."
                 )
+            if not ideal:
+                hint += _ideal_hint(
+                    solution, residual, unknowns, unknown_symbols, gain
+                )
             return SetupResult(
                 False,
                 "not_satisfied",
-                f"Equation {index} is not satisfied by the circuit's actual "
-                f"solution ({solution.domain}-domain), so it does not describe "
+                f"Equation {index} is not satisfied by {described} "
+                f"({solution.domain}-domain{qualifier}), so it does not describe "
                 f"this circuit.{hint}",
                 failing_equation=index,
                 counterexample=counterexample,
@@ -711,7 +1001,8 @@ def check_setup(netlist: str, equations: list[sp.Eq], unknowns: list[str]) -> Se
         return table.get(name) or name
 
     roles = _classify(
-        circuit, residuals, jacobian, unknowns, true_values, canonical_name
+        circuit, residuals, jacobian, unknowns, true_values, canonical_name,
+        ideal,
     )
     note = _roles_note(roles)
 
@@ -741,8 +1032,8 @@ def check_setup(netlist: str, equations: list[sp.Eq], unknowns: list[str]) -> Se
     return SetupResult(
         True,
         "ok",
-        f"All {len(equations)} equation(s) hold for the circuit's actual "
-        f"solution, and the system has full rank {rank} for "
+        f"All {len(equations)} equation(s) hold for {described}{qualifier}, and "
+        f"the system has full rank {rank} for "
         f"{len(unknowns)} unknown(s)."
         + (f" {note}" if note else ""),
         equation_roles=roles,

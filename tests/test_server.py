@@ -712,6 +712,65 @@ def test_the_parsed_equations_are_echoed_back():
     assert [eq["text"] for eq in result["equations"]] == ["Eq(V1, V)"]
 
 
+# The inverting amplifier exactly as issue #118 reported it.
+ISSUE_118 = "Vi 1 0 {Vi}\nR1 1 2 {R1}\nR2 2 3 {R2}\nE1 3 0 opamp 0 2 {A}"
+IDEAL_SETUP = ["V2 = 0", "(V1 - V2)/R1 = (V2 - V3)/R2", "V1 = Vi"]
+
+
+def test_an_ideal_op_amp_setup_passes_in_ideal_mode():
+    result = check_setup(ISSUE_118, IDEAL_SETUP, ["V1", "V2", "V3"], mode="ideal")
+    assert result["ok"] is True, result["message"]
+    assert result["kind"] == "ok"
+    assert result["mode"] == "ideal"
+
+
+def test_a_wrong_ideal_setup_is_still_not_satisfied_in_ideal_mode():
+    wrong = ["V2 = 0", "(V1 - V2)/R1 = (V3 - V2)/R2", "V1 = Vi"]
+    result = check_setup(ISSUE_118, wrong, ["V1", "V2", "V3"], mode="ideal")
+    assert result["ok"] is False
+    assert result["kind"] == "not_satisfied"
+    assert result["failing_equation"] == 1
+
+
+def test_ideal_mode_on_a_netlist_without_A_is_a_named_error_not_a_verdict():
+    for netlist in (ISSUE_118.replace(" {A}", ""), DIVIDER):
+        result = check_setup(netlist, ["V1 = V"], ["V1"], mode="ideal")
+        assert result["ok"] is False
+        assert result["error"] == "missing_gain", result
+        assert "kind" not in result
+
+
+def test_a_missing_gain_is_recorded_as_an_error_not_a_failed_check(tmp_path, monkeypatch):
+    """The student's work was never judged, so the board must not show a fail."""
+    _, _, attempt = _open_attempt(tmp_path, monkeypatch)
+    result = check_setup(DIVIDER, ["V1 = V"], ["V1"], mode="ideal",
+                         attempt_id=attempt["id"])
+    assert result["error"] == "missing_gain"
+    assert result["verdict"] == "error"
+
+
+def test_check_setup_defaults_to_the_finite_gain_model():
+    result = check_setup(ISSUE_118, IDEAL_SETUP, ["V1", "V2", "V3"])
+    assert result["kind"] == "not_satisfied"
+    assert result["failing_equation"] == 0
+    assert result["mode"] == "finite"
+    finite = ["V3 = -A*V2", "(V1 - V2)/R1 = (V2 - V3)/R2", "V1 = Vi"]
+    assert check_setup(ISSUE_118, finite, ["V1", "V2", "V3"])["ok"] is True
+
+
+def test_check_setup_refuses_a_mode_it_does_not_have():
+    result = check_setup(ISSUE_118, IDEAL_SETUP, ["V1", "V2", "V3"], mode="gbw")
+    assert result["ok"] is False
+    assert result["error"] == "bad_mode"
+
+
+def test_check_setup_description_says_when_to_use_each_mode():
+    tools = {tool.name: tool for tool in asyncio.run(server_module.server.list_tools())}
+    description = tools["check_setup"].description
+    assert "``finite``" in description and "``ideal``" in description
+    assert "virtual" in description
+
+
 # --------------------------------------------------------------------------
 # the wall-clock bound, and the worker that enforces it
 # --------------------------------------------------------------------------

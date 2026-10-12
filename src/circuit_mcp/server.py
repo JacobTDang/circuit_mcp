@@ -95,7 +95,8 @@ from .instruments import instrument_status as _instrument_status
 from .ipad_capture import IPAD_CAPTURE, IPadCaptureError
 from .lab import LabDataError, import_waveform_csv as _import_waveform_csv
 from . import matlab_bridge
-from .mna import CircuitError, SetupInputError
+from .mna import CircuitError, MissingGainError, SetupInputError
+from .mna import MODES as _SETUP_MODES
 from .mna import check_setup as _mna_check_setup
 from .mna import circuit_equations as _mna_circuit_equations
 from .ocr_client import OCR_WORKER
@@ -395,8 +396,15 @@ def _circuit_equations(netlist: str) -> dict[str, Any]:
 
 
 def _check_setup(
-    netlist: str, equations: list[str], unknowns: list[str]
+    netlist: str, equations: list[str], unknowns: list[str], mode: str = "finite"
 ) -> dict[str, Any]:
+    if mode not in _SETUP_MODES:
+        return _failure(
+            "bad_mode",
+            f"Unknown mode {mode!r}. Use 'finite' to judge the equations against "
+            f"the circuit as written, or 'ideal' to judge them against the ideal "
+            f"op-amp, with the open-loop gain taken to infinity.",
+        )
     known: dict[str, sp.Symbol] = {}
     parsed: list[sp.Eq] = []
     for index, text in enumerate(equations, start=1):
@@ -404,10 +412,16 @@ def _check_setup(
         known.update(bind(equation))
         parsed.append(equation)
 
-    result = _mna_check_setup(netlist, parsed, list(unknowns))
+    try:
+        result = _mna_check_setup(netlist, parsed, list(unknowns), mode, _GAIN)
+    except MissingGainError as exc:
+        # The netlist cannot answer the question asked; that is not a verdict
+        # on the student's equations, and must not be recorded as one.
+        return _failure("missing_gain", str(exc))
     return {
         "ok": result.ok,
         "kind": result.kind,
+        "mode": mode,
         "message": result.message,
         "failing_equation": result.failing_equation,
         "counterexample": _stringified(result.counterexample),
@@ -1327,7 +1341,7 @@ def circuit_equations(netlist: str) -> dict[str, Any]:
 
 @server.tool()
 def check_setup(
-    netlist: str, equations: list[str], unknowns: list[str],
+    netlist: str, equations: list[str], unknowns: list[str], mode: str = "finite",
     attempt_id: str | None = None,
 ) -> dict[str, Any]:
     """Does a system of equations describe this circuit?
@@ -1343,6 +1357,17 @@ def check_setup(
     ``not_satisfied`` when an equation is false of the circuit (``failing_equation``
     is its 0-based index) and ``underdetermined`` when every equation holds but
     they do not pin the unknowns down.
+
+    ``mode`` is the op-amp model the equations are judged against. ``finite``
+    (the default) is the circuit as written, open-loop gain ``A`` included:
+    there the inverting input is *not* at ground, so a virtual-ground or
+    virtual-short equation (``V2 = 0``, ``V- = V+``) is reported
+    ``not_satisfied``. Use ``ideal`` for a setup written with the ideal op-amp
+    model: every node voltage and branch current is taken to its limit as ``A``
+    goes to infinity first. ``ideal`` needs every op-amp's gain written ``{A}``
+    in the netlist (``missing_gain`` otherwise), and refuses an equation that
+    still contains ``A``; check a finite-gain law such as ``V3 = -A*V2`` with
+    ``finite``.
 
     ``equation_roles`` classifies each satisfied equation as ``law``, ``solved``,
     ``ambiguous``, or ``trivial``. This is advisory and never changes the
@@ -1363,6 +1388,7 @@ def check_setup(
         netlist=netlist,
         equations=list(equations),
         unknowns=list(unknowns),
+        mode=mode,
     )
 
 

@@ -438,6 +438,15 @@ unknown/value. Classification is advisory: in small circuits a textbook law and
 a solved answer may be algebraically identical, so ambiguity is reported rather
 than guessed away.
 
+`check_setup` also takes `mode`. `finite` (the default) judges the equations
+against the circuit as written. lcapy's op-amp always has a finite gain `A`, so
+there the inverting input is not at ground and a virtual-ground equation such
+as `V2 = 0` is false. `ideal` takes every node voltage and branch current to its
+limit as `A` goes to infinity first, which is the model a setup written with
+`V- = V+` uses. It needs every op-amp's gain written `{A}` (`missing_gain`
+otherwise), and it refuses an equation that still contains `A`. When a `finite`
+check fails on an equation that the ideal model satisfies, the message says so.
+
 UniMERNet output is also untrusted. It recognizes cropped formulas, not page
 layout, circuit connectivity, or whether two drawn wires cross. The response
 includes the exact captured PNG alongside LaTeX so the agent can echo both and
@@ -451,7 +460,8 @@ and therefore contains no `sC` term.
 ## Scope
 
 The server covers symbolic linear circuits, including op-amps with finite
-constant gain, the ideal-gain limit, and a single-pole finite gain-bandwidth
+constant gain, the ideal-gain limit (`mode="ideal"` in `derive`,
+`port_impedance` and `check_setup`), and a single-pole finite gain-bandwidth
 model. lcapy rejects s-dependent component values, so GBW mode derives with a
 constant gain `A` and then safely substitutes `A0 / (1 + s/wp)`. Symbol binding
 and substitution are checked explicitly to prevent assumption mismatches from
