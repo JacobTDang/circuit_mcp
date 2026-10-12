@@ -938,6 +938,32 @@ def test_a_column_number_is_not_covered_by_a_tag_or_a_badge(name):
                 assert not _overlap(glyph, label), f"{name}: column {col} on {row} sits under {label}"
 
 
+@pytest.mark.parametrize("name", sorted(lab1.ALL))
+def test_a_column_number_under_a_part_body_is_drawn_over_it(name):
+    """A tie-off resistor from row a or j to its rail stood on the column number its build step names."""
+    drawing = draw(place(parse_build(lab1.ALL[name])))
+    picture = drawing.svg
+    last_body = picture.rindex('<g class="part"') if '<g class="part"' in picture else -1
+    numerals = [(match.start(), match.group(1), int(match.group(2)))
+                for match in re.finditer(r'<text ([^>]*font-size="7"[^>]*)>(\d+)</text>', picture)]
+    raised = 0
+    for col in range(drawing.first_col, drawing.last_col + 1):
+        for row in ("numbers-top", "numbers-bottom"):
+            x, y = drawing.x(col), drawing.y(row) + 2.5
+            glyph = _column_glyph(x, y, str(col))
+            drawn = [(at, attrs) for at, attrs, text in numerals if text == col
+                     and abs(float(re.search(r' x="([\d.]+)"', " " + attrs).group(1)) - x) < 0.01
+                     and abs(float(re.search(r' y="([\d.]+)"', " " + attrs).group(1)) - y) < 0.01]
+            assert len(drawn) == 1, f"{name}: column {col} on {row} is drawn {len(drawn)} times"
+            at, attrs = drawn[0]
+            if any(_overlap(glyph, body) for body in drawing.bodies):
+                raised += 1
+                assert at > last_body, f"{name}: column {col} on {row} is drawn under the part on it"
+                assert 'paint-order="stroke"' in attrs and 'pointer-events="none"' in attrs
+    if name == "exp4b":
+        assert raised >= 2, "exp4b's tie-off resistors stand on columns 14 and 16; this test no longer reaches them"
+
+
 # --- the whole board, not a pool of columns -------------------------------------
 
 def _assert_wired_as_built(layout):

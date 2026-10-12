@@ -223,6 +223,7 @@ class Drawing:
     height: float = 0.0
     svg: str = ""
     labels: list = field(default_factory=list)   # every tag and step badge, as boxes
+    bodies: list = field(default_factory=list)   # every part body and chip, as boxes
 
     def x(self, col: int) -> float:
         return LEFT + (col - self.first_col) * PITCH
@@ -289,6 +290,14 @@ def _column_glyph(x: float, y: float, text: str) -> Box:
     width = len(text) * size * 0.603 + 1.2
     left, top = x - width / 2, y - size * 0.944 - 0.6
     return (left, top, left + width, top + size * 1.161 + 1.2)
+
+
+def _numeral(x: float, y: float, col: int, over_a_body: bool = False) -> str:
+    """A column number. Drawn over a part body it is haloed in the board colour, and the
+    pointer passes through it to the part, which still lights its step."""
+    halo = (f' stroke="{BOARD}" stroke-width="2.4" stroke-linejoin="round" paint-order="stroke" pointer-events="none"'
+            if over_a_body else "")
+    return f'<text x="{_n(x)}" y="{_n(y)}" font-size="7" text-anchor="middle" fill="{SILK}"{halo}>{col}</text>'
 
 
 def _bezier(a: Point, c: Point, b: Point, t: float) -> Point:
@@ -592,6 +601,12 @@ def draw(layout: Layout) -> Drawing:
         shapes.append((part, shape))
     chips = [_chip(chip, drawing, step_of[id(chip)]) for chip in layout.chips]
     solids = [shape.box for _, shape in shapes] + [box for _, box in chips]
+    drawing.bodies = list(solids)
+    numerals = [(col, row, drawing.x(col), drawing.y(row) + 2.5)
+                for col in range(first, last + 1) for row in ("numbers-top", "numbers-bottom")]
+    # A body standing in a numbers row, such as a tie-off resistor from row a to its rail, would
+    # hide the column number its build step names, so that number is drawn over the body.
+    covered = {(col, row) for col, row, x, y in numerals if any(_overlap(_column_glyph(x, y, str(col)), body) for body in solids)}
     board = (LEFT - 12, TOP, drawing.width - RIGHT + 12, drawing.height - BOTTOM)
     used = [hole for part in layout.placed for hole in part["ends"]]
     used += [hole for jumper in layout.jumpers if not is_rail_bridge(jumper) for hole in jumper["ends"]]
@@ -605,8 +620,7 @@ def draw(layout: Layout) -> Drawing:
             wires.append((jumper, a, control, b))
             drawn.append([_bezier(a, control, b, i / 24) for i in range(25)])
     blocked = [(x - HOLE - 1, y - HOLE - 1, x + HOLE + 1, y + HOLE + 1) for x, y in map(drawing.xy, used)]
-    blocked += [_column_glyph(drawing.x(col), drawing.y(row) + 2.5, str(col))
-                for col in range(first, last + 1) for row in ("numbers-top", "numbers-bottom")]
+    blocked += [_column_glyph(x, y, str(col)) for col, _, x, y in numerals]
     blocked += solids
     blocked += [(0.0, 0.0, LEFT - 9, drawing.height), (drawing.width - RIGHT + 9, 0.0, drawing.width, drawing.height)]
     blocked += [(x - 6.5, y - 6.5, x + 6.5, y + 6.5) for x, y in (drawing.xy(item["hole"]) for item in layout.attachments)]
@@ -668,8 +682,7 @@ def draw(layout: Layout) -> Drawing:
     for col in range(first, last + 1):
         x = drawing.x(col)
         out += [f'<use href="#h" x="{_n(x)}" y="{_n(drawing.y(row))}"/>' for row in (*"abcdefghij", *RAIL_ROWS)]
-        out += [f'<text x="{_n(x)}" y="{_n(drawing.y(row) + 2.5)}" font-size="7" text-anchor="middle" fill="{SILK}">{col}</text>'
-                for row in ("numbers-top", "numbers-bottom")]
+        out += [_numeral(x, drawing.y(row) + 2.5, col) for row in ("numbers-top", "numbers-bottom") if (col, row) not in covered]
     out += [f'<text x="{_n(LEFT - 14)}" y="{_n(drawing.y(row) + 2.5)}" font-size="7.5" text-anchor="middle" fill="{SILK}">{row}</text>'
             for row in "abcdefghij"]
 
@@ -704,6 +717,7 @@ def draw(layout: Layout) -> Drawing:
     out += [chip_svg for chip_svg, _ in chips]
     for part, shape in shapes:
         out.append(f'<g class="part" data-step="{step_of[id(part)]}" data-nets="{escape(" ".join(dict.fromkeys(part["nodes"])))}">{shape.svg}</g>')
+    out += [_numeral(x, y, col, over_a_body=True) for col, row, x, y in numerals if (col, row) in covered]
     for jumper, a, c, b in wires:
         out.append(_wire(jumper["net"], colours[jumper["net"]], _quad(a, c, b), a, b, step_of[id(jumper)]))
     for item, colour, _ in tags:
