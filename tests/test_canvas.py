@@ -347,15 +347,35 @@ def test_app_js_keeps_a_build_step_with_the_drawing(tmp_path, monkeypatch):
         details = branch.split("<details", 1)[1].split(">", 1)[0]
         assert "card-legend" in details and "open" not in details
         assert branch.index("<details") < branch.index("${p.svg"), "the legend has to sit on the drawing, not between it and the steps"
-        focus = app_script.split("function boardFocus(", 1)[1].split("function boardReveal(", 1)[0]
-        assert "boardReveal(" in focus
-        reveal = app_script.split("function boardReveal(", 1)[1].split("\nfunction ", 1)[0]
-        assert "scrollBy(" in reveal and "scrollTop" in reveal and ".is-lit" in reveal and "card-wires" in reveal
+        reveal = app_script.split("function boardReveal(", 1)[1].split("\n", 1)[0]
+        assert "scrollBy(" in reveal and "card-wires" in reveal and "boardShow(" in reveal
+        show = app_script.split("function boardShow(", 1)[1].split("\n", 1)[0]
+        assert "scrollTop" in show and ".is-lit" in show and "scrollBy(" not in show
         css = browser.get("/assets/canvas.css").text
         board = css.split(".card-board{", 1)[1].split("}", 1)[0]
         assert "position:sticky" in board and "max-height:calc(100vh - 72px - 52px)" in board
         card = css.split('.workspace-item[data-kind="breadboard"]{', 1)[1].split("}", 1)[0]
         assert "overflow:visible" in card
+
+
+def test_app_js_hovering_the_board_never_scrolls_the_page(tmp_path, monkeypatch):
+    """Hover scrolled the page, so a part hovered on the drawing jumped the desk ~300px and lit whatever then sat under the pointer."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        focus = app_script.split("function boardFocus(", 1)[1].split("\n", 1)[0]
+        for scroll in ("scrollBy(", "scrollTop", "boardReveal(", "boardShow("):
+            assert scroll not in focus, f"lighting a step must not scroll: boardFocus calls {scroll}"
+        hover = app_script.split("addEventListener('pointerover'", 1)[1].split("});", 1)[0]
+        assert "boardReveal(" not in hover and "boardSelect(" not in hover and "scrollBy(" not in hover
+        assert "boardShow(" in hover and ".card-wires" in hover, "a hovered step row should bring its parts into the drawing's own box"
+        select = app_script.split("function boardSelect(", 1)[1].split("\n", 1)[0]
+        assert "boardFocus(" in select and "boardReveal(" in select
+        board = app_script.split("function boardFocus(", 1)[1]
+        for event in ("focusin", "keydown", "click"):
+            handler = board.split(f"addEventListener('{event}'", 1)[1].split("});", 1)[0]
+            assert "boardSelect(" in handler, f"{event} no longer brings the step and its parts on screen"
+        restore = app_script.split("function boardRestore(", 1)[1].split("\n", 1)[0]
+        assert "boardReveal(" not in restore and "boardSelect(" not in restore, "tabbing away from a pinned step pulls the page back to it"
 
 
 def test_app_js_pins_a_build_step_from_the_keyboard(tmp_path, monkeypatch):
