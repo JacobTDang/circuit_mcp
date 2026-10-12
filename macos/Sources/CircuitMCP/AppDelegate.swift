@@ -26,6 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// one testable place -- see `ServerLifecycle`.
     private let lifecycle = ServerLifecycle()
     private var logURL: URL?
+    /// Redraws the import's progress while its copy runs.
+    private var importProgressTimer: Timer?
 
     // MARK: Launch
 
@@ -81,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.onOpenLog = { [weak self] in self?.openLogs() }
         status.onRestart = { [weak self] in self?.restartServer() }
         status.onQuit = { NSApp.terminate(nil) }
+        status.onCancel = { [weak self] in self?.cancelImport() }
         web.onLoadFailure = { [weak self] error in
             // Restarting the server for a page that failed to load costs the whole stop window,
             // so the cheap retry is named here: Reload Page leaves the server alone.
@@ -332,11 +335,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .terminateNow:
             return .terminateNow
         case .waitForWorkInFlight(let work):
-            // A restart or an import is already stopping the server, or copying over its data
-            // folder. Its completion starts nothing now that the quit has begun and answers the
-            // quit instead, so waiting for it is what keeps this from becoming a second stop --
-            // and the app from exiting over a server it has stopped holding.
-            status.showLoading(Self.waitingMessage(for: work))
+            // A restart or an import is already stopping the server, or copying a notebook in
+            // beside its data folder. Its completion starts nothing now that the quit has begun
+            // and answers the quit instead, so waiting for it is what keeps this from becoming a
+            // second stop -- and the app from exiting over a server it has stopped holding.
+            stopShowingImportProgress()
+            status.showLoading(waitingMessage(for: work))
+            if case .importingData = work {
+                // `beginQuit` has cancelled the copy, which stops at the end of the file it is on.
+                // A file on a volume that has stopped answering never ends, so the deadline bounds
+                // the wait; the data folder is untouched until a copy is complete.
+                lifecycle.answerQuitAtImportDeadline {
+                    NSLog("CircuitMCP quit before the cancelled import had stopped. The data folder was not changed; the next import removes the partial copy.")
+                    sender.reply(toApplicationShouldTerminate: true)
+                }
+            }
             return .terminateLater
         case .stopTheServer(let running):
             // Whichever branch of the stop's completion runs answers the quit exactly once.
@@ -352,10 +365,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         "Stopping the server… (up to \(Int(ceil(running.worstCaseStopSeconds))) seconds if it does not answer)"
     }
 
-    private static func waitingMessage(for work: ServerLifecycle.Work) -> String {
+    private func waitingMessage(for work: ServerLifecycle.Work) -> String {
         switch work {
-        case .stoppingServer(let running): return stoppingMessage(for: running)
-        case .importingData: return "Finishing the import before quitting…"
+        case .stoppingServer(let running):
+            return Self.stoppingMessage(for: running)
+        case .importingData:
+            return "Cancelling the import before quitting… (up to \(Int(ceil(lifecycle.importQuitDeadline))) seconds if the copy does not stop)"
         }
     }
 
@@ -651,38 +666,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let confirm = NSAlert()
         confirm.messageText = "Import \(source.lastPathComponent)?"
-        confirm.informativeText = "The server stops while the folder is copied. The app's current data is moved to a backup folder, not deleted."
+        confirm.informativeText = "The server stops while the folder is copied. Your current data stays where it is until the copy is complete, and is then moved to a backup folder, not deleted. Cancelling or quitting during the copy leaves your data as it was."
         confirm.addButton(withTitle: "Import")
         confirm.addButton(withTitle: "Cancel")
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
 
         stopServer("Importing data…", pendingWork: "the import") { [weak self] _ in
             guard let self else { return }
-            if let refusal = self.lifecycle.beginImportCopy() {
+            let progress = Progress.discreteProgress(totalUnitCount: -1)
+            if let refusal = self.lifecycle.beginImportCopy(progress) {
                 presentAlert("Nothing was imported.", refusal)
                 self.startServer()
                 return
             }
+            self.showImportProgress(progress)
+            // The copy counts every file from its own thread; the bar needs a few redraws a second
+            // on this one, so it is read on a timer rather than observed.
+            self.importProgressTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.showImportProgress(progress) }
+            }
             let importer = DataImporter()
             let destination = locations.commandCenterDirectory
             // The copy is unbounded -- it is the user's whole notebook -- and on the main thread
-            // it freezes the window that is asking them to wait for it, spinner included.
+            // it freezes the window that is asking them to wait for it, progress bar included.
             DispatchQueue.global().async {
-                let report: (title: String, detail: String)
+                let report: (title: String, detail: String, cancelled: Bool)
                 do {
-                    let result = try importer.importCommandCenter(from: source, to: destination)
+                    let result = try importer.importCommandCenter(from: source, to: destination, progress: progress)
                     report = ("Data imported.",
-                              result.backup.map { "The previous app data is in \($0.path)." } ?? "There was no previous app data.")
+                              result.backup.map { "The previous app data is in \($0.path)." } ?? "There was no previous app data.",
+                              false)
+                } catch is CancellationError {
+                    report = ("Import cancelled.", "Nothing was changed: your data is as it was before the import.", true)
                 } catch {
                     report = ("Nothing was imported.",
-                              Self.importFailureDetail(error, importer: importer, destination: destination))
+                              Self.importFailureDetail(error, importer: importer, destination: destination), false)
                 }
                 DispatchQueue.main.async {
-                    self.presentAlert(report.title, report.detail)
+                    self.stopShowingImportProgress()
                     switch self.lifecycle.finishImportCopy() {
                     case .resume:
+                        self.presentAlert(report.title, report.detail)
                         self.startServer()
                     case .quitPending:
+                        guard self.lifecycle.claimQuitReply() else {
+                            NSLog("CircuitMCP: the import finished after the quit had stopped waiting for it. %@ %@",
+                                  report.title, report.detail)
+                            return
+                        }
+                        // The quit cancelled this copy itself, and saying so would only hold the
+                        // quit up. Any other ending is news the student has to read first.
+                        if report.cancelled {
+                            NSLog("CircuitMCP: %@ %@", report.title, report.detail)
+                        } else {
+                            self.presentAlert(report.title, report.detail)
+                        }
                         NSApp.reply(toApplicationShouldTerminate: true)
                     }
                 }
@@ -690,8 +728,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// `DataImporter` puts the data back when a copy fails, but a rollback that could not finish
-    /// says so only in the unified log and the error handed back here is the copy's. Reading what
+    private func showImportProgress(_ progress: Progress) {
+        status.showProgress(progress.isCancelled ? "Cancelling the import…" : "Importing data…",
+                            detail: DataImporter.progressDescription(progress),
+                            fraction: progress.isIndeterminate ? nil : progress.fractionCompleted,
+                            canCancel: !progress.isCancelled)
+    }
+
+    private func stopShowingImportProgress() {
+        importProgressTimer?.invalidate()
+        importProgressTimer = nil
+    }
+
+    private func cancelImport() {
+        guard case .importingData(let progress)? = lifecycle.workInFlight else { return }
+        progress.cancel()
+        showImportProgress(progress)
+    }
+
+    /// `DataImporter` puts the data back when an import fails, but a rollback that could not finish
+    /// says so only in the unified log and the error handed back here is the import's. Reading what
     /// is actually on disk is what keeps a failed import recoverable rather than silent.
     ///
     /// A refusal never gets that far, so it is answered first and on its own terms. The refusals

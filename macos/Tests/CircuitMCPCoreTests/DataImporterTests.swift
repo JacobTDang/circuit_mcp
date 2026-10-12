@@ -134,9 +134,132 @@ final class DataImporterTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: destination.appendingPathComponent("circuit_mcp.sqlite3")), "fresh-app-db")
         XCTAssertTrue(fileManager.fileExists(atPath: destination.appendingPathComponent("files").path))
         let leftovers = try fileManager.contentsOfDirectory(atPath: root.path)
-            .filter { $0.hasPrefix("command_center.before-import-") }
-        XCTAssertEqual(leftovers, [], "the data is back at the destination, so no backup may be left behind")
+            .filter { $0.hasPrefix("command_center.") }
+        XCTAssertEqual(leftovers, [], "the data is back at the destination, so no backup or partial copy may be left behind")
         XCTAssertEqual(try String(contentsOf: source.appendingPathComponent("circuit_mcp.sqlite3")), "repo-db")
+    }
+
+    // MARK: - A copy that can be watched and cancelled
+
+    /// A command center with `uploads` files of `bytes` each under `files/`, as a notebook with
+    /// uploaded worksheets has.
+    private func notebook(_ name: String, marker: String, uploads: Int, bytes: Int) throws -> URL {
+        let folder = try commandCenter(name, marker: marker)
+        for number in 1...uploads {
+            try Data(repeating: UInt8(number % 256), count: bytes)
+                .write(to: folder.appendingPathComponent("files/upload-\(number).bin"))
+        }
+        return folder
+    }
+
+    private func appData(_ destination: URL) throws -> String {
+        try String(contentsOf: destination.appendingPathComponent("circuit_mcp.sqlite3"))
+    }
+
+    /// The old import moved the student's data aside first and then ran one uncancellable copy into
+    /// its place, so stopping part-way meant a rollback. The copy is now made beside the data
+    /// folder, which is not touched until the copy is complete; putting it in place is a rename.
+    func testTheDataFolderIsLeftInPlaceUntilTheCopyIsComplete() throws {
+        let source = try commandCenter("repo", marker: "repo-db")
+        let destination = try commandCenter("command_center", marker: "app-db")
+        var copiedInto: URL?
+        var dataDuringTheCopy: String?
+        let importer = DataImporter(copy: { from, to, progress in
+            copiedInto = to
+            dataDuringTheCopy = try self.appData(destination)
+            try DataImporter.copyFolder(from, to: to, progress: progress)
+        })
+        _ = try importer.importCommandCenter(from: source, to: destination, now: now)
+
+        XCTAssertEqual(dataDuringTheCopy, "app-db", "the data folder was moved before the copy was complete")
+        let staging = try XCTUnwrap(copiedInto)
+        XCTAssertEqual(staging.deletingLastPathComponent().standardizedFileURL, root.standardizedFileURL,
+                       "the copy is made beside the data folder, so putting it in place is a rename")
+        XCTAssertNotEqual(staging.standardizedFileURL, destination.standardizedFileURL)
+        XCTAssertFalse(fileManager.fileExists(atPath: staging.path), "the finished copy is the data folder now")
+        XCTAssertEqual(try appData(destination), "repo-db")
+    }
+
+    /// The acceptance case: cancelling while the copy is under way removes what it had copied, and
+    /// the student's data is exactly as it was -- not moved, so nothing has to be put back.
+    func testCancellingDuringTheCopyRemovesThePartialCopyAndLeavesTheDataAsItWas() throws {
+        let source = try notebook("repo", marker: "repo-db", uploads: 20, bytes: 10_000)
+        let destination = try commandCenter("command_center", marker: "app-db")
+        let staging = DataImporter.stagingFolder(for: destination)
+        let progress = Progress.discreteProgress(totalUnitCount: -1)
+        var partialCopyExisted = false
+        // The count changes on the copying thread, so this cancels after the first file, every time.
+        let observation = progress.observe(\.completedUnitCount) { progress, _ in
+            guard progress.completedUnitCount > 0, !progress.isCancelled else { return }
+            partialCopyExisted = FileManager.default.fileExists(atPath: staging.path)
+            progress.cancel()
+        }
+        defer { observation.invalidate() }
+
+        XCTAssertThrowsError(try DataImporter().importCommandCenter(from: source, to: destination, now: now, progress: progress)) {
+            XCTAssertTrue($0 is CancellationError, "a cancelled import says it was cancelled, not that it failed: \($0)")
+        }
+        XCTAssertTrue(partialCopyExisted, "the cancel has to land in the middle of the copy for this to test anything")
+        XCTAssertEqual(try appData(destination), "app-db")
+        XCTAssertEqual(try fileManager.contentsOfDirectory(atPath: root.path).sorted(), ["command_center", "repo"],
+                       "no partial copy and no backup is left behind")
+    }
+
+    func testAnImportCancelledBeforeItsCopyStartsChangesNothing() throws {
+        let source = try commandCenter("repo", marker: "repo-db")
+        let destination = try commandCenter("command_center", marker: "app-db")
+        let progress = Progress.discreteProgress(totalUnitCount: -1)
+        progress.cancel()
+        XCTAssertThrowsError(try DataImporter().importCommandCenter(from: source, to: destination, now: now, progress: progress)) {
+            XCTAssertTrue($0 is CancellationError, "\($0)")
+        }
+        XCTAssertEqual(try appData(destination), "app-db")
+        XCTAssertEqual(try fileManager.contentsOfDirectory(atPath: root.path).sorted(), ["command_center", "repo"])
+    }
+
+    /// What the import screen's bar is drawn from: every byte to copy is counted before the copy
+    /// starts, and the count moves as each file is copied rather than once at the end.
+    func testProgressCountsEveryByteAndMovesFileByFile() throws {
+        let source = try notebook("repo", marker: "repo-db", uploads: 20, bytes: 10_000)
+        let destination = root.appendingPathComponent("app/command_center", isDirectory: true)
+        let progress = Progress.discreteProgress(totalUnitCount: -1)
+        var seen: [Int64] = []
+        let observation = progress.observe(\.completedUnitCount) { progress, _ in seen.append(progress.completedUnitCount) }
+        defer { observation.invalidate() }
+
+        _ = try DataImporter().importCommandCenter(from: source, to: destination, now: now, progress: progress)
+        XCTAssertEqual(progress.totalUnitCount, 20 * 10_000 + Int64("repo-db".utf8.count))
+        XCTAssertEqual(progress.completedUnitCount, progress.totalUnitCount)
+        XCTAssertEqual(seen, seen.sorted(), "the count never goes backwards")
+        XCTAssertGreaterThanOrEqual(Set(seen.filter { $0 > 0 && $0 < progress.totalUnitCount }).count, 19,
+                                    "the count moves with each file: \(seen)")
+    }
+
+    /// A force-quit, or a quit that stopped waiting for a stalled copy, leaves the partial copy
+    /// behind. It holds nothing of the student's -- the folder it came from is untouched -- and the
+    /// next import removes it rather than letting it sit in Application Support for good.
+    func testAPartialCopyAnImportDidNotLiveToFinishIsRemovedByTheNext() throws {
+        let source = try commandCenter("repo", marker: "repo-db")
+        let destination = try commandCenter("command_center", marker: "app-db")
+        let abandoned = DataImporter.stagingFolder(for: destination)
+        try fileManager.createDirectory(at: abandoned.appendingPathComponent("files"), withIntermediateDirectories: true)
+        try Data("half a worksheet".utf8).write(to: abandoned.appendingPathComponent("files/half.bin"))
+
+        _ = try DataImporter().importCommandCenter(from: source, to: destination, now: now)
+        XCTAssertFalse(fileManager.fileExists(atPath: abandoned.path))
+        XCTAssertEqual(try appData(destination), "repo-db")
+        XCTAssertFalse(fileManager.fileExists(atPath: destination.appendingPathComponent("files/half.bin").path),
+                       "the abandoned copy must not be mixed into the new one")
+    }
+
+    func testTheImportScreenSaysWhatTheCopyIsDoing() {
+        let progress = Progress.discreteProgress(totalUnitCount: -1)
+        XCTAssertEqual(DataImporter.progressDescription(progress), "Counting the files to copy…")
+        progress.totalUnitCount = 3_000_000
+        progress.completedUnitCount = 1_500_000
+        XCTAssertEqual(DataImporter.progressDescription(progress), "1.5 MB of 3 MB copied")
+        progress.cancel()
+        XCTAssertEqual(DataImporter.progressDescription(progress), "Stopping the copy. Your data is left as it was.")
     }
 
     /// A rollback that fails reports only to the unified log, and the error the caller is handed
