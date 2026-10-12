@@ -11,7 +11,7 @@ import math
 from typing import Any
 
 from .breadboard import BuildError, Probe, Source, parse_build
-from .expect import ExpectError, expectations
+from .expect import ExpectError, Swing, expectations, output_swings, swing_owner
 
 DEFAULT_TOLERANCE_PCT = 5.0
 ZERO_FLOOR_V = 1e-3      # an expected value this close to zero has no meaningful percent error
@@ -137,7 +137,7 @@ def _source_hint(probe: Probe, basis: str, measured: float, level: float, source
                                  f"{probe.node}. The probe is probably on {source.node} instead of {probe.node}."}
 
 
-def _supply_hint(probe: Probe, basis: str, measured: float, swing: dict[str, float], vplus: float, vminus: float,
+def _supply_hint(probe: Probe, basis: str, measured: float, swing: Swing, vplus: float, vminus: float,
                  tolerance_pct: float) -> _Fit | None:
     """A DC reading out at a supply rail, past the op amp's swing: the probe is on the power bus, not the output."""
     if basis != "volts":
@@ -150,18 +150,18 @@ def _supply_hint(probe: Probe, basis: str, measured: float, swing: dict[str, flo
         return None
     return abs(measured - rail), {"kind": "supply",
                                   "message": f"{probe.label} reads {_fmt(measured, basis)}, at the {rail:g} V supply "
-                                             f"rail and past the op amp's output limit ({swing['low']:g} V to "
-                                             f"{swing['high']:g} V on this supply). The probe is probably on the "
+                                             f"rail and past the {swing_owner(swing)}'s output limit ({swing['low']:g} V "
+                                             f"to {swing['high']:g} V on this supply). The probe is probably on the "
                                              f"supply rail instead of {probe.node}."}
 
 
-def _within_swing(value: float, swing: dict[str, float]) -> bool:
+def _within_swing(value: float, swing: Swing) -> bool:
     """Clear of both output limits by more than the margin that counts as sitting on one."""
     return swing["low"] + RAIL_MARGIN_V < value < swing["high"] - RAIL_MARGIN_V
 
 
 def _saturation_hint(probe: Probe, basis: str, measured: float, expected: dict[str, Any],
-                     swing: dict[str, float]) -> _Fit | None:
+                     swing: Swing) -> _Fit | None:
     """The output is on the op amp's limit, with advice that depends on whether the build predicts it there.
 
     Past the limit counts as on it: a chip's swing is a typical figure, and an RMS
@@ -182,21 +182,25 @@ def _saturation_hint(probe: Probe, basis: str, measured: float, expected: dict[s
     advice = ("clipping. Lower the input or the gain." if predicted_there
               else "saturated. Check the feedback wiring first.")
     return distance, {"kind": "rail",
-                      "message": f"{probe.label} reads {_fmt(measured, basis)}, at the op amp's output limit "
-                                 f"({swing['low']:g} V to {swing['high']:g} V on this supply): the output is {advice}"}
+                      "message": f"{probe.label} reads {_fmt(measured, basis)}, at the {swing_owner(swing)}'s output "
+                                 f"limit ({swing['low']:g} V to {swing['high']:g} V on this supply): the output is "
+                                 f"{advice}"}
 
 
 def _hint(probe: Probe, basis: str, measured: float, expected: dict[str, Any], sources: tuple[Source, ...],
-          swing: dict[str, float], outputs: set[str], tolerance_pct: float,
-          vplus: float, vminus: float) -> dict[str, str] | None:
-    """The likeliest cause of an out-of-tolerance reading, or None if nothing fits."""
+          swing: Swing | None, tolerance_pct: float, vplus: float, vminus: float) -> dict[str, str] | None:
+    """The likeliest cause of an out-of-tolerance reading, or None if nothing fits.
+
+    ``swing`` is that of the chip whose op amp drives the probe's node, or None
+    when no op amp does: in a build mixing parts, each output has its own.
+    """
     level = expected[basis]
     if basis == "volts" and abs(level) >= ZERO_FLOOR_V and _close(measured, -level, tolerance_pct):
         return {"kind": "sign",
                 "message": f"{probe.label} reads {_fmt(measured, basis)}: the right size with the wrong sign. "
                            "Check the probe polarity, or a minus sign lost when the value was written down."}
     candidates = []
-    if probe.node in outputs:
+    if swing is not None:
         candidates += [_saturation_hint(probe, basis, measured, expected, swing),
                        _supply_hint(probe, basis, measured, swing, vplus, vminus, tolerance_pct)]
     candidates.append(_source_hint(probe, basis, measured, level, sources, tolerance_pct))
@@ -225,7 +229,7 @@ def compare_readings(build: Any, measured: Any, tolerance_pct: float = DEFAULT_T
         raise CompareError(f"cannot predict this build: {exc}") from exc
     probes = {probe.label: probe for probe in parsed.probes}
     expected_by_label = {reading["label"]: reading for reading in predicted["readings"]}
-    outputs = {use.out for use in parsed.opamps}
+    swings = output_swings(parsed)
     readings: list[dict[str, Any]] = []
     peaks: dict[str, float] = {}
     for label, raw in _by_label(measured, parsed.probes).items():
@@ -234,7 +238,7 @@ def compare_readings(build: Any, measured: Any, tolerance_pct: float = DEFAULT_T
         entry = {"label": label, "basis": basis, **_judge(expected[basis], value, tolerance)}
         if not entry["within_tolerance"]:
             hint = _hint(probes[label], basis, value, expected, parsed.sources,
-                         predicted["swing"], outputs, tolerance, parsed.vplus, parsed.vminus)
+                         swings.get(probes[label].node), tolerance, parsed.vplus, parsed.vminus)
             if hint is not None:
                 entry["hint"] = hint
         readings.append(entry)
