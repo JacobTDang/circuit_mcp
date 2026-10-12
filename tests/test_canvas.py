@@ -378,6 +378,18 @@ def test_app_js_hovering_the_board_never_scrolls_the_page(tmp_path, monkeypatch)
         assert "boardReveal(" not in restore and "boardSelect(" not in restore, "tabbing away from a pinned step pulls the page back to it"
 
 
+def test_the_step_numbers_stay_behind_the_drawing(tmp_path, monkeypatch):
+    """The numbers hung outside the list, so 10. and 11. showed past the drawing's left edge as the steps scrolled under it."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        css = browser.get("/assets/canvas.css").text
+        steps = css.split(".card-wires{", 1)[1].split("}", 1)[0]
+        assert "list-style:none" in steps and "padding:0" in steps
+        number = css.split(".card-wires li::before{", 1)[1].split("}", 1)[0]
+        assert 'content:attr(data-step) "."' in number
+        rows = [rule.split("}", 1)[0] for rule in css.split(".card-wires li{")[1:]]
+        assert rows and not any("margin-left:-" in rule for rule in rows), "a row pulled left of the list sticks out past the drawing"
+
+
 def test_app_js_pins_a_build_step_from_the_keyboard(tmp_path, monkeypatch):
     """Enter did nothing, and once a net was pinned the keyboard could not light a step."""
     with _browser(tmp_path, monkeypatch) as browser:
