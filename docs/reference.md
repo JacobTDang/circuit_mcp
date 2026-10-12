@@ -324,8 +324,10 @@ That produces `dist/Circuit MCP.noindex/Circuit MCP.app` and `dist/CircuitMCP-<v
   checkout's `.local/command_center`, use **Import Existing Data…**. Stop
   `run_ui.py` first. The app's current data is moved to a backup folder, not
   deleted.
-- **Logs:** `~/Library/Logs/CircuitMCP/`, with the last five launches kept. If the
-  server can't start, the app shows the end of the log.
+- **Logs:** `~/Library/Logs/CircuitMCP/`, with the last five launches kept. One
+  launch's log is at most 10 MB: past that it keeps its newest 5 MB, under a line
+  saying earlier output was dropped. If the server can't start, the app shows the
+  end of the log.
 - **OpenRouter key and model:** stored in the macOS Keychain. Set them with
   **Settings…**, and use a free model.
 - **Claude Code:** move the app to Applications, choose **Copy MCP Command**,

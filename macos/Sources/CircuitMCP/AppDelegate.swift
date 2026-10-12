@@ -230,6 +230,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showFailure(_ title: String, detail: String) {
         var tail: String?
+        // `tail` reads at most `LogFiles.tailBytes` from the end of the log however large it has
+        // grown, so this stays on the main thread. Read in the background, a tail could arrive
+        // after Restart and put this failure back over the server that replaced it.
         if let logURL {
             do {
                 tail = try LogFiles.tail(of: logURL)

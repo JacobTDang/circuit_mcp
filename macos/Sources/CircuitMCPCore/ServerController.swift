@@ -8,15 +8,19 @@ public struct ServerConfiguration {
     public var logFile: URL
     public var readyTimeout: TimeInterval
     public var stopGracePeriod: TimeInterval
+    /// The size the launch log rotates at; see `LogWriter`.
+    public var maxLogBytes: Int
 
     public init(executable: URL, arguments: [String], environment: [String: String], logFile: URL,
-                readyTimeout: TimeInterval = 60, stopGracePeriod: TimeInterval = 10) {
+                readyTimeout: TimeInterval = 60, stopGracePeriod: TimeInterval = 10,
+                maxLogBytes: Int = LogFiles.maxBytes) {
         self.executable = executable
         self.arguments = arguments
         self.environment = environment
         self.logFile = logFile
         self.readyTimeout = readyTimeout
         self.stopGracePeriod = stopGracePeriod
+        self.maxLogBytes = maxLogBytes
     }
 }
 
@@ -30,7 +34,7 @@ extension ServerConfiguration: CustomStringConvertible, CustomDebugStringConvert
         return """
             ServerConfiguration(executable: \(executable.path), arguments: \(arguments), \
             environment: [\(names)] (values redacted), logFile: \(logFile.path), \
-            readyTimeout: \(readyTimeout), stopGracePeriod: \(stopGracePeriod))
+            readyTimeout: \(readyTimeout), stopGracePeriod: \(stopGracePeriod), maxLogBytes: \(maxLogBytes))
             """
     }
 
@@ -113,14 +117,15 @@ public final class ServerController {
         lock.unlock()
 
         guard FileManager.default.createFile(atPath: configuration.logFile.path, contents: nil),
-              let log = try? FileHandle(forWritingTo: configuration.logFile) else {
+              let handle = try? FileHandle(forWritingTo: configuration.logFile),
+              let log = try? LogWriter(url: configuration.logFile, handle: handle, maxBytes: configuration.maxLogBytes) else {
             _ = resolve(.failed(.logUnavailable(configuration.logFile.path)), completion)
             return
         }
 
         var fds: [Int32] = [0, 0]
         guard pipe(&fds) == 0 else {
-            try? log.close()
+            log.close()
             _ = resolve(.failed(.launchFailed(String(cString: strerror(errno)))), completion)
             return
         }
@@ -130,11 +135,11 @@ public final class ServerController {
         do {
             spawned = try spawnGroupLeader(outputFD: writeEnd)
         } catch let failure as ServerFailure {
-            close(readEnd); close(writeEnd); try? log.close()
+            close(readEnd); close(writeEnd); log.close()
             _ = resolve(.failed(failure), completion)
             return
         } catch {
-            close(readEnd); close(writeEnd); try? log.close()
+            close(readEnd); close(writeEnd); log.close()
             _ = resolve(.failed(.launchFailed("\(error)")), completion)
             return
         }
@@ -264,7 +269,7 @@ public final class ServerController {
     /// Reads the server's output until the pipe closes, logging every chunk and acting on the
     /// protocol lines in it. Internal rather than private so its give-up path can be driven with
     /// a log handle that fails, which is the one thing `start()` does not take from the caller.
-    func readOutput(from fd: Int32, into log: FileHandle, completion: @escaping (ServerEvent) -> Void) {
+    func readOutput(from fd: Int32, into log: LogWriter, completion: @escaping (ServerEvent) -> Void) {
         var pending = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
         while true {
@@ -272,14 +277,14 @@ public final class ServerController {
             if count < 0 && errno == EINTR { continue }
             guard count > 0 else { break }
             let chunk = Data(buffer[0..<count])
-            // The throwing variant on purpose: `write(_:)` is Objective-C `-writeData:`, which
-            // raises `NSFileHandleOperationException` on a failed write. Swift cannot catch that,
-            // so a full disk killed the app -- and the server, spawned into its own process group
+            // `append` writes with the throwing variant on purpose: `write(_:)` is Objective-C
+            // `-writeData:`, which raises `NSFileHandleOperationException` on a failed write. Swift
+            // cannot catch that, so a full disk killed the app -- and the server, spawned into its own process group
             // so that it outlives its parent, stayed up holding the data folder's lock, which the
             // next launch could then never take. Giving up on the read loop leaves the pipe to the
             // `close(fd)` and `outputDrained.signal()` below, so the stop path stays intact.
             do {
-                try log.write(contentsOf: chunk)
+                try log.append(chunk)
             } catch {
                 NSLog("CircuitMCP could not write the server log %@: %@", configuration.logFile.path, "\(error)")
                 break
@@ -292,7 +297,7 @@ public final class ServerController {
             }
         }
         close(fd)
-        try? log.close()
+        log.close()
         outputDrained.signal()
     }
 
