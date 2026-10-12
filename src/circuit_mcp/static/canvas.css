@@ -1,4 +1,5 @@
-.workspace-canvas{position:relative;min-height:calc(100vh - 72px - 43px);overflow:visible;border:1px solid transparent}
+/* Its own stacking context: every drag raises a card's z-index, and none may climb over the sticky header (z-index 10). */
+.workspace-canvas{position:relative;isolation:isolate;min-height:calc(100vh - 72px - 43px);overflow:visible;border:1px solid transparent}
 .workspace-canvas:focus{outline:0}
 .canvas-hint{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;color:#606461;pointer-events:none;transition:opacity .15s}
 .canvas-hint span{display:grid;place-items:center;width:38px;height:38px;border:1px solid #303331;font:300 24px ui-monospace,SFMono-Regular,Menlo,monospace;margin-bottom:10px}
@@ -33,8 +34,12 @@
 .card-empty{color:#768079;font:10px ui-monospace,monospace;letter-spacing:.08em;text-transform:uppercase}
 .card-error{margin:0;color:#b3261e;font-size:13px;line-height:1.5}
 /* breadboard and expected cards */
-.workspace-item[data-kind="breadboard"]{min-height:320px}.card-board{overflow-x:auto;border:1px solid #2a2f2c;background:#ECEEE9;border-radius:6px}.card-board svg{display:block;min-width:560px}
-.card-wires{margin:12px 0 0;padding-left:22px;color:var(--muted);font-size:13px;line-height:1.5}.card-wires li{margin-bottom:4px}
+/* visible, or the sticky drawing is trapped in the card and scrolls away from the step. That turns CSS resize off,
+   so the drawn grip is hidden and app.js adds one that works (dragGrip). */
+.workspace-item[data-kind="breadboard"]{min-height:320px;overflow:visible;resize:none}.workspace-item[data-kind="breadboard"]:after{content:none}
+.workspace-grip{position:absolute;right:0;bottom:0;z-index:3;width:18px;height:18px;cursor:ew-resize;touch-action:none}.workspace-grip:after{content:"";position:absolute;right:3px;bottom:3px;width:11px;height:11px;border-right:2px solid #737874;border-bottom:2px solid #737874}.card-board{position:sticky;top:72px;z-index:2;max-height:calc(100vh - 72px - 52px);overflow:auto;border:1px solid #2a2f2c;background:#ECEEE9;border-radius:6px}.card-board svg{display:block;width:100%;height:auto;min-width:0}
+/* The number is drawn inside the row: a list marker hangs left of the list, past the drawing that covers it. */
+.card-wires{margin:4px 0 0;padding:0;list-style:none;color:var(--muted);font-size:13px;line-height:1.5}.card-wires li{margin-bottom:4px}.card-wires li::before{content:attr(data-step) ".";text-align:right;font-variant-numeric:tabular-nums}
 .card-readings{width:100%;border-collapse:collapse;font-size:13px}.card-readings td{padding:6px 8px;border-bottom:1px solid #2a2f2c;color:var(--ink);vertical-align:middle}.card-readings td:first-child{color:#9aa59f;font:10px ui-monospace,monospace;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
 .card-spark svg{display:block;background:#111412;border:1px solid #2a2f2c}.card-clip{color:#e07b53}
 .card-gains{margin:10px 0 0;padding-left:18px;color:var(--ink);font-size:13px}
@@ -42,10 +47,11 @@
 .card-board svg [data-step],.card-board svg [data-nets]{transition:opacity .16s ease}
 .card-board.is-focusing-step svg [data-step]:not(.is-lit),.card-board.is-focusing-step svg .strip:not(.is-lit){opacity:.12}
 .card-board.is-focusing-net svg [data-nets]:not(.is-lit){opacity:.12}
+.card-legend{position:absolute;top:8px;right:8px;z-index:3;max-width:min(440px,64%);margin:0;background:#171918f2;border:1px solid #2a2f2c;border-radius:6px;padding:4px 8px}.card-legend summary{cursor:pointer;color:var(--ink);font:10px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.12em;text-transform:uppercase}.card-legend[open]{max-height:46%;overflow:auto}.card-legend .card-nets{margin:6px 0 2px}
 .card-nets{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:2px}
 .card-nets li{display:grid;grid-template-columns:64px 1fr;gap:10px;align-items:baseline;padding:4px 8px;margin:0 -8px;border-radius:4px;color:var(--muted);font-size:12.5px;line-height:1.45;cursor:pointer}
 .card-nets b{display:flex;align-items:center;gap:7px;color:var(--ink);font:600 11px ui-monospace,monospace}.card-nets b::before{content:"";flex:none;width:10px;height:10px;border-radius:2px;background:var(--net);box-shadow:0 0 0 1px #ffffff40}
-.card-wires li{cursor:pointer;border-radius:4px;padding:2px 6px;margin-left:-6px}
+.card-wires li{display:grid;grid-template-columns:20px 1fr;column-gap:6px;cursor:pointer;border-radius:4px;padding:2px 6px;scroll-margin-top:min(760px,calc(100vh - 52px));scroll-margin-bottom:8px}
 .card-nets li.is-lit,.card-wires li.is-lit{background:#ffffff14;color:var(--ink)}
 .card-nets li:focus-visible,.card-wires li:focus-visible{outline:1px solid #b7c9bf;outline-offset:1px}
 @media(prefers-reduced-motion:reduce){.card-board svg [data-step],.card-board svg [data-nets]{transition:none}}

@@ -338,6 +338,118 @@ def test_app_js_shows_the_pot_positions_on_the_expected_card(tmp_path, monkeypat
         assert "p.pots" in footer, "the expected card never names the pot settings the numbers assume"
 
 
+def test_app_js_keeps_a_build_step_with_the_drawing(tmp_path, monkeypatch):
+    """The legend sat open under a drawing that already filled an 800px window, so a step and its parts could not be seen together."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        branch = app_script.split("card.kind==='breadboard'", 1)[1].split("card.kind==='expected'", 1)[0]
+        assert "<details" in branch, "the net legend stays open and pushes the steps below the window"
+        details = branch.split("<details", 1)[1].split(">", 1)[0]
+        assert "card-legend" in details and "open" not in details
+        assert branch.index("<details") < branch.index("${p.svg"), "the legend has to sit on the drawing, not between it and the steps"
+        reveal = app_script.split("function boardReveal(", 1)[1].split("\n", 1)[0]
+        assert "scrollBy(" in reveal and "card-wires" in reveal and "boardShow(" in reveal
+        show = app_script.split("function boardShow(", 1)[1].split("\n", 1)[0]
+        assert "scrollTop" in show and ".is-lit" in show and "scrollBy(" not in show
+        css = browser.get("/assets/canvas.css").text
+        board = css.split(".card-board{", 1)[1].split("}", 1)[0]
+        assert "position:sticky" in board and "max-height:calc(100vh - 72px - 52px)" in board
+        card = css.split('.workspace-item[data-kind="breadboard"]{', 1)[1].split("}", 1)[0]
+        assert "overflow:visible" in card
+
+
+def test_app_js_hovering_the_board_never_scrolls_the_page(tmp_path, monkeypatch):
+    """Hover scrolled the page, so a part hovered on the drawing jumped the desk ~300px and lit whatever then sat under the pointer."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        focus = app_script.split("function boardFocus(", 1)[1].split("\n", 1)[0]
+        for scroll in ("scrollBy(", "scrollTop", "boardReveal(", "boardShow("):
+            assert scroll not in focus, f"lighting a step must not scroll: boardFocus calls {scroll}"
+        hover = app_script.split("addEventListener('pointerover'", 1)[1].split("});", 1)[0]
+        assert "boardReveal(" not in hover and "boardSelect(" not in hover and "scrollBy(" not in hover
+        assert "boardShow(" in hover and ".card-wires" in hover, "a hovered step row should bring its parts into the drawing's own box"
+        select = app_script.split("function boardSelect(", 1)[1].split("\n", 1)[0]
+        assert "boardFocus(" in select and "boardReveal(" in select
+        board = app_script.split("function boardFocus(", 1)[1]
+        for event in ("focusin", "keydown", "click"):
+            handler = board.split(f"addEventListener('{event}'", 1)[1].split("});", 1)[0]
+            assert "boardSelect(" in handler, f"{event} no longer brings the step and its parts on screen"
+        restore = app_script.split("function boardRestore(", 1)[1].split("\n", 1)[0]
+        assert "boardReveal(" not in restore and "boardSelect(" not in restore, "tabbing away from a pinned step pulls the page back to it"
+
+
+def test_app_js_a_click_on_a_step_lands_before_anything_scrolls(tmp_path, monkeypatch):
+    """Focus arrives on pointerdown, and revealing it scrolled the page 210px, so the button came up on step 11 and the click pinned nothing."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        board = app_script.split("function boardFocus(", 1)[1]
+        focusin = board.split("addEventListener('focusin'", 1)[1].split("});", 1)[0]
+        assert ":focus-visible" in focusin, "a pointer's focus scrolls the page before its click lands"
+        assert focusin.index(":focus-visible") < focusin.index("boardSelect(")
+
+
+def test_the_step_numbers_stay_behind_the_drawing(tmp_path, monkeypatch):
+    """The numbers hung outside the list, so 10. and 11. showed past the drawing's left edge as the steps scrolled under it."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        css = browser.get("/assets/canvas.css").text
+        steps = css.split(".card-wires{", 1)[1].split("}", 1)[0]
+        assert "list-style:none" in steps and "padding:0" in steps
+        number = css.split(".card-wires li::before{", 1)[1].split("}", 1)[0]
+        assert 'content:attr(data-step) "."' in number
+        rows = [rule.split("}", 1)[0] for rule in css.split(".card-wires li{")[1:]]
+        assert rows and not any("margin-left:-" in rule for rule in rows), "a row pulled left of the list sticks out past the drawing"
+
+
+def test_a_breadboard_card_is_widened_from_a_grip_of_its_own(tmp_path, monkeypatch):
+    """overflow:visible, which the sticky drawing needs, turns CSS resize off, so the corner grip on a breadboard card did nothing."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        render = app_script.split("function renderCanvas(", 1)[1].split("\n", 1)[0]
+        assert 'class="workspace-grip"' in render and "item.kind==='breadboard'" in render
+        grip = app_script.split("function dragGrip(", 1)[1].split("\n", 1)[0]
+        assert "setPointerCapture" in grip
+        assert "Math.max(320,Math.min(" in grip and "width-20" in grip, "the grip has to clamp the width the way renderCanvas does"
+        assert "saveCanvas()" in grip and "settleCanvas()" in grip, "a wider card has to push its neighbours down"
+        assert "addEventListener('pointerdown',dragGrip)" in app_script
+        click = app_script.split("function boardFocus(", 1)[1].split("addEventListener('click'", 1)[1].split("});", 1)[0]
+        assert ".workspace-grip" in click, "letting go of the grip clears the pinned step"
+        css = browser.get("/assets/canvas.css").text
+        card = css.split('.workspace-item[data-kind="breadboard"]{', 1)[1].split("}", 1)[0]
+        assert "resize:none" in card
+        assert 'content:none' in css.split('.workspace-item[data-kind="breadboard"]:after{', 1)[1].split("}", 1)[0], "the dead grip is still drawn"
+        handle = css.split(".workspace-grip{", 1)[1].split("}", 1)[0]
+        assert "touch-action:none" in handle and "cursor:ew-resize" in handle
+
+
+def test_no_card_can_paint_over_the_desk_header(tmp_path, monkeypatch):
+    """Every drag raises a card's z-index, and above the header's 10 it painted over the header the drawing sticks under."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        css = browser.get("/assets/canvas.css").text
+        desk = css.split(".workspace-canvas{", 1)[1].split("}", 1)[0]
+        assert "isolation:isolate" in desk
+
+
+def test_app_js_pins_a_build_step_from_the_keyboard(tmp_path, monkeypatch):
+    """Enter did nothing, and once a net was pinned the keyboard could not light a step."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        app_script = browser.get("/assets/app.js").text
+        focusin = app_script.split("addEventListener('focusin'", 1)[1].split("});", 1)[0]
+        assert "dataset.pinned)return" not in focusin
+        board = app_script.split("function boardFocus(", 1)[1]
+        assert "addEventListener('keydown'" in board
+        keys = board.split("addEventListener('keydown'", 1)[1].split("});", 1)[0]
+        assert "Escape" in keys and "Enter" in keys and "dataset.pinned" in keys
+
+
+def test_the_breadboard_drawing_has_no_minimum_width(tmp_path, monkeypatch):
+    """min-width:560px stopped the second press of minus from shrinking the drawing."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        css = browser.get("/assets/canvas.css").text
+        rule = css.split(".card-board svg{", 1)[1].split("}", 1)[0]
+        assert "560px" not in rule
+        assert "min-width:0" in rule
+
+
 def test_app_js_names_each_parts_swing_in_the_expected_cards_footer(tmp_path, monkeypatch):
     """A build mixing an LM324 and an LMC660 has a swing per part; one range would be one chip's, or neither's."""
     with _browser(tmp_path, monkeypatch) as browser:

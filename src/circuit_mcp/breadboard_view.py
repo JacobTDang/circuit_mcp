@@ -207,6 +207,8 @@ LEFT, RIGHT, TOP, BOTTOM = 66.0, 40.0, 14.0, 14.0   # rail labels sit left; the 
 MIN_COLUMNS = 14
 HOLE = 2.3
 TAG_FONT = 8.5
+PIN_FUNCTION_SIZE = 7.5   # the row letters; at a 760px card this is the 14px a pin name has to be
+PIN_FUNCTION_INK = "#C9CED3"  # one ink for every pin name: 8.5:1 on the chip, used or not
 
 
 def _n(value: float) -> str:
@@ -222,6 +224,7 @@ class Drawing:
     height: float = 0.0
     svg: str = ""
     labels: list = field(default_factory=list)   # every tag and step badge, as boxes
+    bodies: list = field(default_factory=list)   # every part body and chip, as boxes
 
     def x(self, col: int) -> float:
         return LEFT + (col - self.first_col) * PITCH
@@ -276,6 +279,26 @@ def _overlap(a: Box, b: Box, pad: float = 0.0) -> bool:
 
 def _inside(point: Point, box: Box) -> bool:
     return box[0] <= point[0] <= box[2] and box[1] <= point[1] <= box[3]
+
+
+def _column_glyph(x: float, y: float, text: str) -> Box:
+    """The column numeral plus a hair of clearance, so a tag cannot sit on the ink.
+
+    The proportions are the monospace the drawing asks for: a digit is 0.603em wide
+    and the ink runs from 0.944em above the baseline to 0.217em below it.
+    """
+    size = 7.0
+    width = len(text) * size * 0.603 + 1.2
+    left, top = x - width / 2, y - size * 0.944 - 0.6
+    return (left, top, left + width, top + size * 1.161 + 1.2)
+
+
+def _numeral(x: float, y: float, col: int, over_a_body: bool = False) -> str:
+    """A column number. Drawn over a part body it is haloed in the board colour, and the
+    pointer passes through it to the part, which still lights its step."""
+    halo = (f' stroke="{BOARD}" stroke-width="2.4" stroke-linejoin="round" paint-order="stroke" pointer-events="none"'
+            if over_a_body else "")
+    return f'<text x="{_n(x)}" y="{_n(y)}" font-size="7" text-anchor="middle" fill="{SILK}"{halo}>{col}</text>'
 
 
 def _bezier(a: Point, c: Point, b: Point, t: float) -> Point:
@@ -432,12 +455,17 @@ def _chip(chip: dict, drawing: Drawing, step: int) -> tuple[str, Box]:
     for pin, hole in sorted(chip["pins"].items()):
         x, y = drawing.xy(hole)
         net = pin_nets.get(pin)
-        number_fill, function_fill = ("#F1F3F4", "#C9CED3") if net else ("#7D848C", "#5C636B")
-        function_y = y - 7 if hole[0] == "bottom" else y + 12
+        number_fill = "#F1F3F4" if net else "#7D848C"
+        # Names sit just inside the body. A long one is condensed into the pitch so it
+        # cannot run across the pin beside it.
+        function_y = y - 9 if hole[0] == "bottom" else y + 14
+        label = functions[pin]
+        wide = len(label) * PIN_FUNCTION_SIZE * 0.6 > PITCH - 4
+        condense = f' textLength="{_n(PITCH - 4)}" lengthAdjust="spacingAndGlyphs"' if wide else ""
         out.append((f'<g class="pin" data-nets="{escape(net)}">' if net else '<g class="pin">')
                    + f'<text class="pin-number" x="{_n(x)}" y="{_n(y + 3)}" font-size="6.5" text-anchor="middle" fill="{number_fill}">{pin}</text>'
-                   + f'<text class="pin-function" data-pin="{pin}" x="{_n(x)}" y="{_n(function_y)}" font-size="5.2" '
-                     f'text-anchor="middle" fill="{function_fill}">{functions[pin]}</text></g>')
+                   + f'<text class="pin-function" data-pin="{pin}" x="{_n(x)}" y="{_n(function_y)}" font-size="{PIN_FUNCTION_SIZE}" '
+                     f'text-anchor="middle" fill="{PIN_FUNCTION_INK}"{condense}>{label}</text></g>')
     out.append("</g>")
     return "".join(out), (x0, top, x1, bottom)
 
@@ -574,6 +602,12 @@ def draw(layout: Layout) -> Drawing:
         shapes.append((part, shape))
     chips = [_chip(chip, drawing, step_of[id(chip)]) for chip in layout.chips]
     solids = [shape.box for _, shape in shapes] + [box for _, box in chips]
+    drawing.bodies = list(solids)
+    numerals = [(col, row, drawing.x(col), drawing.y(row) + 2.5)
+                for col in range(first, last + 1) for row in ("numbers-top", "numbers-bottom")]
+    # A body standing in a numbers row, such as a tie-off resistor from row a to its rail, would
+    # hide the column number its build step names, so that number is drawn over the body.
+    covered = {(col, row) for col, row, x, y in numerals if any(_overlap(_column_glyph(x, y, str(col)), body) for body in solids)}
     board = (LEFT - 12, TOP, drawing.width - RIGHT + 12, drawing.height - BOTTOM)
     used = [hole for part in layout.placed for hole in part["ends"]]
     used += [hole for jumper in layout.jumpers if not is_rail_bridge(jumper) for hole in jumper["ends"]]
@@ -587,6 +621,7 @@ def draw(layout: Layout) -> Drawing:
             wires.append((jumper, a, control, b))
             drawn.append([_bezier(a, control, b, i / 24) for i in range(25)])
     blocked = [(x - HOLE - 1, y - HOLE - 1, x + HOLE + 1, y + HOLE + 1) for x, y in map(drawing.xy, used)]
+    blocked += [_column_glyph(x, y, str(col)) for col, _, x, y in numerals]
     blocked += solids
     blocked += [(0.0, 0.0, LEFT - 9, drawing.height), (drawing.width - RIGHT + 9, 0.0, drawing.width, drawing.height)]
     blocked += [(x - 6.5, y - 6.5, x + 6.5, y + 6.5) for x, y in (drawing.xy(item["hole"]) for item in layout.attachments)]
@@ -600,10 +635,18 @@ def draw(layout: Layout) -> Drawing:
     labeller = _Labeller((2.0, 2.0, drawing.width - 2, drawing.height - 2), blocked, avoid)
 
     # Short wires have the least room for their number, so they choose first.
+    # Samples on the wire itself sit on the column numerals the wire crosses; the
+    # offsets let the badge step aside instead of covering the number. Half a pitch
+    # from a column is the gap clear of its holes and its numeral, and a wire from a
+    # strip to its rail runs slanted, so offsets from the wire alone can miss it.
     badges = []
     for jumper, a, c, b in sorted(wires, key=lambda wire: math.dist(wire[1], wire[3])):
-        spots = [_bezier(a, c, b, 0.5 + sign * k / 20) for k in range(7) for sign in ((1,) if k == 0 else (-1, 1))]
-        badges.append((jumper, labeller.place(spots[0], [(x - 6, y - 6, x + 6, y + 6) for x, y in spots])))
+        along = [_bezier(a, c, b, 0.5 + sign * k / 20) for k in range(7) for sign in ((1,) if k == 0 else (-1, 1))]
+        span = math.hypot(b[0] - a[0], b[1] - a[1]) or 1.0
+        px, py = (a[1] - b[1]) / span, (b[0] - a[0]) / span
+        spots = along + [(x + px * dist, y + py * dist) for x, y in along for dist in (10, -10, 18, -18)]
+        spots += [(LEFT + (math.floor((x - LEFT) / PITCH) + 0.5 + side) * PITCH, y) for x, y in along for side in (0, 1)]
+        badges.append((jumper, labeller.place(along[0], [(x - 6, y - 6, x + 6, y + 6) for x, y in spots])))
     tags, probe_index = [], 0
     for item in layout.attachments:
         if item["kind"] == "probe":
@@ -640,8 +683,7 @@ def draw(layout: Layout) -> Drawing:
     for col in range(first, last + 1):
         x = drawing.x(col)
         out += [f'<use href="#h" x="{_n(x)}" y="{_n(drawing.y(row))}"/>' for row in (*"abcdefghij", *RAIL_ROWS)]
-        out += [f'<text x="{_n(x)}" y="{_n(drawing.y(row) + 2.5)}" font-size="7" text-anchor="middle" fill="{SILK}">{col}</text>'
-                for row in ("numbers-top", "numbers-bottom")]
+        out += [_numeral(x, drawing.y(row) + 2.5, col) for row in ("numbers-top", "numbers-bottom") if (col, row) not in covered]
     out += [f'<text x="{_n(LEFT - 14)}" y="{_n(drawing.y(row) + 2.5)}" font-size="7.5" text-anchor="middle" fill="{SILK}">{row}</text>'
             for row in "abcdefghij"]
 
@@ -676,6 +718,7 @@ def draw(layout: Layout) -> Drawing:
     out += [chip_svg for chip_svg, _ in chips]
     for part, shape in shapes:
         out.append(f'<g class="part" data-step="{step_of[id(part)]}" data-nets="{escape(" ".join(dict.fromkeys(part["nodes"])))}">{shape.svg}</g>')
+    out += [_numeral(x, y, col, over_a_body=True) for col, row, x, y in numerals if (col, row) in covered]
     for jumper, a, c, b in wires:
         out.append(_wire(jumper["net"], colours[jumper["net"]], _quad(a, c, b), a, b, step_of[id(jumper)]))
     for item, colour, _ in tags:
