@@ -81,7 +81,10 @@ PYTHONPATH=src .venv/bin/python scripts/backup_database.py /safe/path/circuit-mc
 
 The script checks database integrity, foreign keys, file hashes, missing files,
 and orphans before publishing an atomic SQLite backup. The command center also
-offers `POST /api/database/backup` with a server-selected local destination.
+offers `POST /api/database/backup` with a server-selected local destination. It
+runs one backup at a time and answers 409 to a request that arrives while one
+runs. Every backup is a single rollback-journal file, so it opens without a
+`-wal` or `-shm` beside it.
 
 Document deletion is soft in SQLite and moves the file to
 `.local/command_center/trash/`, making recovery possible. Restoring an entire

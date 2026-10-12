@@ -75,14 +75,30 @@ def _peak(basis: str, value: float, expected: dict[str, Any]) -> float:
     return value * expected["vpk"] / level
 
 
-def _probes_by_label(probes: tuple[Probe, ...]) -> dict[str, Probe]:
-    """Each probe by its label. A repeated label would judge a reading against the wrong node."""
-    labels = [probe.label for probe in probes]
-    repeated = sorted({label for label in labels if labels.count(label) > 1})
-    if repeated:
-        raise CompareError(f"probe labels must be unique to compare readings; "
-                           f"repeated: {', '.join(map(repr, repeated))}")
-    return {probe.label: probe for probe in probes}
+def _by_label(measured: dict[Any, Any], probes: tuple[Probe, ...]) -> dict[str, Any]:
+    """Each reading under its probe's own label, found ignoring case.
+
+    parse_build refuses two labels that differ only in case, so a key names at
+    most one probe. Two keys that name the same one are refused: judging both
+    would grade the student on a reading they did not mean.
+    """
+    labels = {probe.label.casefold(): probe.label for probe in probes}
+    found: dict[str, Any] = {}
+    keys: dict[str, Any] = {}
+    unknown = []
+    for key, raw in measured.items():
+        label = labels.get(key.casefold()) if isinstance(key, str) else None
+        if label is None:
+            unknown.append(key)
+        elif label in found:
+            raise CompareError(f"measured gives {keys[label]!r} and {key!r}, which are both probe "
+                               f"{label!r}; give it one reading")
+        else:
+            found[label], keys[label] = raw, key
+    if unknown:
+        raise CompareError(f"no probe labelled {', '.join(map(repr, unknown))}; "
+                           f"this build's probes are {', '.join(map(repr, labels.values()))}")
+    return found
 
 
 def _source_setting(source: Source, basis: str) -> float | None:
@@ -143,19 +159,15 @@ def compare_readings(build: Any, measured: Any, tolerance_pct: float = DEFAULT_T
         raise CompareError("tolerance_pct must be positive")
     try:
         parsed = parse_build(build)
-        probes = _probes_by_label(parsed.probes)
         predicted = expectations(build)
     except (BuildError, ExpectError) as exc:
         raise CompareError(f"cannot predict this build: {exc}") from exc
+    probes = {probe.label: probe for probe in parsed.probes}
     expected_by_label = {reading["label"]: reading for reading in predicted["readings"]}
-    unknown = [label for label in measured if label not in expected_by_label]
-    if unknown:
-        raise CompareError(f"no probe labelled {', '.join(map(repr, unknown))}; "
-                           f"this build's probes are {', '.join(map(repr, expected_by_label))}")
     outputs = {use.out for use in parsed.opamps}
     readings: list[dict[str, Any]] = []
     peaks: dict[str, float] = {}
-    for label, raw in measured.items():
+    for label, raw in _by_label(measured, parsed.probes).items():
         expected = expected_by_label[label]
         basis, value = _reading(label, raw, expected["kind"])
         entry = {"label": label, "basis": basis, **_judge(expected[basis], value, tolerance)}
