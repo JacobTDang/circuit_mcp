@@ -536,6 +536,32 @@ def test_a_problem_with_bad_input_is_refused_with_a_sentence(tmp_path, monkeypat
     assert problems == []
 
 
+def test_board_writes_with_an_unpaired_surrogate_are_refused_with_a_sentence(tmp_path, monkeypatch):
+    """Issue #132: each of these reached SQLite and answered a bare 500."""
+    with client(tmp_path, monkeypatch) as browser:
+        document = browser.post("/api/library", files={
+            "file": ("rc.md", b"Find the RC pole", "text/markdown")}).json()["item"]
+        problem = browser.post("/api/problems", json={
+            "title": "RC pole", "topic": "filters", "prompt": "Find the pole"}).json()["problem"]
+        attempt = browser.post(f"/api/problems/{problem['id']}/attempts",
+                               json={"actor": "student"}).json()["attempt"]
+        transcription = web._db().add_transcription(document["id"], "1/(1+sRC)", "formula_ocr", "latex")
+        writes = [
+            ("PATCH", f"/api/problems/{problem['id']}/interpretation",
+             '{"circuit_interpretation":"R1 from 1 to \\ud800"}'),
+            ("POST", f"/api/problems/{problem['id']}/attempts", '{"actor":"student \\ud800"}'),
+            ("PATCH", f"/api/attempts/{attempt['id']}", '{"answer":"-1/RC \\ud800","status":"correct"}'),
+            ("POST", f"/api/transcriptions/{transcription['id']}/confirm",
+             '{"corrected_content":"1/(1+sRC) \\ud800"}'),
+        ]
+        answers = [(path, browser.request(method, path, content=body,
+                                          headers={"content-type": "application/json"}))
+                   for method, path, body in writes]
+    for path, response in answers:
+        assert response.status_code == 400, path
+        assert "contains an unpaired surrogate" in response.json()["detail"], path
+
+
 def _never_run(monkeypatch) -> list:
     ran: list = []
     monkeypatch.setitem(web.TOOLS, "alias_frequency",

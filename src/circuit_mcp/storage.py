@@ -72,9 +72,11 @@ def non_finite(value: Any, where: str) -> str | None:
     return None
 
 
-def _storable_text(**fields: str) -> None:
+def _storable_text(**fields: str | None) -> None:
     """JSON can carry a lone surrogate, which is not text and which SQLite cannot encode."""
     for name, value in fields.items():
+        if value is None:
+            continue
         try:
             value.encode("utf-8")
         except UnicodeEncodeError as exc:
@@ -598,6 +600,8 @@ class CommandCenterDB:
         return dict(row)
 
     def confirm_transcription(self, identifier: str, corrected_content: str | None = None) -> dict[str, Any]:
+        # Checked before anything is written: a correction first rejects the transcription it replaces.
+        _storable_text(corrected_content=corrected_content)
         current = self.get_transcription(identifier)
         if corrected_content is not None and corrected_content.strip() != current["content"].strip():
             with self.transaction() as connection:
@@ -807,6 +811,7 @@ class CommandCenterDB:
 
     def update_problem(self, identifier: str, circuit_interpretation: str, status: str) -> dict[str, Any]:
         if status not in STATUSES: raise StorageError("invalid problem status")
+        _storable_text(circuit_interpretation=circuit_interpretation)
         with self.transaction() as connection:
             connection.execute("UPDATE problems SET circuit_interpretation=?,status=?,updated_at=? WHERE id=?",
                                (circuit_interpretation, status, time.time(), identifier))
@@ -863,6 +868,7 @@ class CommandCenterDB:
     def create_attempt(self, problem_id: str, actor: str, answer: str = "", status: str = "working") -> dict[str, Any]:
         self.get_problem(problem_id)
         if status not in ATTEMPT_STATUSES or not actor.strip() or len(answer) > 2_000_000: raise StorageError("invalid attempt")
+        _storable_text(actor=actor, answer=answer)
         identifier, now = uuid.uuid4().hex, time.time()
         with self.transaction() as connection:
             connection.execute("INSERT INTO attempts VALUES(?,?,?,?,?,?,?,?)",
@@ -877,6 +883,7 @@ class CommandCenterDB:
 
     def complete_attempt(self, identifier: str, answer: str, status: str, first_divergence: str | None = None) -> dict[str, Any]:
         if status not in ATTEMPT_STATUSES - {"working"}: raise StorageError("completed attempt needs a final status")
+        _storable_text(answer=answer, first_divergence=first_divergence)
         with self.transaction() as connection:
             row = connection.execute("SELECT status FROM attempts WHERE id=?", (identifier,)).fetchone()
             if row is None: raise StorageError("attempt not found")
