@@ -390,6 +390,14 @@ def test_the_step_numbers_stay_behind_the_drawing(tmp_path, monkeypatch):
         assert rows and not any("margin-left:-" in rule for rule in rows), "a row pulled left of the list sticks out past the drawing"
 
 
+def test_no_card_can_paint_over_the_desk_header(tmp_path, monkeypatch):
+    """Every drag raises a card's z-index, and above the header's 10 it painted over the header the drawing sticks under."""
+    with _browser(tmp_path, monkeypatch) as browser:
+        css = browser.get("/assets/canvas.css").text
+        desk = css.split(".workspace-canvas{", 1)[1].split("}", 1)[0]
+        assert "isolation:isolate" in desk
+
+
 def test_app_js_pins_a_build_step_from_the_keyboard(tmp_path, monkeypatch):
     """Enter did nothing, and once a net was pinned the keyboard could not light a step."""
     with _browser(tmp_path, monkeypatch) as browser:
