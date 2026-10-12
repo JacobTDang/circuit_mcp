@@ -530,6 +530,26 @@ def test_the_sheet_stylesheet_prints_on_us_letter(tmp_path, monkeypatch):
     assert "break-inside: avoid" in css, "a problem split across pages is hard to grade"
 
 
+def _rule(css: str, selector: str) -> str:
+    start = css.index(selector + " {")
+    return css[start:css.index("}", start)]
+
+
+def test_problem_numbers_print_in_dark_ink_with_backgrounds_off(tmp_path, monkeypatch):
+    """Print leaves out backgrounds by default, so white on a dark pill prints as faint grey."""
+    with client(tmp_path, monkeypatch) as browser:
+        css = browser.get("/assets/solution.css").text
+
+    screen, printed = css.split("@media print", 1)
+    on_screen = _rule(screen, ".problem .number")
+    assert "color: #fff" in on_screen and "background: var(--ink)" in on_screen, "the screen badge stays"
+    assert ".problem .number {" in printed, "the print stylesheet leaves the number white on no fill"
+    on_paper = _rule(printed, ".problem .number")
+    assert "color: var(--ink)" in on_paper
+    assert "background: none" in on_paper
+    assert "border: 1.5px solid var(--ink)" in on_paper, "the badge outline has to survive without a fill"
+
+
 def test_the_sheet_shows_the_checks_that_stand_behind_an_answer(tmp_path, monkeypatch):
     """The evidence line is the point of recording tool calls against an attempt."""
     with client(tmp_path, monkeypatch) as browser:

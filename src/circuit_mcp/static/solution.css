@@ -114,5 +114,9 @@ figure.schematic svg { max-width: 100%; height: auto; color: var(--ink); }
   body { font-size: 12pt; }
   main { padding: 0; max-width: none; }
   .problem { padding: 16px 0; }
+  /* Print leaves out backgrounds by default, which turned the white number on
+     its dark pill into faint grey on white. An outline needs no fill; the
+     padding gives back the border's width so the badge keeps its size. */
+  .problem .number { color: var(--ink); background: none; border: 1.5px solid var(--ink); padding: 3.5px 7.5px; }
   a[href]::after { content: ""; }
 }
