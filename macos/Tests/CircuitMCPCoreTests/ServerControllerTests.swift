@@ -147,6 +147,17 @@ final class ServerControllerTests: XCTestCase {
         XCTAssertTrue(try LogFiles.tail(of: url).hasSuffix("noise 4999\nTraceback: the newest line"))
     }
 
+    /// Through the real reader: a line of several megabytes with no newline neither stops the
+    /// READY line after it from being read nor is lost from the log, which has every byte of it.
+    func testAHugeLineWithNoNewlineDoesNotHideTheReadyLineAfterIt() throws {
+        let server = try controller("long-line")
+        XCTAssertEqual(firstEvent(of: server), .ready(port: 45678))
+        let output = try log("long-line")
+        XCTAssertEqual(output.utf8.count, 4_000_000 + "\nREADY 45678\n".utf8.count)
+        XCTAssertTrue(output.hasSuffix("xxxx\nREADY 45678\n"))
+        XCTAssertEqual(server.stop(), .stoppedGracefully)
+    }
+
     func testAnExitAfterReadyIsReportedThroughOnExit() throws {
         let server = try controller("crash")
         let exited = expectation(description: "onExit")

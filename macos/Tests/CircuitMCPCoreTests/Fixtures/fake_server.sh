@@ -10,6 +10,8 @@ case "$1" in
   # READY arrives at about the ready deadline, so the two contend.
   late)          sleep 1; echo "READY 45682"; exec sleep 300 ;;
   die-early)     echo "Traceback: boom" >&2; exit 1 ;;
+  # Megabytes of output with no newline, then the protocol line on a line of its own.
+  long-line)     head -c 4000000 /dev/zero | tr '\0' 'x'; echo; echo "READY 45678"; exec sleep 300 ;;
   # Far more output than the log cap the test sets, then the line that explains the exit.
   noisy)         i=0; while [ $i -lt 5000 ]; do echo "noise $i"; i=$((i + 1)); done
                  echo "Traceback: the newest line" >&2; exit 1 ;;

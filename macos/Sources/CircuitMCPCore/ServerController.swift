@@ -75,6 +75,8 @@ public final class ServerController {
     private static let killExitWait: TimeInterval = 5
     /// How long `stop()` then waits for that process's group to empty.
     private static let groupEmptyWait: TimeInterval = 2
+    /// The most of one line of the server's output held while waiting for its newline.
+    static let maxLineBytes = 64 * 1024
 
     public var onExit: ((Int32) -> Void)?
 
@@ -270,7 +272,7 @@ public final class ServerController {
     /// protocol lines in it. Internal rather than private so its give-up path can be driven with
     /// a log handle that fails, which is the one thing `start()` does not take from the caller.
     func readOutput(from fd: Int32, into log: LogWriter, completion: @escaping (ServerEvent) -> Void) {
-        var pending = Data()
+        var lines = OutputLines(maxLineBytes: Self.maxLineBytes)
         var buffer = [UInt8](repeating: 0, count: 4096)
         while true {
             let count = read(fd, &buffer, buffer.count)
@@ -289,10 +291,7 @@ public final class ServerController {
                 NSLog("CircuitMCP could not write the server log %@: %@", configuration.logFile.path, "\(error)")
                 break
             }
-            pending.append(chunk)
-            while let newline = pending.firstIndex(of: 0x0A) {
-                let line = String(decoding: pending[pending.startIndex..<newline], as: UTF8.self)
-                pending.removeSubrange(pending.startIndex...newline)
+            for line in lines.append(chunk) {
                 handle(line: line, completion: completion)
             }
         }
