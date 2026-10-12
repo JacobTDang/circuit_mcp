@@ -29,7 +29,9 @@ The detail behind the [README](../README.md). Each section stands alone.
 Windows is not currently supported. Tool calls run in a prewarmed worker that
 forks a disposable child for every request. This isolates lcapy's process-global
 symbol registry and makes the 20-second wall-clock bound real: the worker's
-entire process group can be killed if symbolic evaluation runs away. A Windows
+entire process group can be killed if symbolic evaluation runs away. The bound
+counts from when a call is made, so a call queued behind slower ones is
+answered `busy` when its time runs out instead of waiting for them. A Windows
 port needs a spawn-based worker with equivalent isolation and timeout semantics;
 silently falling back to an unkillable thread would violate those guarantees.
 
@@ -469,7 +471,8 @@ Rendered expressions contain two forms:
 - `srepr`: an exact SymPy record that preserves symbol assumptions.
 
 Every response has `ok`. An `error` field means the tool could not run, such as
-for a malformed netlist, unsafe expression, or timeout. A `kind` field means the
+for a malformed netlist, unsafe expression, `timeout`, or `busy` (the call
+waited its whole budget for the worker and was never run). A `kind` field means the
 check ran and describes the mathematical verdict.
 
 `check_setup` also returns `equation_roles`. Each satisfied equation is labelled
@@ -477,6 +480,15 @@ check ran and describes the mathematical verdict.
 unknown/value. Classification is advisory: in small circuits a textbook law and
 a solved answer may be algebraically identical, so ambiguity is reported rather
 than guessed away.
+
+`check_setup` also takes `mode`. `finite` (the default) judges the equations
+against the circuit as written. lcapy's op-amp always has a finite gain `A`, so
+there the inverting input is not at ground and a virtual-ground equation such
+as `V2 = 0` is false. `ideal` takes every node voltage and branch current to its
+limit as `A` goes to infinity first, which is the model a setup written with
+`V- = V+` uses. It needs every op-amp's gain written `{A}` (`missing_gain`
+otherwise), and it refuses an equation that still contains `A`. When a `finite`
+check fails on an equation that the ideal model satisfies, the message says so.
 
 UniMERNet output is also untrusted. It recognizes cropped formulas, not page
 layout, circuit connectivity, or whether two drawn wires cross. The response
@@ -491,7 +503,8 @@ and therefore contains no `sC` term.
 ## Scope
 
 The server covers symbolic linear circuits, including op-amps with finite
-constant gain, the ideal-gain limit, and a single-pole finite gain-bandwidth
+constant gain, the ideal-gain limit (`mode="ideal"` in `derive`,
+`port_impedance` and `check_setup`), and a single-pole finite gain-bandwidth
 model. lcapy rejects s-dependent component values, so GBW mode derives with a
 constant gain `A` and then safely substitutes `A0 / (1 + s/wp)`. Symbol binding
 and substitution are checked explicitly to prevent assumption mismatches from

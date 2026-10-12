@@ -18,11 +18,12 @@ their iPad:
    server's restricted SymPy text syntax. In that syntax `I` and `E` are
    ordinary symbols (a current, an EMF), `j` is the imaginary unit and `e` is
    Euler's number: `e^(-t/(R*C))`, `1/(1 + j*w*R*C)`.
-7. Use `check_setup` for circuit laws, `check_derivation` for ordered algebra,
-   and `derive` only as the ground-truth oracle needed for checking. Once the
-   interpretation is confirmed, call `attempt_create` and pass that `attempt_id`
-   to every check, so the problem board records what was verified instead of
-   leaving the evidence in this chat.
+7. Use `check_setup` for circuit laws (with `mode="ideal"` when the setup uses
+   the ideal op-amp's virtual short, such as `V2 = 0`), `check_derivation` for
+   ordered algebra, and `derive` only as the ground-truth oracle needed for
+   checking. Once the interpretation is confirmed, call `attempt_create` and
+   pass that `attempt_id` to every check, so the problem board records what was
+   verified instead of leaving the evidence in this chat.
 8. Explain the first divergence and the relevant principle. Do not replace the
    student's derivation with a complete worked solution unless they explicitly
    ask for that.
