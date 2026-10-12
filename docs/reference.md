@@ -60,8 +60,10 @@ keeps Metal initialization out of every process that later calls `fork()`.
 Open [http://localhost:2300](http://localhost:2300). It binds only to
 `127.0.0.1`, stores uploaded homework and lecture material under the ignored
 `.local/command_center/` directory, accepts PDF/PNG/JPEG/text/Markdown/CSV up
-to 50 MB, and never sends course files to a cloud service. The UI provides
-an initially blank spatial desk. Click empty space to manually spawn an iPad
+to 50 MB, and never sends course files to a cloud service. A request that changes
+anything is refused with 403 when a browser says it came from another origin;
+the desk's own page and local programs such as curl, which send no `Origin`,
+are served. The UI provides an initially blank spatial desk. Click empty space to manually spawn an iPad
 screen, course files, problem board, circuit bench, or activity panel. Panels
 can be dragged, closed, and retain their layout in browser-local storage. The
 underlying pages still provide search, previews, local formula OCR, attempt
